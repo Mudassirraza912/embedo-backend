@@ -38,7 +38,12 @@ JSON Schema to return:
     "environment": string | null, // e.g. "indoor", "outdoor_weatherproof", "high_temp"
     "costTargetUsd": number | null
   },
-  "mustHaveInterfaces": string[] // e.g. ["i2c", "spi", "uart", "usb_c_pd"]
+  "mustHaveInterfaces": string[], // e.g. ["i2c", "spi", "uart", "usb_c_pd"]
+  "isOffTopic": boolean // true if the message is NOT a request to design or discuss an embedded
+    // hardware product — e.g. general chit-chat, questions about the date/weather, requests
+    // unrelated to hardware (making a YouTube channel, writing a poem), or someone just testing
+    // the input box ("mic test", "hello"). Embedo.ai only handles embedded hardware architecture
+    // requests; when true, every other field should be its empty/null default.
 }
 
 If a field is not stated by the user, use null (or an empty string for deviceType/purpose). Do not invent details.

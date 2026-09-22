@@ -14,7 +14,7 @@ import {
 import { AppError } from '../../common/errors/AppError.js';
 import { logger } from '../../config/logger.js';
 import { env } from '../../config/env.js';
-import { isGibberishOrSpam } from './pipeline/sufficiency-gate.js';
+import { isGibberishOrSpam, isOffTopicChat, OFF_TOPIC_CLARIFICATION } from './pipeline/sufficiency-gate.js';
 import { persistNewVersion } from './version.service.js';
 import { renderArchitectureSvg } from './export/svg-exporter.js';
 import { ProjectedArchitecture } from './pipeline/types.js';
@@ -39,7 +39,8 @@ type SessionWithRelations = Prisma.DesignSessionGetPayload<{
 export class SessionsService {
   /**
    * Create a new design session, store the initial prompt, and enqueue the generation pipeline.
-   * Gibberish intents are short-circuited to CLARIFICATION_REQUIRED without touching the queue or an LLM.
+   * Gibberish and off-topic (non-hardware) intents are both short-circuited to
+   * CLARIFICATION_REQUIRED without touching the queue or an LLM.
    */
   async createSession(input: CreateSessionInput, userId?: string, anonSessionToken?: string, ipAddress?: string) {
     let consentAtCreation = false;
@@ -78,6 +79,9 @@ export class SessionsService {
       : null;
 
     const isGibberish = isGibberishOrSpam(input.intentText);
+    const isOffTopic = !isGibberish && isOffTopicChat(input.intentText);
+    const needsClarification = isGibberish || isOffTopic;
+    const clarificationMessage = isGibberish ? GIBBERISH_CLARIFICATION : OFF_TOPIC_CLARIFICATION;
 
     const session = await prisma.$transaction(async (tx) => {
       const created = await tx.designSession.create({
@@ -87,7 +91,7 @@ export class SessionsService {
           intentText: input.intentText,
           domain: input.domain ?? null,
           applicationContext: input.applicationContext ?? null,
-          status: (isGibberish ? 'CLARIFICATION_REQUIRED' : 'PENDING') satisfies SessionStatus,
+          status: (needsClarification ? 'CLARIFICATION_REQUIRED' : 'PENDING') satisfies SessionStatus,
           consentAtCreation,
         },
       });
@@ -96,13 +100,13 @@ export class SessionsService {
         data: { sessionId: created.id, userId: userId ?? null, role: 'user', content: input.intentText },
       });
 
-      if (isGibberish) {
+      if (needsClarification) {
         await tx.chatMessage.create({
           data: {
             sessionId: created.id,
             role: 'assistant',
-            content: GIBBERISH_CLARIFICATION,
-            metadata: { clarificationQuestions: [GIBBERISH_CLARIFICATION], isGibberish: true },
+            content: clarificationMessage,
+            metadata: { clarificationQuestions: [clarificationMessage], isGibberish, isOffTopic },
           },
         });
       }
@@ -110,7 +114,7 @@ export class SessionsService {
       return created;
     });
 
-    if (!isGibberish) {
+    if (!needsClarification) {
       await aiPipelineQueue.add(
         'ai-pipeline',
         { sessionId: session.id, forceGenerate: false },
@@ -118,7 +122,7 @@ export class SessionsService {
       );
     }
 
-    logger.info({ sessionId: session.id, userId, ipAddress, isGibberish }, 'Design session created');
+    logger.info({ sessionId: session.id, userId, ipAddress, isGibberish, isOffTopic }, 'Design session created');
 
     return { session, issuedAnonToken: effectiveAnonToken };
   }

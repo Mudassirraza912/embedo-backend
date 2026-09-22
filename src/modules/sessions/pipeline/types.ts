@@ -40,6 +40,11 @@ export const structuredIntentSchema = z.object({
     .nullable()
     .optional()
     .transform((v) => v ?? []),
+  // True when the user's message isn't a request to design/discuss embedded hardware at all
+  // (general chit-chat, unrelated how-to questions, greetings) — see sufficiency-gate.ts's
+  // isOffTopicChat for the zero-cost heuristic counterpart that catches the obvious cases
+  // before this field is ever populated.
+  isOffTopic: z.boolean().nullable().optional().transform((v) => v ?? false),
 });
 
 export type StructuredIntent = z.infer<typeof structuredIntentSchema>;
