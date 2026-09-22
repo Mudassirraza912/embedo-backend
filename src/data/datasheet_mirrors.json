@@ -1,0 +1,20 @@
+{
+  "_comment": "Optional fallback mirrors for vendor PDFs blocked by CDN bot protection, keyed by lowercase filename. These entries were migrated out of source code; replace personal cloud-drive links with project-controlled storage (e.g. R2) before relying on them in production.",
+  "mirrors": {
+    "ad7689.pdf": "https://drive.google.com/uc?export=download&id=1A9j0ZNkLObDtjsANS1DYydMwySymvFIQ",
+    "ad7682_7689.pdf": "https://drive.google.com/uc?export=download&id=1A9j0ZNkLObDtjsANS1DYydMwySymvFIQ",
+    "ad7799.pdf": "https://drive.google.com/uc?export=download&id=1816kO0kjeGQCZ7CTlJ3UY8uXlbEzTun7",
+    "ad7798_7799.pdf": "https://drive.google.com/uc?export=download&id=1816kO0kjeGQCZ7CTlJ3UY8uXlbEzTun7",
+    "pca9685.pdf": "https://drive.google.com/uc?export=download&id=1dER7vAb9WCScueWRjzXLe2ogrbZZ4Vfo",
+    "pcf8574_pcf8574a.pdf": "https://drive.google.com/uc?export=download&id=1CKCcxu-3_9YIEATyFiCYP8YsDGiIn5nu",
+    "tja1051.pdf": "https://drive.google.com/uc?export=download&id=1qJCHxpeZyGpCj6Huvo9dZh5YR06gu-te",
+    "tja1042.pdf": "https://drive.google.com/uc?export=download&id=1kZqSkqOHTNXW3oNjasy7LTbtwbJNfwgW",
+    "pca9615.pdf": "https://drive.google.com/uc?export=download&id=16ott0cedIUCVHp1aSwZA8NpHI2sFfSGf",
+    "pca9515a.pdf": "https://drive.google.com/uc?export=download&id=1X3yoDMyKYjdK2IQX8OL0wn_4OEgHNd3E",
+    "pca9555.pdf": "https://drive.google.com/uc?export=download&id=1AGRhFBxkP7JsL0k4GwRkzSgpKtmeUMAH",
+    "mma8451q.pdf": "https://drive.google.com/uc?export=download&id=1Olc3uyKAvtA_2ebSLXJV3vRTQe8HxjRY",
+    "fxos8700cq.pdf": "https://drive.google.com/uc?export=download&id=15KGjDkHAkF_t9t6fz4xhz3HRbRnLHAk7",
+    "adxl362.pdf": "https://drive.google.com/uc?export=download&id=1ZLplEg_6grE24KJVNBNiFu2iWyZl4VmO",
+    "ad8232.pdf": "https://drive.google.com/uc?export=download&id=1rAySLviuACCpZTWGzvndtvWKRLQIvqTU"
+  }
+}
