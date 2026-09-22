@@ -14,7 +14,12 @@ import {
 import { AppError } from '../../common/errors/AppError.js';
 import { logger } from '../../config/logger.js';
 import { env } from '../../config/env.js';
-import { isGibberishOrSpam, isOffTopicChat, OFF_TOPIC_CLARIFICATION } from './pipeline/sufficiency-gate.js';
+import {
+  isGibberishOrSpam,
+  isOffTopicChat,
+  OFF_TOPIC_CLARIFICATION,
+  GENERATION_HOLD_MESSAGE,
+} from './pipeline/sufficiency-gate.js';
 import { persistNewVersion } from './version.service.js';
 import { renderArchitectureSvg } from './export/svg-exporter.js';
 import { ProjectedArchitecture } from './pipeline/types.js';
@@ -238,6 +243,23 @@ export class SessionsService {
           data: { sessionId: session.id, userId: userId ?? null, role: 'user', content: latestMessage.content },
         }),
         prisma.chatMessage.create({ data: { sessionId: session.id, role: 'assistant', content: spamReply } }),
+      ]);
+
+      return { message: assistantMessage, sessionStatus: session.status };
+    }
+
+    // 3. Architecture synthesis withheld (GENERATION_ENABLED=false): answer with a single fixed
+    // reply and no LLM call. Running the Luna copilot here would ask clarifying questions and then
+    // the re-queued pipeline would post the hold message after it — two contradictory replies
+    // and wasted tokens for a design that isn't going to be generated anyway.
+    if (!env.GENERATION_ENABLED) {
+      const holdReply = isOffTopicChat(latestMessage.content) ? OFF_TOPIC_CLARIFICATION : GENERATION_HOLD_MESSAGE;
+
+      const [, assistantMessage] = await prisma.$transaction([
+        prisma.chatMessage.create({
+          data: { sessionId: session.id, userId: userId ?? null, role: 'user', content: latestMessage.content },
+        }),
+        prisma.chatMessage.create({ data: { sessionId: session.id, role: 'assistant', content: holdReply } }),
       ]);
 
       return { message: assistantMessage, sessionStatus: session.status };

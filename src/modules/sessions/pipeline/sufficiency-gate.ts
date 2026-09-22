@@ -13,6 +13,10 @@ export interface SufficiencyResult {
  * Shared with sessions.service.ts (the zero-cost heuristic short-circuit at session creation)
  * so both the pre-Luna and post-Luna off-topic paths produce the identical, on-brand message.
  */
+/** Sent instead of a generated architecture while GENERATION_ENABLED=false (see env.ts). */
+export const GENERATION_HOLD_MESSAGE =
+  'Your request looks good — architecture synthesis Work is in Progress and will available shortly';
+
 export const OFF_TOPIC_CLARIFICATION =
   "Embedo.ai is focused specifically on embedded hardware architecture, so I'm not able to help with that. Describe an embedded product or concept you'd like to design — e.g. \"Battery-powered BLE asset tracker with GPS and accelerometer\" or \"Smart greenhouse environmental monitor with Wi-Fi and OLED display\" — and I'll get started.";
 
