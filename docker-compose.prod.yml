@@ -1,0 +1,94 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: embedo-prod-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-embedo_user}
+      # No insecure default: deploy fails loudly if POSTGRES_PASSWORD is unset.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-embedo_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-embedo_user} -d ${POSTGRES_DB:-embedo_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - embedo-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: embedo-prod-redis
+    restart: always
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - embedo-network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: embedo-prod-api
+    restart: always
+    command: node dist/server.js
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+    # Bound to loopback ONLY: the API must be reached through the Nginx reverse proxy (TLS,
+    # and so X-Forwarded-For cannot be spoofed to defeat IP rate limits).
+    ports:
+      - "127.0.0.1:4000:4000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - embedo-network
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: embedo-prod-worker
+    restart: always
+    command: node dist/worker.js
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - embedo-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  embedo-network:
+    driver: bridge
