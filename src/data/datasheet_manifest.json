@@ -1,0 +1,744 @@
+[
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "ADS1115",
+    "category": "ADC / Data Converter",
+    "source_url": "https://www.ti.com/lit/ds/symlink/ads1115.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "ADS1220",
+    "category": "ADC / Data Converter",
+    "source_url": "https://www.ti.com/lit/ds/symlink/ads1220.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "ADS1292R",
+    "category": "Biomedical AFE / ADC",
+    "source_url": "https://www.ti.com/lit/ds/symlink/ads1292r.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "ADC128S102",
+    "category": "ADC / Data Converter",
+    "source_url": "https://www.ti.com/lit/ds/symlink/adc128s102.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "DAC80501",
+    "category": "DAC / Data Converter",
+    "source_url": "https://www.ti.com/lit/ds/symlink/dac80501.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "INA219",
+    "category": "Current / Power Monitor",
+    "source_url": "https://www.ti.com/lit/ds/symlink/ina219.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "INA226",
+    "category": "Current / Power Monitor",
+    "source_url": "https://www.ti.com/lit/ds/symlink/ina226.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "INA260",
+    "category": "Current / Power Monitor",
+    "source_url": "https://www.ti.com/lit/ds/symlink/ina260.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "INA333",
+    "category": "Instrumentation Amplifier",
+    "source_url": "https://www.ti.com/lit/ds/symlink/ina333.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "OPA333",
+    "category": "Operational Amplifier",
+    "source_url": "https://www.ti.com/lit/ds/symlink/opa333.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "OPA197",
+    "category": "Operational Amplifier",
+    "source_url": "https://www.ti.com/lit/ds/symlink/opa197.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TLV9062",
+    "category": "Operational Amplifier",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tlv9062.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "LM358",
+    "category": "Operational Amplifier",
+    "source_url": "https://www.ti.com/lit/ds/symlink/lm358.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "LM393",
+    "category": "Comparator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/lm393.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TMP117",
+    "category": "Temperature Sensor",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tmp117.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TMP102",
+    "category": "Temperature Sensor",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tmp102.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "HDC1080",
+    "category": "Humidity / Temperature Sensor",
+    "source_url": "https://www.ti.com/lit/ds/symlink/hdc1080.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "HDC3020",
+    "category": "Humidity / Temperature Sensor",
+    "source_url": "https://www.ti.com/lit/ds/symlink/hdc3020.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "OPT3001",
+    "category": "Ambient Light Sensor",
+    "source_url": "https://www.ti.com/lit/ds/symlink/opt3001.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "LDC1612",
+    "category": "Inductive Sensor AFE",
+    "source_url": "https://www.ti.com/lit/ds/symlink/ldc1612.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TXS0108E",
+    "category": "Level Translator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/txs0108e.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TXB0104",
+    "category": "Level Translator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/txb0104.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "SN74LVC1T45",
+    "category": "Level Translator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/sn74lvc1t45.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "PCA9306",
+    "category": "I2C Level Translator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/pca9306.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TCA9548A",
+    "category": "I2C Switch / Mux",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tca9548a.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "SN65HVD230",
+    "category": "CAN Transceiver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/sn65hvd230.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "SN65HVD251",
+    "category": "CAN Transceiver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/sn65hvd251.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TCAN1051H",
+    "category": "CAN Transceiver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tcan1051h.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "ISO1050",
+    "category": "Isolated CAN Transceiver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/iso1050.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "MAX3232",
+    "category": "RS-232 Transceiver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/max3232.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPS62160",
+    "category": "Buck Regulator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tps62160.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPS63070",
+    "category": "Buck-Boost Regulator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tps63070.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPS61088",
+    "category": "Boost Regulator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tps61088.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPS7A02",
+    "category": "LDO Regulator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tps7a02.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TLV755P",
+    "category": "LDO Regulator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tlv755p.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "LM2596",
+    "category": "Buck Regulator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/lm2596.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "LM1117",
+    "category": "LDO Regulator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/lm1117.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "LMR33630",
+    "category": "Buck Regulator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/lmr33630.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPS5430",
+    "category": "Buck Regulator",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tps5430.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPS22919",
+    "category": "Load Switch",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tps22919.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPS2121",
+    "category": "Power Mux",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tps2121.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "BQ24074",
+    "category": "Battery Charger",
+    "source_url": "https://www.ti.com/lit/ds/symlink/bq24074.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "BQ25120A",
+    "category": "Battery Charger / PMIC",
+    "source_url": "https://www.ti.com/lit/ds/symlink/bq25120a.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "BQ25895",
+    "category": "Battery Charger / PMIC",
+    "source_url": "https://www.ti.com/lit/ds/symlink/bq25895.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "BQ27441-G1",
+    "category": "Fuel Gauge",
+    "source_url": "https://www.ti.com/lit/ds/symlink/bq27441-g1.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPS65987D",
+    "category": "USB-C / USB PD Controller",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tps65987d.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPS25750",
+    "category": "USB-C / USB PD Controller",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tps25750.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "HD3SS3220",
+    "category": "USB Type-C Mux / DRP Port Controller",
+    "source_url": "https://www.ti.com/lit/ds/symlink/hd3ss3220.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPD4E05U06",
+    "category": "ESD Protection",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tpd4e05u06.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPD2EUSB30",
+    "category": "ESD Protection",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tpd2eusb30.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "DRV2605L",
+    "category": "Haptic Driver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/drv2605l.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "DRV8833",
+    "category": "Motor Driver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/drv8833.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "DRV8871",
+    "category": "Motor Driver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/drv8871.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "DRV8353",
+    "category": "Gate Driver / Motor Control",
+    "source_url": "https://www.ti.com/lit/ds/symlink/drv8353.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "DRV8313",
+    "category": "3-Phase Motor Driver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/drv8313.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "PCM5102A",
+    "category": "Audio DAC",
+    "source_url": "https://www.ti.com/lit/ds/symlink/pcm5102a.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TLV320AIC3104",
+    "category": "Audio Codec",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tlv320aic3104.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "PCM1862",
+    "category": "Audio ADC",
+    "source_url": "https://www.ti.com/lit/ds/symlink/pcm1862.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPA2016D2",
+    "category": "Audio Amplifier",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tpa2016d2.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TPA3116D2",
+    "category": "Audio Amplifier",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tpa3116d2.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TAS5805M",
+    "category": "Digital Audio Amplifier",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tas5805m.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "LP5562",
+    "category": "LED Driver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/lp5562.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TLC5940",
+    "category": "LED Driver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tlc5940.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "TLC59711",
+    "category": "LED Driver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/tlc59711.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "CD4046B",
+    "category": "PLL / Mixed Signal",
+    "source_url": "https://www.ti.com/lit/ds/symlink/cd4046b.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "CC1101",
+    "category": "Sub-GHz RF Transceiver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/cc1101.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "CC2500",
+    "category": "2.4 GHz RF Transceiver",
+    "source_url": "https://www.ti.com/lit/ds/symlink/cc2500.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "CC2652R7",
+    "category": "Wireless MCU",
+    "source_url": "https://www.ti.com/lit/ds/symlink/cc2652r7.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "CC1312R7",
+    "category": "Sub-GHz Wireless MCU",
+    "source_url": "https://www.ti.com/lit/ds/symlink/cc1312r7.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "CC3235S",
+    "category": "Wi-Fi MCU",
+    "source_url": "https://www.ti.com/lit/ds/symlink/cc3235s.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "MSP430FR2355",
+    "category": "Microcontroller",
+    "source_url": "https://www.ti.com/lit/ds/symlink/msp430fr2355.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "Texas Instruments",
+    "part_number": "MSPM0G3507",
+    "category": "Microcontroller",
+    "source_url": "https://www.ti.com/lit/ds/symlink/mspm0g3507.pdf",
+    "note": "Official TI datasheet URL pattern"
+  },
+  {
+    "vendor": "STMicroelectronics",
+    "part_number": "LIS2DH12",
+    "category": "MEMS Accelerometer",
+    "source_url": "https://www.st.com/resource/en/datasheet/lis2dh12.pdf",
+    "note": "Official ST datasheet URL"
+  },
+  {
+    "vendor": "STMicroelectronics",
+    "part_number": "LSM6DSOX",
+    "category": "MEMS IMU",
+    "source_url": "https://www.st.com/resource/en/datasheet/lsm6dsox.pdf",
+    "note": "Official ST datasheet URL"
+  },
+  {
+    "vendor": "STMicroelectronics",
+    "part_number": "LIS3MDL",
+    "category": "MEMS Magnetometer",
+    "source_url": "https://www.st.com/resource/en/datasheet/lis3mdl.pdf",
+    "note": "Official ST datasheet URL"
+  },
+  {
+    "vendor": "STMicroelectronics",
+    "part_number": "LPS22HH",
+    "category": "Pressure Sensor",
+    "source_url": "https://www.st.com/resource/en/datasheet/lps22hh.pdf",
+    "note": "Official ST datasheet URL"
+  },
+  {
+    "vendor": "STMicroelectronics",
+    "part_number": "VL53L0X",
+    "category": "Time-of-Flight Sensor",
+    "source_url": "https://www.st.com/resource/en/datasheet/vl53l0x.pdf",
+    "note": "Official ST datasheet URL"
+  },
+  {
+    "vendor": "STMicroelectronics",
+    "part_number": "VL6180X",
+    "category": "Time-of-Flight / Proximity Sensor",
+    "source_url": "https://www.st.com/resource/en/datasheet/vl6180x.pdf",
+    "note": "Official ST datasheet URL"
+  },
+  {
+    "vendor": "STMicroelectronics",
+    "part_number": "STUSB4500",
+    "category": "USB-C / USB PD Controller",
+    "source_url": "https://www.st.com/resource/en/datasheet/stusb4500.pdf",
+    "note": "Official ST datasheet URL"
+  },
+  {
+    "vendor": "STMicroelectronics",
+    "part_number": "STM32H743VI",
+    "category": "Microcontroller",
+    "source_url": "https://www.st.com/resource/en/datasheet/stm32h743vi.pdf",
+    "note": "Official ST datasheet URL"
+  },
+  {
+    "vendor": "STMicroelectronics",
+    "part_number": "STM32WB55CE",
+    "category": "Wireless Microcontroller",
+    "source_url": "https://www.st.com/resource/en/datasheet/stm32wb55ce.pdf",
+    "note": "Official ST datasheet URL"
+  },
+  {
+    "vendor": "Analog Devices / Maxim",
+    "part_number": "ADXL345",
+    "category": "MEMS Accelerometer",
+    "source_url": "https://www.analog.com/media/en/technical-documentation/data-sheets/ADXL345.pdf",
+    "note": "Official Analog Devices datasheet URL"
+  },
+  {
+    "vendor": "Analog Devices / Maxim",
+    "part_number": "ADXL362",
+    "category": "MEMS Accelerometer",
+    "source_url": "https://www.analog.com/media/en/technical-documentation/data-sheets/ADXL362.pdf",
+    "note": "Official Analog Devices datasheet URL"
+  },
+  {
+    "vendor": "Analog Devices / Maxim",
+    "part_number": "AD8232",
+    "category": "Biomedical Analog Front End",
+    "source_url": "https://www.analog.com/media/en/technical-documentation/data-sheets/AD8232.pdf",
+    "note": "Official Analog Devices datasheet URL"
+  },
+  {
+    "vendor": "Analog Devices / Maxim",
+    "part_number": "AD7689",
+    "category": "ADC / Data Converter",
+    "source_url": "https://www.analog.com/media/en/technical-documentation/data-sheets/AD7689.pdf",
+    "note": "Official Analog Devices datasheet URL"
+  },
+  {
+    "vendor": "Analog Devices / Maxim",
+    "part_number": "AD7799",
+    "category": "ADC / Data Converter",
+    "source_url": "https://www.analog.com/media/en/technical-documentation/data-sheets/AD7799.pdf",
+    "note": "Official Analog Devices datasheet URL"
+  },
+  {
+    "vendor": "Analog Devices / Maxim",
+    "part_number": "MAX17048/MAX17049",
+    "category": "Fuel Gauge",
+    "source_url": "https://www.analog.com/media/en/technical-documentation/data-sheets/MAX17048-MAX17049.pdf",
+    "note": "Official Analog Devices datasheet URL"
+  },
+  {
+    "vendor": "Analog Devices / Maxim",
+    "part_number": "MAX30102",
+    "category": "Optical Heart-Rate / SpO2 Sensor",
+    "source_url": "https://www.analog.com/media/en/technical-documentation/data-sheets/MAX30102.pdf",
+    "note": "Official Analog Devices datasheet URL"
+  },
+  {
+    "vendor": "Analog Devices / Maxim",
+    "part_number": "MAX31855",
+    "category": "Thermocouple-to-Digital Converter",
+    "source_url": "https://www.analog.com/media/en/technical-documentation/data-sheets/MAX31855.pdf",
+    "note": "Official Analog Devices datasheet URL"
+  },
+  {
+    "vendor": "Analog Devices / Maxim",
+    "part_number": "MAX6675",
+    "category": "Thermocouple-to-Digital Converter",
+    "source_url": "https://www.analog.com/media/en/technical-documentation/data-sheets/MAX6675.pdf",
+    "note": "Official Analog Devices datasheet URL"
+  },
+  {
+    "vendor": "NXP",
+    "part_number": "PCA9685",
+    "category": "PWM / LED Controller",
+    "source_url": "https://www.nxp.com/docs/en/data-sheet/PCA9685.pdf",
+    "note": "Official NXP datasheet URL"
+  },
+  {
+    "vendor": "NXP",
+    "part_number": "PCF8574/PCF8574A",
+    "category": "I2C GPIO Expander",
+    "source_url": "https://www.nxp.com/docs/en/data-sheet/PCF8574_PCF8574A.pdf",
+    "note": "Official NXP datasheet URL"
+  },
+  {
+    "vendor": "NXP",
+    "part_number": "TJA1051",
+    "category": "CAN Transceiver",
+    "source_url": "https://www.nxp.com/docs/en/data-sheet/TJA1051.pdf",
+    "note": "Official NXP datasheet URL"
+  },
+  {
+    "vendor": "NXP",
+    "part_number": "TJA1042",
+    "category": "CAN Transceiver",
+    "source_url": "https://www.nxp.com/docs/en/data-sheet/TJA1042.pdf",
+    "note": "Official NXP datasheet URL"
+  },
+  {
+    "vendor": "NXP",
+    "part_number": "PCA9615",
+    "category": "Differential I2C Buffer",
+    "source_url": "https://www.nxp.com/docs/en/data-sheet/PCA9615.pdf",
+    "note": "Official NXP datasheet URL"
+  },
+  {
+    "vendor": "NXP",
+    "part_number": "PCA9515A",
+    "category": "I2C Bus Repeater",
+    "source_url": "https://www.nxp.com/docs/en/data-sheet/PCA9515A.pdf",
+    "note": "Official NXP datasheet URL"
+  },
+  {
+    "vendor": "NXP",
+    "part_number": "PCA9555",
+    "category": "I2C GPIO Expander",
+    "source_url": "https://www.nxp.com/docs/en/data-sheet/PCA9555.pdf",
+    "note": "Official NXP datasheet URL"
+  },
+  {
+    "vendor": "NXP",
+    "part_number": "MMA8451Q",
+    "category": "MEMS Accelerometer",
+    "source_url": "https://www.nxp.com/docs/en/data-sheet/MMA8451Q.pdf",
+    "note": "Official NXP datasheet URL"
+  },
+  {
+    "vendor": "NXP",
+    "part_number": "FXOS8700CQ",
+    "category": "Accelerometer / Magnetometer",
+    "source_url": "https://www.nxp.com/docs/en/data-sheet/FXOS8700CQ.pdf",
+    "note": "Official NXP datasheet URL"
+  },
+  {
+    "vendor": "Espressif",
+    "part_number": "ESP32",
+    "category": "Wi-Fi / Bluetooth SoC",
+    "source_url": "https://www.espressif.com/sites/default/files/documentation/esp32_datasheet_en.pdf",
+    "note": "Official Espressif datasheet URL"
+  },
+  {
+    "vendor": "Espressif",
+    "part_number": "ESP32-S2",
+    "category": "Wi-Fi SoC",
+    "source_url": "https://www.espressif.com/sites/default/files/documentation/esp32-s2_datasheet_en.pdf",
+    "note": "Official Espressif datasheet URL"
+  },
+  {
+    "vendor": "Espressif",
+    "part_number": "ESP32-S3",
+    "category": "Wi-Fi / Bluetooth SoC",
+    "source_url": "https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf",
+    "note": "Official Espressif datasheet URL"
+  },
+  {
+    "vendor": "Espressif",
+    "part_number": "ESP32-C3",
+    "category": "Wi-Fi / Bluetooth RISC-V SoC",
+    "source_url": "https://www.espressif.com/sites/default/files/documentation/esp32-c3_datasheet_en.pdf",
+    "note": "Official Espressif datasheet URL"
+  },
+  {
+    "vendor": "Espressif",
+    "part_number": "ESP32-C6",
+    "category": "Wi-Fi 6 / BLE / 802.15.4 SoC",
+    "source_url": "https://www.espressif.com/sites/default/files/documentation/esp32-c6_datasheet_en.pdf",
+    "note": "Official Espressif datasheet URL"
+  },
+  {
+    "vendor": "Espressif",
+    "part_number": "ESP32-H2",
+    "category": "BLE / 802.15.4 SoC",
+    "source_url": "https://www.espressif.com/sites/default/files/documentation/esp32-h2_datasheet_en.pdf",
+    "note": "Official Espressif datasheet URL"
+  },
+  {
+    "vendor": "Espressif",
+    "part_number": "ESP32-P4",
+    "category": "High-Performance SoC",
+    "source_url": "https://www.espressif.com/sites/default/files/documentation/esp32-p4_datasheet_en.pdf",
+    "note": "Official Espressif datasheet URL"
+  }
+]
