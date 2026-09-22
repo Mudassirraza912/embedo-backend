@@ -2,7 +2,7 @@ import { prisma } from '../../../db/prisma.js';
 import { logger } from '../../../config/logger.js';
 import { emitSessionEvent } from '../../realtime/socket.js';
 import { parseHardwareIntent, IntentExtractionError } from './intent-parser.js';
-import { checkSufficiency } from './sufficiency-gate.js';
+import { checkSufficiency, GENERATION_HOLD_MESSAGE } from './sufficiency-gate.js';
 import { getGroundingContext } from './rag-grounder.js';
 import { buildCanonicalDesignGraph, DesignGraphSchemaError } from './design-graph-builder.js';
 import { validateAndRepairDesignGraph } from './validator.js';
@@ -170,8 +170,7 @@ export async function runGenerationPipeline(
     if (!env.GENERATION_ENABLED) {
       log.info('Architecture synthesis withheld (GENERATION_ENABLED=false)');
 
-      const holdMessage =
-        'Your request looks good — architecture synthesis Work is in Progress and will available shortly';
+      const holdMessage = GENERATION_HOLD_MESSAGE;
 
       await prisma.$transaction([
         prisma.designSession.update({ where: { id: sessionId }, data: { status: 'CLARIFICATION_REQUIRED' } }),
