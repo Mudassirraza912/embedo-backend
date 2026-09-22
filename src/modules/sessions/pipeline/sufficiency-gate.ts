@@ -6,7 +6,15 @@ export interface SufficiencyResult {
   clarificationQuestions: string[];
   suggestedDefaults?: Record<string, string>;
   isGibberish?: boolean;
+  isOffTopic?: boolean;
 }
+
+/**
+ * Shared with sessions.service.ts (the zero-cost heuristic short-circuit at session creation)
+ * so both the pre-Luna and post-Luna off-topic paths produce the identical, on-brand message.
+ */
+export const OFF_TOPIC_CLARIFICATION =
+  "Embedo.ai is focused specifically on embedded hardware architecture, so I'm not able to help with that. Describe an embedded product or concept you'd like to design — e.g. \"Battery-powered BLE asset tracker with GPS and accelerometer\" or \"Smart greenhouse environmental monitor with Wi-Fi and OLED display\" — and I'll get started.";
 
 /**
  * Heuristic detector for spam, repetitive keyboard mashing, and non-sensical strings
@@ -44,6 +52,46 @@ export function isGibberishOrSpam(text: string): boolean {
 }
 
 /**
+ * Zero-cost heuristic for common non-hardware chit-chat (date/time, weather, greetings, mic
+ * testing, generic "how do I..." requests). Distinct from isGibberishOrSpam: this text is
+ * grammatically valid, just outside the product's scope. Embedo only synthesizes embedded
+ * hardware architectures, so these are caught here — before a Luna call is even made — with a
+ * dedicated, on-brand "this isn't what I do" message, instead of spending a call only to land on
+ * the same generic power-source/subsystem clarification questions a genuine but underspecified
+ * hardware request would get.
+ */
+export function isOffTopicChat(text: string): boolean {
+  if (!text) return false;
+  const clean = text.trim().toLowerCase();
+  if (clean.length === 0) return false;
+
+  const patterns = [
+    /\bwhat(?:'s|\s+is)?\s+(?:today'?s\s+)?(?:the\s+)?(?:date|day)\b/,
+    /\bwhat\s+day\s+(?:is\s+it\s+)?today\b/,
+    /\bwhat\s+time\s+is\s+it\b/,
+    /\bcurrent\s+time\b/,
+    /\bweather\b/,
+    /\byoutube\s+channel\b/,
+    /\bhow\s+(?:can|do)\s+i\s+make\s+money\b/,
+    /\bwrite\s+(?:me\s+)?(?:a|an)\s+(?:poem|song|essay|story|joke)\b/,
+    /\btell\s+me\s+a\s+joke\b/,
+    /\bwho\s+(?:are|r)\s+you\b/,
+    /\bwhat(?:'s| is)\s+your\s+name\b/,
+    /\brecipe\s+for\b/,
+  ];
+  if (patterns.some((p) => p.test(clean))) return true;
+
+  // Standalone greetings / mic-testing / filler with nothing else attached — kept as a
+  // whole-string match (not a substring test) so it never flags a real hardware description
+  // that happens to contain "test" (e.g. "battery load test fixture", "EMI test chamber").
+  const standaloneChitChat =
+    /^(?:hi|hello|hey|yo|sup|test|testing|mic\s*test(?:ing)?|test\s*test|testing\s*testing|hello\s*world|how\s*are\s*you)[.!?]*$/;
+  if (standaloneChitChat.test(clean)) return true;
+
+  return false;
+}
+
+/**
  * Sufficiency Gate: Deterministic + heuristic check to ensure hardware requirements
  * have sufficient fidelity before initiating deep Sol-tier architecture synthesis.
  */
@@ -61,6 +109,19 @@ export function checkSufficiency(intent: StructuredIntent, rawInputText?: string
         'The hardware description provided is unclear or incomplete. Please describe an embedded product or concept (e.g. "Battery-powered BLE asset tracker with GPS and accelerometer" or "Smart greenhouse environmental monitor with Wi-Fi and OLED display").',
       ],
       isGibberish: true,
+    };
+  }
+
+  // 0b. Off-topic check — catches non-hardware chit-chat that slipped past the zero-cost
+  // heuristic (sessions.service.ts) because it's more elaborate than a short pattern match, but
+  // that Luna itself has now classified (from the SAME intent-parse call, no added cost) as not
+  // being an embedded hardware request at all.
+  if ((rawInputText && isOffTopicChat(rawInputText)) || intent.isOffTopic) {
+    return {
+      sufficient: false,
+      missingFields: ['deviceType', 'purpose', 'subsystems'],
+      clarificationQuestions: [OFF_TOPIC_CLARIFICATION],
+      isOffTopic: true,
     };
   }
 

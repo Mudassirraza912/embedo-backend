@@ -84,6 +84,14 @@ const envSchema = z
 
     STRIPE_SECRET_KEY: optionalString,
     STRIPE_WEBHOOK_SECRET: optionalString,
+
+    // Kill switch for the architecture-synthesis stage. Intent parsing, the sufficiency gate,
+    // and moderation still run in full when this is false — only the Sol-tier design-graph
+    // build (and everything downstream of it) is withheld. Defaults on; unset in normal .env files.
+    GENERATION_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
   })
   .superRefine((cfg, ctx) => {
     const isProd = cfg.NODE_ENV === 'production';

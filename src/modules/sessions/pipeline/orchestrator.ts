@@ -10,6 +10,7 @@ import { projectArchitecture } from './diagram-projector.js';
 import { ProjectedArchitecture, StructuredIntent, structuredIntentSchema } from './types.js';
 import { persistNewVersion } from '../version.service.js';
 import { Prisma } from '@prisma/client';
+import { env } from '../../../config/env.js';
 
 export interface PipelineExecutionOptions {
   forceGenerate?: boolean;
@@ -124,12 +125,20 @@ export async function runGenerationPipeline(
     const sufficiency = checkSufficiency(structuredIntent, session.intentText);
 
     if (!sufficiency.sufficient && !options.forceGenerate) {
-      log.info({ missing: sufficiency.missingFields, isGibberish: sufficiency.isGibberish }, 'Sufficiency gate triggered - clarification needed');
+      log.info(
+        { missing: sufficiency.missingFields, isGibberish: sufficiency.isGibberish, isOffTopic: sufficiency.isOffTopic },
+        'Sufficiency gate triggered - clarification needed'
+      );
       recordStep('reading_intent', 'Clarification required', 'warning', sufficiency.clarificationQuestions[0]);
 
-      const questionText = `To produce the most accurate hardware architecture, please clarify the following:\n${sufficiency.clarificationQuestions
-        .map((q, idx) => `${idx + 1}. ${q}`)
-        .join('\n')}`;
+      // Off-topic gets its own complete, professional message as-is — not the numbered
+      // "please clarify the following" wrapper, which only makes sense for genuine hardware
+      // requests that are merely underspecified.
+      const questionText = sufficiency.isOffTopic
+        ? sufficiency.clarificationQuestions[0]
+        : `To produce the most accurate hardware architecture, please clarify the following:\n${sufficiency.clarificationQuestions
+            .map((q, idx) => `${idx + 1}. ${q}`)
+            .join('\n')}`;
 
       await prisma.$transaction([
         prisma.designSession.update({ where: { id: sessionId }, data: { status: 'CLARIFICATION_REQUIRED' } }),
@@ -142,6 +151,7 @@ export async function runGenerationPipeline(
               clarificationQuestions: sufficiency.clarificationQuestions,
               missingFields: sufficiency.missingFields,
               suggestedDefaults: sufficiency.suggestedDefaults ?? null,
+              isOffTopic: sufficiency.isOffTopic ?? false,
               executionSteps,
             } as unknown as Prisma.InputJsonValue,
           },
@@ -150,6 +160,33 @@ export async function runGenerationPipeline(
 
       emitSessionEvent.clarificationNeeded(sessionId, sufficiency.clarificationQuestions);
       return { status: 'clarification_needed', questions: sufficiency.clarificationQuestions };
+    }
+
+    // Architecture-synthesis kill switch (GENERATION_ENABLED in src/config/env.ts). Intent
+    // parsing, the sufficiency gate above, and moderation (screened earlier, at the route layer)
+    // all still run in full — only the Sol-tier design-graph build and everything downstream of
+    // it is withheld. Reuses the existing clarification_needed plumbing so no frontend change is
+    // required; the session simply stays in a normal, non-error state until this is re-enabled.
+    if (!env.GENERATION_ENABLED) {
+      log.info('Architecture synthesis withheld (GENERATION_ENABLED=false)');
+
+      const holdMessage =
+        'Your request looks good — architecture synthesis Work is in Progress and will available shortly';
+
+      await prisma.$transaction([
+        prisma.designSession.update({ where: { id: sessionId }, data: { status: 'CLARIFICATION_REQUIRED' } }),
+        prisma.chatMessage.create({
+          data: {
+            sessionId,
+            role: 'assistant',
+            content: holdMessage,
+            metadata: { executionSteps } as unknown as Prisma.InputJsonValue,
+          },
+        }),
+      ]);
+
+      emitSessionEvent.clarificationNeeded(sessionId, [holdMessage]);
+      return { status: 'clarification_needed', questions: [holdMessage] };
     }
 
     // Step 3: Resolving Modules (RAG + pgvector)
