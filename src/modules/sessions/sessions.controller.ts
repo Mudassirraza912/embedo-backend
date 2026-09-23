@@ -24,6 +24,7 @@ export class SessionsController {
         data: {
           sessionId: result.session.id,
           status: result.session.status,
+          projectTitle: result.session.title,
           intentText: result.session.intentText,
           createdAt: result.session.createdAt,
           ...(result.issuedAnonToken ? { anonSessionToken: result.issuedAnonToken } : {}),
@@ -44,7 +45,9 @@ export class SessionsController {
       const data = sessions.map((s) => ({
         id: s.id,
         sessionId: s.id,
-        projectName: s.intentText ? s.intentText.split(/\s+/).slice(0, 4).join(' ') : 'Untitled Project',
+        // Never derived from intentText: raw user input can contain profanity (see
+        // conversation-router.service.ts, which generates this title).
+        projectName: s.title || 'Untitled Project',
         intent: s.intentText,
         mode: s.applicationContext === 'rapid_prototyping' ? 'prototype' : 'architect',
         status: s.status,
@@ -76,6 +79,7 @@ export class SessionsController {
       const sanitizedSession = {
         id: session.id,
         userId: session.userId,
+        projectTitle: session.title,
         intentText: session.intentText,
         intentStructured: session.intentStructured,
         domain: session.domain,
