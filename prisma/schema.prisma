@@ -72,6 +72,9 @@ model DesignSession {
   userId            String?         @map("user_id") @db.Uuid
   anonSessionToken  String?         @map("anon_session_token") @db.VarChar(255)
   intentText        String          @map("intent_text") @db.Text
+  /// AI-generated, profanity-free project title. Never derived from raw user text, which can
+  /// contain abusive language (see conversation-router.service.ts).
+  title             String?         @db.VarChar(120)
   intentStructured  Json?           @map("intent_structured")
   designGraph       Json?           @map("design_graph")
   domain            String?         @db.VarChar(100)

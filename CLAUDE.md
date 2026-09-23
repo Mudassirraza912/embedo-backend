@@ -106,6 +106,26 @@ if Redis is unreachable) and `sessions.service.ts`:
     lifetime audit counter; it is not the suspension trigger. Permanent bans remain a manual
     `users.suspendedAt` action.
 
+## 💬 4a. Conversation Routing (`conversation-router.service.ts`)
+
+Generation is expensive, so it only runs when the engineer actually asks for it. Every inbound
+message (session creation **and** `/discuss`) is classified by **Case F** into:
+
+- **`generate`** — a hardware brief, or an explicit ask to design/generate/build an architecture,
+  diagram or BOM → the pipeline is queued. The sufficiency gate still asks for missing details
+  first, so nothing is guessed.
+- **`discuss`** — a question, explanation request, or hardware talk with no ask to build → Luna
+  (Case E) answers concretely and closes by offering to generate. **No pipeline run.**
+- **`off_topic`** — not embedded hardware → the fixed off-topic reply, no further model calls.
+
+The same call returns the **project title**. Titles are never derived from raw user text: doing so
+put profanity straight into the project name and sidebar. It is stored in `design_sessions.title`
+and served as `projectTitle`; when there is no title (off-topic, or a request blocked by
+moderation before any model call) the UI shows `New project`.
+
+`isOffTopicChat` / `isGibberishOrSpam` (`sufficiency-gate.ts`) still screen first at zero cost, so
+chit-chat and keyboard mashing never reach the router.
+
 ## 🔄 4b. Session State Machine
 
 `PENDING → PROCESSING → DONE` with two branches: `CLARIFICATION_REQUIRED` (sufficiency gate or
@@ -156,7 +176,10 @@ adding a status requires a migration.
 - **Luna Tier (`gpt-4o-mini`)**:
   - `TaskCase B`: Hardware intent parsing (`parseHardwareIntent`), Discuss-First chat copilot (`discuss`).
   - `TaskCase C`: Topology validation, auto-repair, electrical rules checking.
-  - `TaskCase E / F / M`: Moderation, domain classification, and quick metadata labeling.
+  - `TaskCase E`: Conversational copilot replies (`generateCopilotReply`) — answers questions and
+    offers to generate, without running the pipeline.
+  - `TaskCase F`: Conversation routing + project title (`routeMessage`, see §4a).
+  - `TaskCase M`: Moderation domain classification (Tier 3).
 - **Embeddings**: `text-embedding-3-small` (1536 dims) for component catalog vector cosine similarity.
 
 ---
@@ -179,7 +202,7 @@ Base URL: `http://localhost:4000/api/v1` (Swagger Playground: `/docs`)
 | `POST` | `/admin/components/ingest` | Direct automated PDF datasheet ingestion |
 | `GET` | `/admin/components` | List all ingested components & vector chunk counts |
 | `GET` | `/admin/queues` | Bull-Board UI for real-time BullMQ visual queue monitoring |
-| `POST` | `/sessions` | Create new session & trigger AI pipeline |
+| `POST` | `/sessions` | Create new session. Routed per §4a: a build request triggers the pipeline; a question is answered in-line. Returns `projectTitle`. |
 | `GET` | `/sessions/:id` | Get session details, chat messages, and status |
 | `POST` | `/sessions/:id/discuss` | Multi-turn copilot chat & requirement refinement |
 | `GET` | `/sessions/:id/architecture` | Get projected diagrams & BOM |
