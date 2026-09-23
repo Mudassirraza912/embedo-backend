@@ -41,9 +41,8 @@ export const structuredIntentSchema = z.object({
     .optional()
     .transform((v) => v ?? []),
   // True when the user's message isn't a request to design/discuss embedded hardware at all
-  // (general chit-chat, unrelated how-to questions, greetings) — see sufficiency-gate.ts's
-  // isOffTopicChat for the zero-cost heuristic counterpart that catches the obvious cases
-  // before this field is ever populated.
+  // (general chit-chat, unrelated how-to questions, greetings). Model-classified on purpose:
+  // keyword matching rejected real hardware like "solar powered weather station".
   isOffTopic: z.boolean().nullable().optional().transform((v) => v ?? false),
 });
 

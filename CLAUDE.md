@@ -123,8 +123,12 @@ put profanity straight into the project name and sidebar. It is stored in `desig
 and served as `projectTitle`; when there is no title (off-topic, or a request blocked by
 moderation before any model call) the UI shows `New project`.
 
-`isOffTopicChat` / `isGibberishOrSpam` (`sufficiency-gate.ts`) still screen first at zero cost, so
-chit-chat and keyboard mashing never reach the router.
+Off-topic detection is **model-based on purpose**. An earlier keyword screen rejected real
+hardware whenever a chit-chat word appeared in it ("solar powered weather station", "ESP32 YouTube
+subscriber counter", "reflow recipe for lead-free solder"), so it was removed. `isGibberishOrSpam`
+(`sufficiency-gate.ts`) still screens keyboard mashing at zero cost — "asdasd" cannot be mistaken
+for hardware — and Case B repeats the off-topic judgement during intent parsing as a second line of
+defence before synthesis.
 
 ## 🔄 4b. Session State Machine
 
