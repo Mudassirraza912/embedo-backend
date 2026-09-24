@@ -20,6 +20,13 @@ export interface GenerateResult {
   latencyMs: number;
 }
 
+/** Called for every text delta as it arrives; `firstTokenMs` is set on the first call only. */
+export type StreamDeltaHandler = (delta: string, meta: { firstTokenMs?: number }) => void;
+
+export interface StreamOptions extends GenerateOptions {
+  onDelta: StreamDeltaHandler;
+}
+
 export interface EmbedBatchResult {
   embeddings: number[][];
   totalTokens: number;

@@ -1,7 +1,7 @@
 import OpenAI from 'openai';
 import { env } from '../../../config/env.js';
 import { logger } from '../../../config/logger.js';
-import { GenerateOptions, GenerateResult, EmbedBatchResult, ProviderError, classifyProviderError } from './types.js';
+import { GenerateOptions, GenerateResult, EmbedBatchResult, ProviderError, classifyProviderError, StreamOptions } from './types.js';
 
 export const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small';
 export const OPENAI_EMBEDDING_DIMENSIONS = 1536;
@@ -63,6 +63,67 @@ export class OpenAiProvider {
       const cachedTokens = response.usage?.prompt_tokens_details?.cached_tokens ?? undefined;
 
       logger.debug({ model: options.model, inputTokens, outputTokens, cachedTokens, latencyMs }, 'OpenAI message generated');
+
+      return { text, inputTokens, outputTokens, cachedTokens, latencyMs };
+    } catch (err) {
+      throw classifyProviderError('openai', err);
+    }
+  }
+
+  /**
+   * Same as generate(), but invokes onDelta for each chunk so the caller can push text to the
+   * client while the model is still writing. Usage is requested via stream_options so the
+   * ai_calls ledger still gets real token counts.
+   */
+  async generateStream(options: StreamOptions): Promise<GenerateResult> {
+    const client = this.requireClient();
+    const start = Date.now();
+    let firstTokenMs: number | undefined;
+
+    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
+    if (options.systemPrompt) {
+      messages.push({ role: 'system', content: options.systemPrompt });
+    }
+    for (const msg of options.messages) {
+      messages.push({ role: msg.role, content: msg.content });
+    }
+
+    try {
+      const stream = await client.chat.completions.create(
+        {
+          model: options.model || 'gpt-4o',
+          messages,
+          temperature: options.temperature ?? 0.2,
+          max_tokens: options.maxTokens ?? 4096,
+          ...(options.jsonMode ? { response_format: { type: 'json_object' as const } } : {}),
+          stream: true,
+          stream_options: { include_usage: true },
+        },
+        options.timeoutMs ? { timeout: options.timeoutMs } : undefined
+      );
+
+      let text = '';
+      let inputTokens = 0;
+      let outputTokens = 0;
+      let cachedTokens: number | undefined;
+
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content;
+        if (delta) {
+          if (firstTokenMs === undefined) firstTokenMs = Date.now() - start;
+          text += delta;
+          options.onDelta(delta, { firstTokenMs });
+        }
+        // The final chunk carries usage when stream_options.include_usage is set.
+        if (chunk.usage) {
+          inputTokens = chunk.usage.prompt_tokens || 0;
+          outputTokens = chunk.usage.completion_tokens || 0;
+          cachedTokens = chunk.usage.prompt_tokens_details?.cached_tokens ?? undefined;
+        }
+      }
+
+      const latencyMs = Date.now() - start;
+      logger.debug({ model: options.model, inputTokens, outputTokens, firstTokenMs, latencyMs }, 'OpenAI stream completed');
 
       return { text, inputTokens, outputTokens, cachedTokens, latencyMs };
     } catch (err) {

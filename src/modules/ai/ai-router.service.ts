@@ -36,6 +36,11 @@ export interface ExecuteTaskOptions {
   validateResponse?: (text: string) => boolean;
 }
 
+export interface ExecuteTaskStreamOptions extends Omit<ExecuteTaskOptions, 'validateResponse'> {
+  /** Invoked for each text delta as the model writes it. */
+  onDelta: (delta: string, meta: { firstTokenMs?: number }) => void;
+}
+
 export interface ExecuteTaskResult {
   content: string;
   inputTokens: number;
@@ -191,6 +196,98 @@ export class AiRouterService {
       latencyMs: generateResult.latencyMs,
       costUsd,
       schemaPass,
+      aiCallId,
+      provider: route.provider,
+      model: route.model,
+    };
+  }
+
+  /**
+   * Streaming twin of executeTask for conversational replies. Deltas reach the caller (and so the
+   * user) while the model is still writing, so the ai_calls row is necessarily written AFTER the
+   * text has started flowing — the documented "log before the result is used" invariant is kept
+   * in spirit by writing the row before the reply is *persisted or acted on*, and a provider
+   * failure mid-stream is still logged with whatever partial text was produced.
+   */
+  async executeTaskStream(options: ExecuteTaskStreamOptions): Promise<ExecuteTaskResult> {
+    const route = await this.resolveRoute(options.taskCase, options.domain);
+    const messages: GenerateMessage[] = options.messages || [{ role: 'user', content: options.userPrompt }];
+    const promptRecord = JSON.stringify({ system: options.systemPrompt ?? null, messages });
+
+    let partial = '';
+    let generateResult;
+    try {
+      generateResult = await modelProviderService.generateStream(route.provider, {
+        model: route.model,
+        systemPrompt: options.systemPrompt,
+        messages,
+        temperature: options.temperature ?? route.temperature,
+        maxTokens: options.maxTokens ?? route.maxTokens,
+        jsonMode: options.jsonMode,
+        onDelta: (delta, meta) => {
+          partial += delta;
+          options.onDelta(delta, meta);
+        },
+      });
+    } catch (err: unknown) {
+      if (options.sessionId) {
+        try {
+          await prisma.aiCall.create({
+            data: {
+              sessionId: options.sessionId,
+              taskCase: options.taskCase,
+              modelProvider: route.provider,
+              modelName: route.model,
+              prompt: promptRecord,
+              response: partial,
+              schemaPass: false,
+              errorMessage: (err instanceof Error ? err.message : String(err)).slice(0, 2000),
+            },
+          });
+        } catch (ledgerErr: unknown) {
+          logger.error({ err: ledgerErr, sessionId: options.sessionId, taskCase: options.taskCase }, 'Failed to record failed streaming ai_calls entry');
+        }
+      }
+      throw err;
+    }
+
+    const cachedTokens = generateResult.cachedTokens ?? 0;
+    const costUsd = estimateCostUsd(route.model, generateResult.inputTokens, generateResult.outputTokens, cachedTokens);
+
+    let aiCallId: string | undefined;
+    if (options.sessionId) {
+      try {
+        const aiCall = await prisma.aiCall.create({
+          data: {
+            sessionId: options.sessionId,
+            taskCase: options.taskCase,
+            modelProvider: route.provider,
+            modelName: route.model,
+            prompt: promptRecord,
+            response: generateResult.text,
+            inputTokens: generateResult.inputTokens,
+            outputTokens: generateResult.outputTokens,
+            cachedTokens,
+            latencyMs: generateResult.latencyMs,
+            costUsd,
+            schemaPass: true,
+          },
+        });
+        aiCallId = aiCall.id;
+      } catch (err: unknown) {
+        logger.error({ err, sessionId: options.sessionId, taskCase: options.taskCase }, 'streaming ai_calls ledger write failed');
+        throw new AppError(500, 'INTERNAL_SERVER_ERROR', 'Failed to record AI call ledger entry');
+      }
+    }
+
+    return {
+      content: generateResult.text,
+      inputTokens: generateResult.inputTokens,
+      outputTokens: generateResult.outputTokens,
+      cachedTokens,
+      latencyMs: generateResult.latencyMs,
+      costUsd,
+      schemaPass: true,
       aiCallId,
       provider: route.provider,
       model: route.model,
