@@ -68,6 +68,19 @@ services:
     container_name: embedo-prod-worker
     restart: always
     command: node dist/worker.js
+    # The image's default HEALTHCHECK curls the API port (4000), which the worker never serves, so it
+    # reported "unhealthy" forever while processing jobs normally. Check what a worker actually needs:
+    # its process is running AND Redis (its job queue) is reachable.
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          grep -qa 'dist/[w]orker.js' /proc/[0-9]*/cmdline &&
+          node -e "const R=require('ioredis');const r=new R(process.env.REDIS_URL,{lazyConnect:true,connectTimeout:3000,maxRetriesPerRequest:1});r.connect().then(()=>r.ping()).then(()=>process.exit(0)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
     deploy:
       resources:
         limits:
