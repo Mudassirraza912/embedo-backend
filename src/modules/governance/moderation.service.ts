@@ -136,19 +136,25 @@ export class ModerationService {
     }
     if (opts.tier1Only) return { allowed: true };
 
-    // Tier 2
+    // Tiers 2 and 3 screen the same text independently, so they run concurrently: sequentially
+    // they added ~1s to every message before the copilot could even start writing. Evaluation
+    // order below is unchanged — tier 2 still takes precedence when both flag.
+    const [tier2Settled, tier3Settled] = await Promise.allSettled([
+      this.checkTier2(text),
+      this.checkTier3(text, actor.sessionId),
+    ]);
+
     let tier2: { flagged: boolean; category?: string } | null = null;
-    try {
-      tier2 = await this.checkTier2(text);
-    } catch {
-      if (this.failMode() === 'closed') {
-        return {
-          allowed: false,
-          flaggedTier: 'provider_api',
-          category: 'moderation_unavailable',
-          reason: 'Content screening is temporarily unavailable. Please try again shortly.',
-        };
-      }
+    if (tier2Settled.status === 'fulfilled') {
+      tier2 = tier2Settled.value;
+    } else if (this.failMode() === 'closed') {
+      return {
+        allowed: false,
+        flaggedTier: 'provider_api',
+        category: 'moderation_unavailable',
+        reason: 'Content screening is temporarily unavailable. Please try again shortly.',
+      };
+    } else {
       logger.warn({ actor }, 'Tier 2 moderation unavailable — allowing (MODERATION_FAIL_MODE=open)');
     }
     if (tier2?.flagged) {
@@ -159,17 +165,16 @@ export class ModerationService {
 
     // Tier 3
     let tier3: { flagged: boolean; category?: string; reason?: string } | null = null;
-    try {
-      tier3 = await this.checkTier3(text, actor.sessionId);
-    } catch {
-      if (this.failMode() === 'closed') {
-        return {
-          allowed: false,
-          flaggedTier: 'domain_classifier',
-          category: 'moderation_unavailable',
-          reason: 'Content screening is temporarily unavailable. Please try again shortly.',
-        };
-      }
+    if (tier3Settled.status === 'fulfilled') {
+      tier3 = tier3Settled.value;
+    } else if (this.failMode() === 'closed') {
+      return {
+        allowed: false,
+        flaggedTier: 'domain_classifier',
+        category: 'moderation_unavailable',
+        reason: 'Content screening is temporarily unavailable. Please try again shortly.',
+      };
+    } else {
       logger.warn({ actor }, 'Tier 3 moderation unavailable — allowing (MODERATION_FAIL_MODE=open)');
     }
     if (tier3?.flagged) {
