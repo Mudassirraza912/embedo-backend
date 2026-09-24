@@ -95,7 +95,9 @@ CRITICAL HARDWARE RULES:
 5. Edge types must be one of: power, i2c, spi, uart, usb, sdmmc, gpio, signal, analog.
 6. Power rails must list every active voltage domain (e.g. 5V, 3.3V, VSYS, VBAT) and all consumer node IDs connected to that rail.
 7. Output valid JSON matching the exact schema without markdown formatting or code blocks.
-8. "suggestedRefinements": propose 3-5 short, chip-friendly next steps (max ~6 words each, e.g. "Add battery backup", "Add Wi-Fi connectivity") for things THIS SPECIFIC design does not yet have. Ground them in what's actually missing from the current nodes/edges/powerRails — never suggest something already present in this design (e.g. don't suggest "Add battery backup" if a battery/charger node already exists).`;
+8. "suggestedRefinements": propose 3-5 short, chip-friendly next steps (max ~6 words each, e.g. "Add battery backup", "Add Wi-Fi connectivity") for things THIS SPECIFIC design does not yet have. Ground them in what's actually missing from the current nodes/edges/powerRails — never suggest something already present in this design (e.g. don't suggest "Add battery backup" if a battery/charger node already exists).
+9. When a component's grounded specs include BOTH "recommendedOperating" and "absoluteMaxRatings", the two are DIFFERENT tables from the datasheet, not one range: absoluteMaxRatings is a destructive limit the datasheet itself marks as "stress ratings only, exceeding these may cause permanent damage" — it is NEVER a value to design to. Every node's voltageV and every power rail must come from recommendedOperating (its "typ", or a value inside its min/max). If only absoluteMaxRatings is present for a part, treat its operating range as unknown rather than using the absolute-max figures directly. The same applies to currentMa: never use an absoluteMaxRatings current (e.g. a pin input limit) as a node's current draw. Take currentMa from recommendedOperating or from supply/quiescent/active current figures stated in the grounded text; if none is grounded, give a conservative engineering estimate and say so in the node's rationale.
+10. Grounded specs may also list "powerModes" (supply current per operating mode, already in mA), "interfaces" (role, voltage level, max rate and pull-up requirements), "cautions" (constraints stated in the datasheet) and "pins". Use them: size a node's currentMa from its active/typical powerModes entry, put the required pull-ups and logic-level compatibility on the matching bus edges, never violate a listed caution (e.g. a pin that must not be pulled low at boot), and use the listed pin names for interface pin assignments rather than inventing pins.`;
 
   const userPrompt = `Synthesize the Canonical Design Graph for the following hardware intent:
 ${JSON.stringify(intent, null, 2)}
@@ -103,7 +105,7 @@ ${JSON.stringify(intent, null, 2)}
 ${iterationNotes ? `User Revision / Focus: ${iterationNotes}\n` : ''}
 ${
   grounding.datasheetSnippets.length > 0
-    ? `GROUNDED REFERENCE CONTEXT:\n${grounding.datasheetSnippets.map((s) => s.text).join('\n')}\n`
+    ? `GROUNDED REFERENCE CONTEXT (specs.recommendedOperating = design to this; specs.absoluteMaxRatings = destructive limit, never design to this — see rule 9):\n${grounding.datasheetSnippets.map((s) => s.text).join('\n')}\n`
     : ''
 }
 DESIGN GUIDELINES:
