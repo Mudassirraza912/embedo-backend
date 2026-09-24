@@ -130,6 +130,11 @@ export const initSocketIO = (httpServer: HttpServer): Server => {
         await socket.join(roomName);
         logger.info({ socketId: socket.id, roomName, sessionId }, 'Socket joined session room');
         socket.emit('connected', { sessionId });
+
+        const partial = activeStreams.get(sessionId);
+        if (partial) {
+          socket.emit('chat_delta', { delta: partial });
+        }
       } catch (err: unknown) {
         logger.error({ err, socketId: socket.id, sessionId }, 'Socket failed to join session room');
         socket.disconnect(true);
@@ -159,6 +164,14 @@ export const getIO = (): Server => {
  *  - Worker process (io absent): publish to Redis; API subscribers forward into the room.
  * Doing both would deliver every event twice.
  */
+/**
+ * Text streamed so far for sessions whose reply is still being written. A brand-new session's
+ * client only learns its sessionId from the HTTP response, so it joins the room a few hundred ms
+ * after streaming has already started; without this replay those first deltas are lost and the
+ * reply appears to land all at once.
+ */
+const activeStreams = new Map<string, string>();
+
 const dispatch = (sessionId: string, eventName: string, payload: Record<string, unknown>): void => {
   if (io) {
     io.of('/ws/sessions').to(`session:${sessionId}`).emit(eventName, payload);
@@ -179,4 +192,13 @@ export const emitSessionEvent = {
   error: (sessionId: string, message: string, retryable: boolean = false) =>
     dispatch(sessionId, 'error', { message, retryable }),
   done: (sessionId: string, architecture: Record<string, unknown>) => dispatch(sessionId, 'done', { architecture }),
+  /** Conversational reply streaming: one event per text delta, then a terminating chat_complete. */
+  chatDelta: (sessionId: string, delta: string) => {
+    activeStreams.set(sessionId, (activeStreams.get(sessionId) ?? '') + delta);
+    dispatch(sessionId, 'chat_delta', { delta });
+  },
+  chatComplete: (sessionId: string, content: string) => {
+    activeStreams.delete(sessionId);
+    dispatch(sessionId, 'chat_complete', { content });
+  },
 };

@@ -25,6 +25,9 @@ export class SessionsController {
           sessionId: result.session.id,
           status: result.session.status,
           projectTitle: result.session.title,
+          // true => the assistant reply is streaming over the socket; the client should wait for
+          // chat_delta/chat_complete instead of fetching an (as yet unwritten) reply.
+          replyStreaming: result.replyStreaming,
           intentText: result.session.intentText,
           createdAt: result.session.createdAt,
           ...(result.issuedAnonToken ? { anonSessionToken: result.issuedAnonToken } : {}),
