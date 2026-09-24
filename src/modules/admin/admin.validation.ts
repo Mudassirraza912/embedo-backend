@@ -26,5 +26,15 @@ export const userIdParamSchema = z.object({
   id: z.string().uuid('Invalid user ID format'),
 });
 
+export const partNumberParamSchema = z.object({
+  partNumber: z.string().trim().min(1).max(255),
+});
+export const revisionsQuerySchema = z.object({
+  includeSnapshot: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => v === 'true'),
+});
+
 export type IngestBatchInput = z.infer<typeof ingestBatchSchema>;
 export type ListComponentsQuery = z.infer<typeof listComponentsQuerySchema>;

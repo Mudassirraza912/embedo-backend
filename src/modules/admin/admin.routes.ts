@@ -8,6 +8,8 @@ import {
   ingestBatchSchema,
   listComponentsQuerySchema,
   userIdParamSchema,
+  partNumberParamSchema,
+  revisionsQuerySchema,
 } from './admin.validation.js';
 
 const router = Router();
@@ -18,6 +20,11 @@ router.use(requireAuth, requireRole('admin'));
 router.get('/components/ingest/stream', validate({ query: ingestUrlQuerySchema }), adminController.ingestStream);
 router.post('/components/ingest', validate({ body: ingestUrlBodySchema }), adminController.ingestDirect);
 router.post('/components/ingest/batch', validate({ body: ingestBatchSchema }), adminController.ingestBatch);
+router.get(
+  '/components/:partNumber/revisions',
+  validate({ params: partNumberParamSchema, query: revisionsQuerySchema }),
+  adminController.listRevisions
+);
 router.get('/components', validate({ query: listComponentsQuerySchema }), adminController.listComponents);
 
 // User Governance & Moderation Suspension Management
