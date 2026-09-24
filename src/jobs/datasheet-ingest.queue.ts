@@ -1,8 +1,8 @@
-import { Queue, Worker, Job, QueueEvents } from 'bullmq';
+import { Queue, Worker, Job, QueueEvents, UnrecoverableError } from 'bullmq';
 import { redis } from '../db/redis.js';
 import { logger } from '../config/logger.js';
 import { env } from '../config/env.js';
-import { datasheetIngestionService, IngestionProgress } from '../modules/components/datasheet-ingestion.service.js';
+import { datasheetIngestionService, IngestionProgress, isNonRetryableIngestionFailure } from '../modules/components/datasheet-ingestion.service.js';
 import { Redis } from 'ioredis';
 
 export const DATASHEET_INGEST_QUEUE_NAME = 'datasheet-ingest';
@@ -50,13 +50,23 @@ export const createDatasheetIngestWorker = () => {
         await job.log(`[Stage ${progress.step}/${progress.totalSteps}] ${progress.stage}: ${progress.message}`);
       };
 
-      const result = await datasheetIngestionService.ingestFromUrl(job.data.datasheetUrl, {
-        actorUserId: job.data.actorUserId,
-        onProgress,
-      });
+      try {
+        const result = await datasheetIngestionService.ingestFromUrl(job.data.datasheetUrl, {
+          actorUserId: job.data.actorUserId,
+          onProgress,
+        });
 
-      await job.log(`Completed: Ingested ${result.partNumber} with ${result.chunksIngested} vector chunks.`);
-      return result;
+        await job.log(`Completed: Ingested ${result.partNumber} with ${result.chunksIngested} vector chunks.`);
+        return result;
+      } catch (err) {
+        // Some failures (password-protected, malformed, scanned/OCR-only, non-hardware domain) can
+        // never succeed by retrying the same PDF — burning 3 exponential-backoff attempts on them
+        // just delays surfacing the real problem. UnrecoverableError tells BullMQ to fail immediately.
+        if (isNonRetryableIngestionFailure(err)) {
+          throw new UnrecoverableError(err instanceof Error ? err.message : String(err));
+        }
+        throw err;
+      }
     },
     { connection: redis, concurrency: 2, lockDuration: 300_000 }
   );
