@@ -1,7 +1,7 @@
 import { AnthropicProvider } from './providers/anthropic.provider.js';
 import { OpenAiProvider } from './providers/openai.provider.js';
 import { GoogleProvider } from './providers/google.provider.js';
-import { GenerateOptions, GenerateResult, EmbedBatchResult, ProviderError } from './providers/types.js';
+import { GenerateOptions, GenerateResult, EmbedBatchResult, ProviderError, StreamOptions } from './providers/types.js';
 import { AppError } from '../../common/errors/AppError.js';
 import { logger } from '../../config/logger.js';
 
@@ -34,6 +34,28 @@ export class ModelProviderService {
       if (err instanceof AppError) throw err;
       const perr = err instanceof ProviderError ? err : new ProviderError(providerName, 'unknown', (err as Error).message);
       logger.error({ provider: providerName, kind: perr.kind, status: perr.status, err: perr.message }, 'Model generation failed');
+      throw perr;
+    }
+  }
+
+  /**
+   * Streaming generation. Only OpenAI implements it today; anything else transparently falls back
+   * to a single non-streaming call whose whole text is delivered as one delta, so callers never
+   * have to branch on provider capability.
+   */
+  async generateStream(providerName: string, options: StreamOptions): Promise<GenerateResult> {
+    try {
+      if (providerName.toLowerCase() === 'openai') {
+        return await this.openai.generateStream(options);
+      }
+      const { onDelta, ...rest } = options;
+      const result = await this.generate(providerName, rest);
+      onDelta(result.text, { firstTokenMs: result.latencyMs });
+      return result;
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      const perr = err instanceof ProviderError ? err : new ProviderError(providerName, 'unknown', (err as Error).message);
+      logger.error({ provider: providerName, kind: perr.kind, status: perr.status, err: perr.message }, 'Model streaming failed');
       throw perr;
     }
   }
