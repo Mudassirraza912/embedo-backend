@@ -12,3 +12,6 @@ coverage
 # Local ingestion artifacts / scratch output
 /tmp/
 *.local.json
+
+# VPS sync config (host, no secrets)
+scripts/sync/.env.sync
