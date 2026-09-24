@@ -7,9 +7,13 @@ import { datasheetIngestQueue, getDatasheetIngestQueueEvents } from '../../jobs/
 import { prisma } from '../../db/prisma.js';
 import { redis } from '../../db/redis.js';
 import { logger } from '../../config/logger.js';
+import { env } from '../../config/env.js';
 import { AppError } from '../../common/errors/AppError.js';
 import { userSuspensionKey } from '../../common/middlewares/auth.middleware.js';
-import { IngestBatchInput, ListComponentsQuery } from './admin.validation.js';
+import { IngestBatchInput, ListComponentsQuery, UpdatePlanBody, UpdateUserLimitsBody } from './admin.validation.js';
+import { limitsService, PLAN_NAMES, DEFAULT_LIMITS, LIMIT_BOUNDS, computeEffective, type PlanName } from '../limits/limits.service.js';
+import { IN_FLIGHT_STATUSES } from '../sessions/session-status.js';
+import { Prisma } from '@prisma/client';
 
 const manifestItemSchema = z.object({
   part_number: z.string().optional(),
@@ -299,16 +303,42 @@ export class AdminController {
           moderationStrikes: true,
           suspendedAt: true,
           createdAt: true,
+          planOverride: true,
+          limitOverrides: true,
           _count: { select: { designSessions: true } },
         },
         orderBy: [{ suspendedAt: 'desc' }, { moderationStrikes: 'desc' }, { createdAt: 'desc' }],
       });
+      const ids = users.map((u) => u.id);
+
+      // Usage is gathered in a handful of grouped queries (not per user) so the list stays cheap.
+      const [plans, subs, messageCounts, inFlightCounts, spend] = await Promise.all([
+        limitsService.plans(),
+        prisma.subscription.groupBy({ by: ['userId'], where: { userId: { in: ids }, status: 'active' }, _count: { _all: true } }),
+        prisma.chatMessage.groupBy({ by: ['userId'], where: { userId: { in: ids }, role: 'user' }, _count: { _all: true } }),
+        prisma.designSession.groupBy({ by: ['userId'], where: { userId: { in: ids }, status: { in: IN_FLIGHT_STATUSES } }, _count: { _all: true } }),
+        ids.length === 0
+          ? Promise.resolve([] as Array<{ user_id: string; spend: number }>)
+          : prisma.$queryRaw<Array<{ user_id: string; spend: number }>>(Prisma.sql`
+              SELECT s.user_id, coalesce(sum(a.cost_usd), 0)::float8 AS spend
+              FROM ai_calls a JOIN design_sessions s ON s.id = a.session_id
+              WHERE s.user_id = ANY(${ids}::uuid[]) GROUP BY s.user_id`),
+      ]);
+      const subsBy = new Map(subs.map((r) => [r.userId, r._count._all]));
+      const msgBy = new Map(messageCounts.map((r) => [r.userId, r._count._all]));
+      const flightBy = new Map(inFlightCounts.map((r) => [r.userId, r._count._all]));
+      const spendBy = new Map(spend.map((r) => [r.user_id, r.spend]));
 
       const enrichedUsers = await Promise.all(
         users.map(async (u) => {
           const tempKey = userSuspensionKey(u.id);
           const tempTtl = await redis.ttl(tempKey).catch(() => -2);
           const isTempSuspended = tempTtl > 0;
+          const effective = computeEffective(plans, {
+            planOverride: u.planOverride,
+            limitOverrides: u.limitOverrides,
+            activeSubscriptions: subsBy.get(u.id) ?? 0,
+          });
           return {
             id: u.id,
             email: u.email,
@@ -321,11 +351,121 @@ export class AdminController {
             isTempSuspended,
             tempSuspensionTtlSeconds: isTempSuspended ? tempTtl : 0,
             isSuspended: Boolean(u.suspendedAt) || isTempSuspended,
+            plan: effective.plan,
+            planOverride: u.planOverride,
+            limitOverrides: effective.overrides,
+            effectiveLimits: effective.limits,
+            usage: {
+              userMessages: msgBy.get(u.id) ?? 0,
+              inFlightSessions: flightBy.get(u.id) ?? 0,
+              aiSpendUsd: Math.round((spendBy.get(u.id) ?? 0) * 10_000) / 10_000,
+            },
           };
         })
       );
 
       res.status(200).json({ users: enrichedUsers });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  /** The three plans with their current limits, the built-in defaults (for a "reset" button) and the allowed bounds. */
+  listPlans = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const [plans, rows] = await Promise.all([limitsService.plans(), prisma.planLimit.findMany()]);
+      res.status(200).json({
+        plans: PLAN_NAMES.map((plan) => ({
+          plan,
+          limits: plans[plan],
+          defaults: DEFAULT_LIMITS[plan],
+          updatedAt: rows.find((r) => r.plan === plan)?.updatedAt ?? null,
+        })),
+        bounds: LIMIT_BOUNDS,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  /** Replaces one plan's limits. Takes effect immediately in this process and within seconds everywhere else. */
+  updatePlan = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const plan = req.params.plan as PlanName;
+      const before = (await limitsService.plans())[plan];
+      const after = await limitsService.updatePlan(plan, req.body as UpdatePlanBody, req.user?.id);
+      await prisma.auditLog.create({
+        data: {
+          actorUserId: req.user?.id ?? null,
+          action: 'PLAN_LIMITS_UPDATED',
+          entityType: 'PlanLimit',
+          entityId: null,
+          metadata: { plan, before, after } as unknown as Prisma.InputJsonValue,
+        },
+      });
+      logger.info({ plan, before, after, adminId: req.user?.id }, 'Plan limits updated');
+      res.status(200).json({ plan, limits: after, previous: before });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  /** Per-user override of the plan and/or individual limits. null clears an override. */
+  updateUserLimits = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id } = req.params as { id: string };
+      if (Object.keys(req.body ?? {}).length === 0) {
+        throw new AppError(400, 'VALIDATION_ERROR', 'Provide at least one field to change');
+      }
+      const { planOverride, messagesPerSession, maxInFlightSessions, sessionsPerHour } = req.body as UpdateUserLimitsBody;
+      let result;
+      try {
+        result = await limitsService.updateUserOverrides(id, {
+          planOverride,
+          limits: { messagesPerSession, maxInFlightSessions, sessionsPerHour },
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message === 'USER_NOT_FOUND') throw new AppError(404, 'NOT_FOUND', 'User not found');
+        throw err;
+      }
+      await prisma.auditLog.create({
+        data: {
+          actorUserId: req.user?.id ?? null,
+          action: 'USER_LIMITS_UPDATED',
+          entityType: 'User',
+          entityId: id,
+          metadata: { patch: req.body, result } as unknown as Prisma.InputJsonValue,
+        },
+      });
+      res.status(200).json({ userId: id, ...result });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  /** AI spend and session volume at a glance, for cost control. */
+  usageSummary = async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const [calls] = await prisma.$queryRaw<Array<{ spend24h: number; spend7d: number; spend_total: number; calls24h: number }>>(Prisma.sql`
+        SELECT
+          coalesce(sum(cost_usd) FILTER (WHERE created_at > now() - interval '24 hours'), 0)::float8 AS spend24h,
+          coalesce(sum(cost_usd) FILTER (WHERE created_at > now() - interval '7 days'), 0)::float8   AS spend7d,
+          coalesce(sum(cost_usd), 0)::float8                                                         AS spend_total,
+          (count(*) FILTER (WHERE created_at > now() - interval '24 hours'))::int                    AS calls24h
+        FROM ai_calls`);
+      const [sessions] = await prisma.$queryRaw<Array<{ guest24h: number; registered24h: number; in_flight: number }>>(Prisma.sql`
+        SELECT
+          (count(*) FILTER (WHERE user_id IS NULL AND created_at > now() - interval '24 hours'))::int     AS guest24h,
+          (count(*) FILTER (WHERE user_id IS NOT NULL AND created_at > now() - interval '24 hours'))::int AS registered24h,
+          (count(*) FILTER (WHERE status = ANY(${IN_FLIGHT_STATUSES}::text[])))::int                       AS in_flight
+        FROM design_sessions WHERE status <> 'SYSTEM'`);
+      const round = (n: number) => Math.round(n * 10_000) / 10_000;
+      res.status(200).json({
+        aiSpendUsd: { last24h: round(calls?.spend24h ?? 0), last7d: round(calls?.spend7d ?? 0), allTime: round(calls?.spend_total ?? 0) },
+        aiCallsLast24h: calls?.calls24h ?? 0,
+        sessions: { guestLast24h: sessions?.guest24h ?? 0, registeredLast24h: sessions?.registered24h ?? 0, inFlightNow: sessions?.in_flight ?? 0 },
+        generationEnabled: env.GENERATION_ENABLED,
+      });
     } catch (err) {
       next(err);
     }
