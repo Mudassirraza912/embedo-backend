@@ -196,6 +196,41 @@ export class AdminController {
   };
 
   /**
+   * Revision history for one component (checklist #16/#17): every archived revision, skipped
+   * older-revision ingest and unresolved conflict, newest first. Snapshots are large, so they are
+   * only returned on request.
+   */
+  listRevisions = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { partNumber } = req.params as { partNumber: string };
+      const includeSnapshot = Boolean((req.query as { includeSnapshot?: boolean }).includeSnapshot);
+      const component = await prisma.component.findUnique({ where: { partNumber }, select: { id: true, partNumber: true, specs: true } });
+      if (!component) throw new AppError(404, 'NOT_FOUND', `Component ${partNumber} not found`);
+
+      const rows = await prisma.auditLog.findMany({
+        where: {
+          entityId: component.id,
+          action: { in: ['COMPONENT_REVISION_ARCHIVED', 'INGEST_REVISION_CONFLICT_SKIPPED', 'INGEST_REVISION_CONFLICT_UNRESOLVED'] },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      });
+
+      res.status(200).json({
+        partNumber: component.partNumber,
+        current: (component.specs as Record<string, unknown> | null)?._revision ?? null,
+        history: rows.map((r) => {
+          const m = (r.metadata ?? {}) as Record<string, unknown>;
+          const { archivedSpecsSnapshot, ...rest } = m;
+          return { id: r.id, at: r.createdAt, action: r.action, ...rest, ...(includeSnapshot ? { archivedSpecsSnapshot } : {}) };
+        }),
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  /**
    * Paginated component listing with chunk counts and recent ingestion audit rows.
    */
   listComponents = async (req: Request, res: Response, next: NextFunction): Promise<void> => {

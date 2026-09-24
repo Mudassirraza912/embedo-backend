@@ -205,6 +205,7 @@ Base URL: `http://localhost:4000/api/v1` (Swagger Playground: `/docs`)
 | `GET` | `/admin/components/ingest/stream` | Streamed automated PDF ingestion (SSE) with AI Domain Gatekeeper |
 | `POST` | `/admin/components/ingest` | Direct automated PDF datasheet ingestion |
 | `GET` | `/admin/components` | List all ingested components & vector chunk counts |
+| `GET` | `/admin/components/:partNumber/revisions` | Revision history: archived revisions, skipped older-revision ingests, unresolved conflicts (`?includeSnapshot=true` adds the archived specs) |
 | `GET` | `/admin/queues` | Bull-Board UI for real-time BullMQ visual queue monitoring |
 | `POST` | `/sessions` | Create new session. Routed per §4a: a build request triggers the pipeline; a question is answered in-line. Returns `projectTitle`. |
 | `GET` | `/sessions/:id` | Get session details, chat messages, and status |
