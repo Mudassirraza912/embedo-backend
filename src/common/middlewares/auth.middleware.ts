@@ -37,6 +37,17 @@ export const userSuspensionKey = (userId: string): string => `mod:suspend:user:$
  * - Invalid/expired tokens -> 401
  * - Database failures are NOT masked as 401; they propagate to the error handler.
  */
+/**
+ * Endpoints that must stay reachable while carrying a suspended user's stale token. Otherwise a
+ * suspended account cannot even sign in as a different account: the browser keeps sending the old
+ * Authorization header, this middleware rejects the request before the login handler runs, and the
+ * login screen shows "Account temporarily suspended" for whatever email was typed.
+ */
+const SUSPENSION_EXEMPT_PATHS = ['/auth/login', '/auth/register', '/auth/google', '/auth/logout', '/auth/refresh'];
+
+const isSuspensionExempt = (req: Request): boolean =>
+  SUSPENSION_EXEMPT_PATHS.some((suffix) => req.path.endsWith(suffix));
+
 export const authenticate = async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
   const authHeader = req.headers.authorization;
   const anonHeader = req.headers['x-anon-session-token'];
@@ -72,7 +83,11 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
       return next(new AppError(401, 'UNAUTHORIZED', 'User not found or deleted'));
     }
 
+    // On an exempt path the stale token is simply ignored (request continues unauthenticated)
+    // so the user can sign in again — as themselves once the suspension lapses, or as someone
+    // else right away. Every other route still refuses a suspended account.
     if (user.suspendedAt) {
+      if (isSuspensionExempt(req)) return next();
       return next(new AppError(403, 'ACCOUNT_SUSPENDED', 'Account has been suspended'));
     }
 
@@ -82,6 +97,7 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
       return null;
     });
     if (tempSuspended) {
+      if (isSuspensionExempt(req)) return next();
       return next(
         new AppError(403, 'ACCOUNT_SUSPENDED', 'Account temporarily suspended due to repeated policy violations')
       );
