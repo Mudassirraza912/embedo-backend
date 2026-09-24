@@ -128,3 +128,23 @@ JWT_REFRESH_SECRET="your_jwt_refresh_secret_64_chars"
 
 OPENAI_API_KEY="sk-proj-your-openai-key"
 ```
+
+
+## Syncing the datasheet catalog (local -> VPS)
+
+The catalog (`components` + `datasheet_chunks`) is produced locally by the ingestion pipeline. To publish it:
+
+```bash
+cd embedo-backend
+npm run sync:vps -- --dry-run     # preflight only: what would be updated/inserted; writes nothing
+npm run sync:vps                  # confirm with "sync"; backup -> transfer -> stage -> guarded merge -> verify
+```
+
+- Only `components` and `datasheet_chunks` change (matched by `part_number`, live ids kept). Users, sessions,
+  the AI ledger and the audit log are never touched.
+- A full `pg_dump` of the VPS DB is taken first (`/root/backups/embedo_prod_before-catalog-sync_*.dump`, newest 10 kept).
+- The merge is one transaction with assertions; an empty or inconsistent export rolls back and changes nothing.
+- Config lives in `scripts/sync/.env.sync` (git-ignored; see `.env.sync.example`). Auth is your SSH key, or
+  `VPS_PASSWORD=... npm run sync:vps` for a single run. Set up a key once with `ssh-copy-id root@<host>`.
+- `npm run test:sync` runs the script end to end against a scratch Postgres container (Docker required).
+- This syncs data only. Code still ships with `./deploy.sh backend`.
