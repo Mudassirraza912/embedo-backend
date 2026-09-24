@@ -4,6 +4,7 @@ import { Redis } from 'ioredis';
 import { env } from '../../config/env.js';
 import { AppError } from '../errors/AppError.js';
 import { logger } from '../../config/logger.js';
+import { limitsService, DEFAULT_LIMITS } from '../../modules/limits/limits.service.js';
 
 /**
  * Dedicated, lazily-connected Redis client for rate limiting.
@@ -45,8 +46,6 @@ const buildLimiter = (spec: LimiterSpec): RateLimiterAbstract => {
 let limiters: {
   global: RateLimiterAbstract;
   auth: RateLimiterAbstract;
-  sessionGuest: RateLimiterAbstract;
-  sessionUser: RateLimiterAbstract;
   sessionDailyIp: RateLimiterAbstract;
   discuss: RateLimiterAbstract;
   passwordReset: RateLimiterAbstract;
@@ -59,9 +58,6 @@ const getLimiters = () => {
       global: buildLimiter({ keyPrefix: 'rl:global', points: env.RATE_LIMIT_MAX, duration: Math.max(1, Math.round(env.RATE_LIMIT_WINDOW_MS / 1000)) }),
       // Auth endpoints: 10 attempts / minute / IP (anti brute-force)
       auth: buildLimiter({ keyPrefix: 'rl:auth', points: 10, duration: 60 }),
-      // Session creation. Guests are keyed by IP ONLY — never by a client-supplied token.
-      sessionGuest: buildLimiter({ keyPrefix: 'rl:session:guest', points: 5, duration: 3600 }),
-      sessionUser: buildLimiter({ keyPrefix: 'rl:session:user', points: 20, duration: 3600 }),
       // Absolute daily ceiling per IP regardless of auth state (cost circuit breaker)
       sessionDailyIp: buildLimiter({ keyPrefix: 'rl:session:daily', points: env.SESSION_CREATE_DAILY_MAX_PER_IP, duration: 86400 }),
       // Discuss refinement: 30 / hour / session (plus the global IP limiter)
@@ -71,6 +67,20 @@ const getLimiters = () => {
     };
   }
   return limiters;
+};
+
+// Hourly session-creation limits are editable per plan (and per user) from the admin panel, so the
+// point count is not fixed at startup. One limiter per (bucket, points): a changed limit gets a fresh
+// counter under a new key instead of mutating a live limiter.
+const hourlyLimiters = new Map<string, RateLimiterAbstract>();
+const hourlyLimiter = (bucket: 'user' | 'guest', points: number): RateLimiterAbstract => {
+  const key = `${bucket}:${points}`;
+  let limiter = hourlyLimiters.get(key);
+  if (!limiter) {
+    limiter = buildLimiter({ keyPrefix: `rl:session:${bucket}:${points}`, points, duration: 3600 });
+    hourlyLimiters.set(key, limiter);
+  }
+  return limiter;
 };
 
 const clientIp = (req: Request): string => req.ip || req.socket.remoteAddress || 'unknown-ip';
@@ -144,9 +154,16 @@ export const rateLimitSessionCreation = async (req: Request, res: Response, next
 
   // 2. Hourly bucket: registered users by userId, guests by IP (never by client-supplied token)
   const message = 'Session creation rate limit exceeded. Please sign in or wait before creating new hardware architectures.';
-  const ok = req.user?.id
-    ? await consumeOr429(l.sessionUser, req.user.id, message, next, res)
-    : await consumeOr429(l.sessionGuest, ip, message, next, res);
+  const userId = req.user?.id;
+  let perHour = userId ? DEFAULT_LIMITS.free.sessionsPerHour : DEFAULT_LIMITS.guest.sessionsPerHour;
+  try {
+    perHour = (userId ? await limitsService.forUser(userId) : await limitsService.forGuest()).limits.sessionsPerHour;
+  } catch (err) {
+    logger.warn({ err }, 'Could not resolve session-creation limit; using the built-in default');
+  }
+  const ok = userId
+    ? await consumeOr429(hourlyLimiter('user', perHour), userId, message, next, res)
+    : await consumeOr429(hourlyLimiter('guest', perHour), ip, message, next, res);
   if (ok) next();
 };
 
