@@ -10,26 +10,30 @@ generator client {
 }
 
 model User {
-  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email             String             @unique @db.VarChar(255)
-  hashedPassword    String?            @map("hashed_password") @db.VarChar(255)
-  role              String             @default("user") @db.VarChar(20)
-  expertiseLevel    String?            @map("expertise_level") @db.VarChar(50)
-  dataConsent       Boolean            @default(false) @map("data_consent")
-  dataConsentDate   DateTime?          @map("data_consent_date") @db.Timestamp(6)
-  moderationStrikes Int                @default(0) @map("moderation_strikes")
-  suspendedAt       DateTime?          @map("suspended_at") @db.Timestamp(6)
-  deletedAt         DateTime?          @map("deleted_at") @db.Timestamp(6)
-  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt         DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email             String    @unique @db.VarChar(255)
+  hashedPassword    String?   @map("hashed_password") @db.VarChar(255)
+  role              String    @default("user") @db.VarChar(20)
+  expertiseLevel    String?   @map("expertise_level") @db.VarChar(50)
+  dataConsent       Boolean   @default(false) @map("data_consent")
+  dataConsentDate   DateTime? @map("data_consent_date") @db.Timestamp(6)
+  /// Admin override of the derived plan: "free" or "paid". Null = derive from subscriptions.
+  planOverride      String?   @map("plan_override") @db.VarChar(20)
+  /// Per-user limit overrides, e.g. {"messagesPerSession": 50}. A missing key inherits the plan's value.
+  limitOverrides    Json?     @map("limit_overrides")
+  moderationStrikes Int       @default(0) @map("moderation_strikes")
+  suspendedAt       DateTime? @map("suspended_at") @db.Timestamp(6)
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt         DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
 
-  authIdentities    AuthIdentity[]
-  refreshTokens     RefreshToken[]
-  subscriptions     Subscription[]
-  designSessions    DesignSession[]
-  chatMessages      ChatMessage[]
-  auditLogs         AuditLog[]
-  moderationEvents  ModerationEvent[]
+  authIdentities     AuthIdentity[]
+  refreshTokens      RefreshToken[]
+  subscriptions      Subscription[]
+  designSessions     DesignSession[]
+  chatMessages       ChatMessage[]
+  auditLogs          AuditLog[]
+  moderationEvents   ModerationEvent[]
   modelRoutesUpdated ModelRoute[]
 
   @@map("users")
@@ -42,7 +46,7 @@ model AuthIdentity {
   providerUserId String   @map("provider_user_id") @db.VarChar(255)
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerUserId])
   @@index([userId], map: "auth_identities_user_idx")
@@ -50,54 +54,54 @@ model AuthIdentity {
 }
 
 model RefreshToken {
-  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId       String         @map("user_id") @db.Uuid
-  tokenHash    String         @map("token_hash") @db.VarChar(255)
-  expiresAt    DateTime       @map("expires_at") @db.Timestamp(6)
-  revokedAt    DateTime?      @map("revoked_at") @db.Timestamp(6)
-  createdAt    DateTime       @default(now()) @map("created_at") @db.Timestamp(6)
-  replacedById String?        @map("replaced_by_id") @db.Uuid
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  tokenHash    String    @map("token_hash") @db.VarChar(255)
+  expiresAt    DateTime  @map("expires_at") @db.Timestamp(6)
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamp(6)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  replacedById String?   @map("replaced_by_id") @db.Uuid
 
-  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  replacedBy   RefreshToken?  @relation("TokenReplacement", fields: [replacedById], references: [id])
-  replaces     RefreshToken[] @relation("TokenReplacement")
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  replacedBy RefreshToken?  @relation("TokenReplacement", fields: [replacedById], references: [id])
+  replaces   RefreshToken[] @relation("TokenReplacement")
 
-  @@index([userId], map: "refresh_tokens_user_idx")
   @@unique([tokenHash], map: "refresh_tokens_token_hash_key")
+  @@index([userId], map: "refresh_tokens_user_idx")
   @@map("refresh_tokens")
 }
 
 model DesignSession {
-  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId            String?         @map("user_id") @db.Uuid
-  anonSessionToken  String?         @map("anon_session_token") @db.VarChar(255)
-  intentText        String          @map("intent_text") @db.Text
+  id                 String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId             String?   @map("user_id") @db.Uuid
+  anonSessionToken   String?   @map("anon_session_token") @db.VarChar(255)
+  intentText         String    @map("intent_text") @db.Text
   /// AI-generated, profanity-free project title. Never derived from raw user text, which can
   /// contain abusive language (see conversation-router.service.ts).
-  title             String?         @db.VarChar(120)
-  intentStructured  Json?           @map("intent_structured")
-  designGraph       Json?           @map("design_graph")
-  domain            String?         @db.VarChar(100)
-  applicationContext String?        @map("application_context") @db.VarChar(100)
-  architecture      Json?
-  parentSessionId   String?         @map("parent_session_id") @db.Uuid
+  title              String?   @db.VarChar(120)
+  intentStructured   Json?     @map("intent_structured")
+  designGraph        Json?     @map("design_graph")
+  domain             String?   @db.VarChar(100)
+  applicationContext String?   @map("application_context") @db.VarChar(100)
+  architecture       Json?
+  parentSessionId    String?   @map("parent_session_id") @db.Uuid
   /// PENDING | PROCESSING | CLARIFICATION_REQUIRED | DONE | FAILED | SYSTEM
   /// Enforced by the design_sessions_status_check constraint (see migrations).
-  status            String          @default("PENDING") @db.VarChar(50)
-  consentAtCreation Boolean         @default(false) @map("consent_at_creation")
-  deletedAt         DateTime?       @map("deleted_at") @db.Timestamp(6)
-  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt         DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+  status             String    @default("PENDING") @db.VarChar(50)
+  consentAtCreation  Boolean   @default(false) @map("consent_at_creation")
+  deletedAt          DateTime? @map("deleted_at") @db.Timestamp(6)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
 
-  user              User?           @relation(fields: [userId], references: [id])
-  parentSession     DesignSession?  @relation("SessionIterations", fields: [parentSessionId], references: [id])
-  childSessions     DesignSession[] @relation("SessionIterations")
-  versions          SessionVersion[]
-  chatMessages      ChatMessage[]
-  aiCalls           AiCall[]
-  userFeedback      UserFeedback[]
-  designOutcome     DesignOutcome?
-  moderationEvents  ModerationEvent[]
+  user             User?             @relation(fields: [userId], references: [id])
+  parentSession    DesignSession?    @relation("SessionIterations", fields: [parentSessionId], references: [id])
+  childSessions    DesignSession[]   @relation("SessionIterations")
+  versions         SessionVersion[]
+  chatMessages     ChatMessage[]
+  aiCalls          AiCall[]
+  userFeedback     UserFeedback[]
+  designOutcome    DesignOutcome?
+  moderationEvents ModerationEvent[]
 
   @@index([userId], map: "design_sessions_user_idx")
   @@index([anonSessionToken], map: "design_sessions_anon_idx")
@@ -107,17 +111,17 @@ model DesignSession {
 }
 
 model SessionVersion {
-  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  sessionId       String        @map("session_id") @db.Uuid
-  versionNumber   Int           @map("version_number")
-  versionTag      String        @map("version_tag") @db.VarChar(20) // e.g. "v1.0", "v1.1", "v1.2"
-  changeSummary   String        @map("change_summary") @db.Text
-  appliedChanges  String[]      @map("applied_changes")
-  designGraph     Json          @map("design_graph")
-  architecture    Json
-  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamp(6)
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId      String   @map("session_id") @db.Uuid
+  versionNumber  Int      @map("version_number")
+  versionTag     String   @map("version_tag") @db.VarChar(20) // e.g. "v1.0", "v1.1", "v1.2"
+  changeSummary  String   @map("change_summary") @db.Text
+  appliedChanges String[] @map("applied_changes")
+  designGraph    Json     @map("design_graph")
+  architecture   Json
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
-  session         DesignSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  session DesignSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@unique([sessionId, versionNumber], map: "session_versions_session_version_unique")
   @@index([sessionId], map: "session_versions_session_idx")
@@ -125,16 +129,16 @@ model SessionVersion {
 }
 
 model ChatMessage {
-  id          String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  sessionId   String        @map("session_id") @db.Uuid
-  userId      String?       @map("user_id") @db.Uuid
-  role        String        @db.VarChar(20) // "user", "assistant", "system"
-  content     String        @db.Text
-  metadata    Json?
-  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamp(6)
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId String   @map("session_id") @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  role      String   @db.VarChar(20) // "user", "assistant", "system"
+  content   String   @db.Text
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
-  session     DesignSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  user        User?         @relation(fields: [userId], references: [id])
+  session DesignSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User?         @relation(fields: [userId], references: [id])
 
   @@index([sessionId], map: "chat_messages_session_idx")
   @@index([userId], map: "chat_messages_user_idx")
@@ -142,25 +146,25 @@ model ChatMessage {
 }
 
 model AiCall {
-  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  sessionId     String         @map("session_id") @db.Uuid
-  taskCase      String         @map("task_case") @db.Char(1)
-  modelProvider String         @map("model_provider") @db.VarChar(50)
-  modelName     String         @map("model_name") @db.VarChar(100)
-  prompt        String         @db.Text
-  response      String         @db.Text
-  inputTokens   Int?           @map("input_tokens")
-  outputTokens  Int?           @map("output_tokens")
-  cachedTokens  Int?           @map("cached_tokens")
-  costUsd       Decimal?       @map("cost_usd") @db.Decimal(10, 6)
-  latencyMs     Int?           @map("latency_ms")
-  retryCount    Int            @default(0) @map("retry_count")
-  schemaPass    Boolean?       @map("schema_pass")
-  errorMessage  String?        @map("error_message") @db.Text
-  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamp(6)
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId     String   @map("session_id") @db.Uuid
+  taskCase      String   @map("task_case") @db.Char(1)
+  modelProvider String   @map("model_provider") @db.VarChar(50)
+  modelName     String   @map("model_name") @db.VarChar(100)
+  prompt        String   @db.Text
+  response      String   @db.Text
+  inputTokens   Int?     @map("input_tokens")
+  outputTokens  Int?     @map("output_tokens")
+  cachedTokens  Int?     @map("cached_tokens")
+  costUsd       Decimal? @map("cost_usd") @db.Decimal(10, 6)
+  latencyMs     Int?     @map("latency_ms")
+  retryCount    Int      @default(0) @map("retry_count")
+  schemaPass    Boolean? @map("schema_pass")
+  errorMessage  String?  @map("error_message") @db.Text
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
-  session       DesignSession  @relation(fields: [sessionId], references: [id])
-  userFeedback  UserFeedback[]
+  session      DesignSession  @relation(fields: [sessionId], references: [id])
+  userFeedback UserFeedback[]
 
   @@index([sessionId], map: "ai_calls_session_idx")
   @@index([createdAt], map: "ai_calls_created_idx")
@@ -168,51 +172,51 @@ model AiCall {
 }
 
 model UserFeedback {
-  id                  String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  sessionId           String         @map("session_id") @db.Uuid
-  aiCallId            String?        @map("ai_call_id") @db.Uuid
-  action              String         @db.VarChar(50)
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId           String   @map("session_id") @db.Uuid
+  aiCallId            String?  @map("ai_call_id") @db.Uuid
+  action              String   @db.VarChar(50)
   modifications       Json?
   rating              Int?
-  notes               String?        @db.Text
-  timeToActionSeconds Int?           @map("time_to_action_seconds")
-  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamp(6)
+  notes               String?  @db.Text
+  timeToActionSeconds Int?     @map("time_to_action_seconds")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
-  session             DesignSession  @relation(fields: [sessionId], references: [id])
-  aiCall              AiCall?        @relation(fields: [aiCallId], references: [id])
+  session DesignSession @relation(fields: [sessionId], references: [id])
+  aiCall  AiCall?       @relation(fields: [aiCallId], references: [id])
 
   @@index([sessionId], map: "user_feedback_session_idx")
   @@map("user_feedback")
 }
 
 model DesignOutcome {
-  id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  sessionId           String        @unique @map("session_id") @db.Uuid
-  exported            Boolean       @default(false)
-  exportFormat        String?       @map("export_format") @db.VarChar(50)
-  exportFileKey       String?       @map("export_file_key") @db.VarChar(500)
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId           String   @unique @map("session_id") @db.Uuid
+  exported            Boolean  @default(false)
+  exportFormat        String?  @map("export_format") @db.VarChar(50)
+  exportFileKey       String?  @map("export_file_key") @db.VarChar(500)
   fabricated          Boolean?
-  workedFirstTime     Boolean?      @map("worked_first_time")
-  iterationsToWorking Int?          @map("iterations_to_working")
-  feedbackNotes       String?       @map("feedback_notes") @db.Text
-  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamp(6)
-  updatedAt           DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+  workedFirstTime     Boolean? @map("worked_first_time")
+  iterationsToWorking Int?     @map("iterations_to_working")
+  feedbackNotes       String?  @map("feedback_notes") @db.Text
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt           DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
 
-  session             DesignSession @relation(fields: [sessionId], references: [id])
+  session DesignSession @relation(fields: [sessionId], references: [id])
 
   @@map("design_outcomes")
 }
 
 model Component {
-  id             String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  partNumber     String?                  @unique @map("part_number") @db.VarChar(255)
-  manufacturer   String?                  @db.VarChar(255)
-  category       String?                  @db.VarChar(100)
-  specs          Json?
-  datasheetUrl   String?                  @map("datasheet_url") @db.Text
-  source         String?                  @db.VarChar(50)
-  lastRefreshed  DateTime?                @map("last_refreshed") @db.Timestamp(6)
-  embedding      Unsupported("vector(1536)")?
+  id            String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  partNumber    String?                      @unique @map("part_number") @db.VarChar(255)
+  manufacturer  String?                      @db.VarChar(255)
+  category      String?                      @db.VarChar(100)
+  specs         Json?
+  datasheetUrl  String?                      @map("datasheet_url") @db.Text
+  source        String?                      @db.VarChar(50)
+  lastRefreshed DateTime?                    @map("last_refreshed") @db.Timestamp(6)
+  embedding     Unsupported("vector(1536)")?
 
   datasheetChunks DatasheetChunk[]
 
@@ -221,28 +225,28 @@ model Component {
 }
 
 model DatasheetChunk {
-  id            String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  componentId   String?                  @map("component_id") @db.Uuid
-  chunkText     String?                  @map("chunk_text") @db.Text
-  chunkMetadata Json?                    @map("chunk_metadata")
-  pageNumber    Int?                     @map("page_number")
+  id            String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  componentId   String?                      @map("component_id") @db.Uuid
+  chunkText     String?                      @map("chunk_text") @db.Text
+  chunkMetadata Json?                        @map("chunk_metadata")
+  pageNumber    Int?                         @map("page_number")
   embedding     Unsupported("vector(1536)")?
 
-  component     Component?               @relation(fields: [componentId], references: [id])
+  component Component? @relation(fields: [componentId], references: [id])
 
   @@index([componentId], map: "datasheet_chunks_component_idx")
   @@map("datasheet_chunks")
 }
 
 model KnowledgeChunk {
-  id            String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  sourceType    String                   @map("source_type") @db.VarChar(50) // "datasheet", "forum", "app_note", "community"
-  sourceUrl     String?                  @map("source_url") @db.Text
-  title         String?                  @db.VarChar(500)
-  chunkText     String                   @map("chunk_text") @db.Text
-  chunkMetadata Json?                    @map("chunk_metadata")
+  id            String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sourceType    String                       @map("source_type") @db.VarChar(50) // "datasheet", "forum", "app_note", "community"
+  sourceUrl     String?                      @map("source_url") @db.Text
+  title         String?                      @db.VarChar(500)
+  chunkText     String                       @map("chunk_text") @db.Text
+  chunkMetadata Json?                        @map("chunk_metadata")
   embedding     Unsupported("vector(1536)")?
-  createdAt     DateTime                 @default(now()) @map("created_at") @db.Timestamp(6)
+  createdAt     DateTime                     @default(now()) @map("created_at") @db.Timestamp(6)
 
   @@index([sourceType], map: "knowledge_chunks_source_type_idx")
   @@map("knowledge_chunks")
@@ -260,7 +264,7 @@ model ModelRoute {
   updatedBy     String?  @map("updated_by") @db.Uuid
   updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
 
-  updater       User?    @relation(fields: [updatedBy], references: [id])
+  updater User? @relation(fields: [updatedBy], references: [id])
 
   @@unique([taskCase, domain])
   @@map("model_routes")
@@ -277,7 +281,7 @@ model Subscription {
   createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
   updatedAt            DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
 
-  user                 User      @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id])
 
   @@index([userId], map: "subscriptions_user_idx")
   @@map("subscriptions")
@@ -303,28 +307,41 @@ model AuditLog {
   metadata    Json?
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
-  actor       User?    @relation(fields: [actorUserId], references: [id])
+  actor User? @relation(fields: [actorUserId], references: [id])
 
   @@index([actorUserId], map: "audit_log_actor_idx")
   @@map("audit_log")
 }
 
 model ModerationEvent {
-  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId          String?        @map("user_id") @db.Uuid
-  anonIdentifier  String?        @map("anon_identifier") @db.VarChar(255)
-  sessionId       String?        @map("session_id") @db.Uuid
-  tier            String         @db.VarChar(20)
-  category        String         @db.VarChar(100)
-  flaggedText     String         @map("flagged_text") @db.Text
-  actionTaken     String         @map("action_taken") @db.VarChar(50)
-  createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamp(6)
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String?  @map("user_id") @db.Uuid
+  anonIdentifier String?  @map("anon_identifier") @db.VarChar(255)
+  sessionId      String?  @map("session_id") @db.Uuid
+  tier           String   @db.VarChar(20)
+  category       String   @db.VarChar(100)
+  flaggedText    String   @map("flagged_text") @db.Text
+  actionTaken    String   @map("action_taken") @db.VarChar(50)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
-  user            User?          @relation(fields: [userId], references: [id])
-  session         DesignSession? @relation(fields: [sessionId], references: [id])
+  user    User?          @relation(fields: [userId], references: [id])
+  session DesignSession? @relation(fields: [sessionId], references: [id])
 
   @@index([userId], map: "moderation_events_user_idx")
   @@index([anonIdentifier], map: "moderation_events_anon_idx")
   @@index([createdAt], map: "moderation_events_created_idx")
   @@map("moderation_events")
+}
+
+/// Editable usage limits per plan ("guest" | "free" | "paid"). Changed from the admin panel, so a limit
+/// change never needs a deploy. 0 in maxInFlightSessions means "no cap".
+model PlanLimit {
+  plan                String   @id @db.VarChar(20)
+  messagesPerSession  Int      @map("messages_per_session")
+  maxInFlightSessions Int      @default(0) @map("max_in_flight_sessions")
+  sessionsPerHour     Int      @map("sessions_per_hour")
+  updatedBy           String?  @map("updated_by") @db.Uuid
+  updatedAt           DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@map("plan_limits")
 }
