@@ -1,15 +1,48 @@
 import { z } from 'zod';
 import { aiRouterService } from '../../ai/ai-router.service.js';
-import { CanonicalDesignGraph, StructuredIntent, NODE_CATEGORIES, EDGE_TYPES } from './types.js';
+import { CanonicalDesignGraph, StructuredIntent, NODE_CATEGORIES, EDGE_TYPES, NodeCategory, EdgeType } from './types.js';
 import { GroundingContext } from './rag-grounder.js';
 import { logger } from '../../../config/logger.js';
 import { stripJsonFences } from './json-utils.js';
+
+// The model regularly reaches for a near-synonym of an allowed enum value ("actuation" for a relay,
+// "sensor" for "sensing", "wireless" for "connectivity"). Rejecting the whole graph for one
+// off-vocabulary label threw away otherwise-valid designs and failed the session outright (seen
+// live on a relay-driven water-pump controller), so map known synonyms onto the canonical value
+// before validation. Anything unrecognised still fails validation and goes through the retry.
+const NODE_CATEGORY_SYNONYMS: Readonly<Record<string, NodeCategory>> = {
+  actuation: 'motor', actuator: 'motor', actuators: 'motor', relay: 'motor', driver: 'motor', output: 'motor', outputs: 'motor', load: 'motor',
+  sensor: 'sensing', sensors: 'sensing', input: 'sensing', inputs: 'sensing', measurement: 'sensing',
+  mcu: 'control', controller: 'control', processing: 'control', compute: 'control', protection: 'control',
+  wireless: 'connectivity', communication: 'connectivity', communications: 'connectivity', comms: 'connectivity', radio: 'connectivity', interface: 'connectivity',
+  memory: 'storage', display: 'ui', 'user interface': 'ui', indicator: 'ui', indicators: 'ui',
+  battery: 'power', 'power management': 'power', supply: 'power', regulator: 'power',
+  fuel_gauge: 'gauge', 'fuel gauge': 'gauge', speaker: 'audio', microphone: 'audio', vibration: 'haptic',
+};
+
+const EDGE_TYPE_SYNONYMS: Readonly<Record<string, EdgeType>> = {
+  i2s: 'signal', pwm: 'gpio', digital: 'gpio', control: 'gpio', data: 'signal', 'i²c': 'i2c', can: 'signal', rs485: 'uart', adc: 'analog', sdio: 'sdmmc',
+};
+
+function normalizeEnum<T extends string>(allowed: readonly T[], synonyms: Readonly<Record<string, T>>) {
+  return (value: unknown): unknown => {
+    if (typeof value !== 'string') return value;
+    const key = value.trim().toLowerCase();
+    if ((allowed as readonly string[]).includes(key)) return key;
+    const mapped = synonyms[key];
+    if (mapped) {
+      logger.warn({ received: value, mappedTo: mapped }, 'Design graph enum value normalised');
+      return mapped;
+    }
+    return value;
+  };
+}
 
 const designNodeSchema = z.object({
   id: z.string(),
   label: z.string(),
   sublabel: z.string(),
-  category: z.enum(NODE_CATEGORIES),
+  category: z.preprocess(normalizeEnum(NODE_CATEGORIES, NODE_CATEGORY_SYNONYMS), z.enum(NODE_CATEGORIES)),
   partNumber: z.string(),
   manufacturer: z.string().optional(),
   rationale: z.string().optional(),
@@ -31,7 +64,7 @@ const designEdgeSchema = z.object({
   from: z.string(),
   to: z.string(),
   label: z.string(),
-  type: z.enum(EDGE_TYPES),
+  type: z.preprocess(normalizeEnum(EDGE_TYPES, EDGE_TYPE_SYNONYMS), z.enum(EDGE_TYPES)),
   busType: z.string().optional(),
   dashed: z.boolean().optional(),
 });
@@ -82,7 +115,9 @@ export async function buildCanonicalDesignGraph(
   intent: StructuredIntent,
   grounding: GroundingContext,
   sessionId?: string,
-  iterationNotes?: string
+  iterationNotes?: string,
+  /** Present for refinements: the design being revised and every change it already contains. */
+  revision?: { baseline: unknown; appliedChanges: string[] }
 ): Promise<{ graph: CanonicalDesignGraph; rawResponse: string }> {
   const systemPrompt = `You are Sol, the lead embedded systems architect at Embedo.ai.
 Your goal is to synthesize a production-grade, electrically consistent Canonical Design Graph for an embedded hardware system based on user specifications.
@@ -102,7 +137,22 @@ CRITICAL HARDWARE RULES:
   const userPrompt = `Synthesize the Canonical Design Graph for the following hardware intent:
 ${JSON.stringify(intent, null, 2)}
 
-${iterationNotes ? `User Revision / Focus: ${iterationNotes}\n` : ''}
+${
+  revision
+    ? `REVISION MODE — you are MODIFYING the existing design below, not starting over.
+CURRENT DESIGN (baseline):
+${JSON.stringify(revision.baseline)}
+${
+  revision.appliedChanges.length > 0
+    ? `Changes already applied to this design — every one of them MUST still be present in your output:\n${revision.appliedChanges.map((c) => `- ${c}`).join('\n')}\n`
+    : ''
+}REQUESTED CHANGE NOW: ${iterationNotes ?? ''}
+Revision rules: keep every baseline node, edge, power rail and BOM line unless the requested change explicitly removes or replaces it; keep existing node ids; add or adjust only what the requested change needs. "suggestedRefinements" must not repeat any change listed above or anything already present in the baseline.
+`
+    : iterationNotes
+      ? `User Revision / Focus: ${iterationNotes}\n`
+      : ''
+}
 ${
   grounding.datasheetSnippets.length > 0
     ? `GROUNDED REFERENCE CONTEXT (specs.recommendedOperating = design to this; specs.absoluteMaxRatings = destructive limit, never design to this — see rule 9):\n${grounding.datasheetSnippets.map((s) => s.text).join('\n')}\n`
@@ -170,11 +220,11 @@ Output JSON adhering strictly to:
     }
   };
 
-  const runOnce = async () =>
+  const runOnce = async (correction?: string) =>
     aiRouterService.executeTask({
       taskCase: 'A', // Sol Tier — model/maxTokens come from the model_routes row
       systemPrompt,
-      userPrompt,
+      userPrompt: correction ? `${userPrompt}\n\n${correction}` : userPrompt,
       sessionId,
       temperature: 0.2,
       jsonMode: true,
@@ -191,7 +241,15 @@ Output JSON adhering strictly to:
       'Sol design graph failed schema validation — retrying once'
     );
     await aiRouterService.markSchemaResult(aiResult.aiCallId, false, parsed.error.message);
-    aiResult = await runOnce();
+    // Tell the model exactly what was wrong — re-sending the identical prompt just reproduced the
+    // same invalid value on the retry.
+    const problems = parsed.error.issues
+      .slice(0, 8)
+      .map((i) => `- ${i.path.join('.')}: ${i.message}`)
+      .join('\n');
+    aiResult = await runOnce(
+      `CORRECTION: your previous response did not match the schema:\n${problems}\nReturn the complete JSON again, using ONLY the allowed enum values listed above.`
+    );
     parsed = canonicalDesignGraphSchema.safeParse(parseGraph(aiResult.content));
     if (!parsed.success) {
       logger.error({ sessionId, issues: parsed.error.issues.slice(0, 5) }, 'Sol design graph failed schema validation twice');

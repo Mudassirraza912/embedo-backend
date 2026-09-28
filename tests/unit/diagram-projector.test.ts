@@ -114,7 +114,8 @@ describe('Deterministic Diagram Projector', () => {
     expect(projected.summary).toBeDefined();
     expect(projected.summary.mcu).toBe('ESP32-S3-MINI');
     expect(projected.summary.estimatedBomCostUsd).toBe(3.4);
-    expect(projected.refineSuggestions?.length).toBeGreaterThan(0);
+    // Suggestions come from the design itself (already de-duplicated upstream), not a fixed list.
+    expect(projected.refineSuggestions).toEqual(sampleGraph.suggestedRefinements ?? []);
 
     // 01 - Functional Block Diagram
     expect(projected.functionalBlock.title).toBe('Functional Block Diagram');
