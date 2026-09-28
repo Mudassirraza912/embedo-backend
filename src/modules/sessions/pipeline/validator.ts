@@ -66,7 +66,33 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
   });
 
   // 2. Controller presence — a real requirement, not a heuristic; without it the projection is meaningless.
-  const mcuNode = graph.nodes.find((n) => n.category === 'control');
+  let mcuNode = graph.nodes.find((n) => n.category === 'control');
+  if (!mcuNode) {
+    // The graph always names its controller separately (graph.controller.partNumber). When the model
+    // files that same node under another category — typically "connectivity" for a wireless SoC such
+    // as an ESP32 — the controller is still unambiguous, so repair the category instead of rejecting
+    // an otherwise-valid design (seen live: three consecutive refinement attempts on a Wi-Fi socket
+    // design failed with NO_CONTROLLER_NODE and the change was never applied).
+    const norm = (s: string | undefined) => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const declared = norm(graph.controller?.partNumber);
+    const candidate =
+      (declared
+        ? graph.nodes.find((n) => {
+            const pn = norm(n.partNumber);
+            return pn.length > 0 && (pn === declared || pn.includes(declared) || declared.includes(pn));
+          })
+        : undefined) ?? graph.nodes.find((n) => ['mcu', 'controller', 'soc'].includes(n.id.toLowerCase()));
+    if (candidate) {
+      issues.push({
+        severity: 'warning',
+        code: 'CONTROLLER_CATEGORY_REPAIRED',
+        message: `Node '${candidate.id}' is the declared controller but was categorised '${candidate.category}'; set to 'control'.`,
+        nodeId: candidate.id,
+      });
+      candidate.category = 'control';
+      mcuNode = candidate;
+    }
+  }
   if (!mcuNode) {
     issues.push({
       severity: 'error',

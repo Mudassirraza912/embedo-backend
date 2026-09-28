@@ -9,14 +9,14 @@ import {
   forgotPasswordSchema,
   resetPasswordSchema,
 } from './auth.validation.js';
-import { rateLimitAuth, rateLimitPasswordReset } from '../../common/middlewares/rate-limit.middleware.js';
+import { rateLimitAuth, rateLimitPasswordReset, rateLimitTokenRefresh } from '../../common/middlewares/rate-limit.middleware.js';
 
 const router = Router();
 
 router.post('/register', rateLimitAuth, validate({ body: registerSchema }), authController.register);
 router.post('/login', rateLimitAuth, validate({ body: loginSchema }), authController.login);
 router.post('/google', rateLimitAuth, validate({ body: googleAuthSchema }), authController.google);
-router.post('/refresh', rateLimitAuth, validate({ body: refreshTokenSchema }), authController.refresh);
+router.post('/refresh', rateLimitTokenRefresh, validate({ body: refreshTokenSchema }), authController.refresh);
 router.post('/logout', authController.logout);
 router.post('/forgot-password', rateLimitPasswordReset, validate({ body: forgotPasswordSchema }), authController.forgotPassword);
 router.post('/reset-password', rateLimitAuth, validate({ body: resetPasswordSchema }), authController.resetPassword);

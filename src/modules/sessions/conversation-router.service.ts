@@ -69,6 +69,8 @@ Examples (mode/isGibberish/projectTitle only — reply text is illustrative of L
 {"mode":"generate","projectTitle":"ESP32 Based Modem","isGibberish":false,"reply":""} <- "design an esp32 based modem"
 {"mode":"generate","projectTitle":"ESP32 Based Modem","isGibberish":false,"reply":""} <- "fuck me, design esp32 based modem"
 {"mode":"generate","projectTitle":"","isGibberish":false,"reply":""} <- "ok now generate the diagrams"
+{"mode":"generate","projectTitle":"","isGibberish":false,"reply":""} <- "Implement solar charging" (a change to the current design — ANY short add/include/implement/integrate/optimize/replace/remove instruction about a hardware feature is generate, never off_topic)
+{"mode":"generate","projectTitle":"","isGibberish":false,"reply":""} <- "Add power monitoring"
 {"mode":"discuss","projectTitle":"Remote Controlled Car","isGibberish":false,"reply":""} <- "explain how we can make a remote controlled car?"
 {"mode":"off_topic","projectTitle":"","isGibberish":false,"reply":"<one or two sentences: Embedo only designs embedded hardware, then invite a real brief with a fresh example>"} <- "how is the weather today?"
 {"mode":"off_topic","projectTitle":"","isGibberish":true,"reply":"<one or two sentences: say plainly you couldn't read that input, then invite a real brief with a fresh example>"} <- "asdkjhasjkldhakjslhdfjsa"
@@ -105,6 +107,10 @@ const REPLY_OPENING_HINTS = [
 ];
 const pickOne = <T,>(items: readonly T[]): T => items[Math.floor(Math.random() * items.length)];
 
+/** Imperative design-change openers — the shape of every "Refine further" suggestion chip. */
+const DESIGN_CHANGE_PATTERN =
+  /^(please\s+)?(add|include|implement|integrate|incorporate|optimi[sz]e|replace|remove|swap|switch|change|use|upgrade|reduce|increase|support|enable|make\s+it)\b/i;
+
 export async function routeMessage(
   message: string,
   sessionId?: string,
@@ -125,10 +131,11 @@ export async function routeMessage(
       // A couple of sentences of natural reply text needs more room than the old title-only
       // response; 200 was tight enough to occasionally truncate the JSON mid-string.
       maxTokens: 350,
-      // Case F's usual 0.1 is deliberately low for reliable mode/title classification; raised for
-      // this call specifically so the free-text reply has room to vary (classification is a small
-      // enum + short title, which stays reliable well above 0.1).
-      temperature: 0.9,
+      // 0.9 made the classification itself unstable: short refinement commands ("Implement solar
+      // charging", sent from the AI's own suggestion chips) were intermittently routed off_topic
+      // and answered with a rejection. Reply variety comes from the randomised hint/example
+      // interpolated into the prompt above, so a moderate temperature is enough for it.
+      temperature: 0.3,
     });
 
   // Shown only if the model call fails outright (catch block) or returns unparseable JSON twice —
@@ -155,6 +162,19 @@ export async function routeMessage(
       // Sol synthesis run, nor present a diagram, for a message we failed to understand.
       logger.warn({ sessionId, raw: result.content.slice(0, 200) }, 'Conversation router unparseable twice — defaulting to discuss');
       return { mode: 'discuss', projectTitle: '', isGibberish: false, reply: '' };
+    }
+
+    // Safety net for the costliest misroute: inside an existing conversation, an imperative design
+    // change must never be rejected as off-topic (the model has no real reason to — it's a follow-up
+    // on a hardware project). Gibberish is left alone; the free heuristic already screened it.
+    if (
+      parsed.data.mode === 'off_topic' &&
+      !parsed.data.isGibberish &&
+      (history?.length ?? 0) > 0 &&
+      DESIGN_CHANGE_PATTERN.test(message.trim())
+    ) {
+      logger.warn({ sessionId, message: message.slice(0, 120) }, 'Router said off_topic for a design-change follow-up — overriding to generate');
+      return { mode: 'generate', projectTitle: parsed.data.projectTitle, isGibberish: false, reply: '' };
     }
 
     return {

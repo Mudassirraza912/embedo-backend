@@ -32,15 +32,34 @@ export const pipelineJobId = (sessionId: string, kind: 'initial' | 'iteration'):
 
 const markSessionFailed = async (sessionId: string, reason: string, retryable: boolean): Promise<void> => {
   try {
-    await prisma.designSession.update({ where: { id: sessionId }, data: { status: 'FAILED' } });
+    // A failed refinement must not take down a session that already has a working architecture:
+    // the last good version is still active and valid, so keep the session DONE (FAILED used to
+    // make every later chat message go unanswered). Only a session that never produced an
+    // architecture is actually FAILED.
+    const existing = await prisma.designSession.findUnique({
+      where: { id: sessionId },
+      select: { architecture: true },
+    });
+    const hasArchitecture = Boolean(existing?.architecture);
+    const arch = existing?.architecture;
+    const versionTag =
+      arch && typeof arch === 'object' && !Array.isArray(arch) && typeof arch['versionTag'] === 'string' ? arch['versionTag'] : null;
+    await prisma.designSession.update({ where: { id: sessionId }, data: { status: hasArchitecture ? 'DONE' : 'FAILED' } });
+
+    const content = hasArchitecture
+      ? `I couldn't apply that change this time — your current design${
+          versionTag ? ` (${versionTag})` : ''
+        } is unchanged. ${retryable ? 'Please try sending it again.' : 'Try rephrasing the change or asking for it in smaller steps.'}`
+      : retryable
+        ? 'Architecture generation could not be completed right now due to a temporary AI provider issue. Please try again in a moment.'
+        : 'Architecture generation could not be completed for this request. Please refine your description and try again.';
+
     await prisma.chatMessage.create({
       data: {
         sessionId,
         role: 'assistant',
-        content: retryable
-          ? 'Architecture generation could not be completed right now due to a temporary AI provider issue. Please try again in a moment.'
-          : 'Architecture generation could not be completed for this request. Please refine your description and try again.',
-        metadata: { failure: true, reason: reason.slice(0, 500), retryable },
+        content,
+        metadata: { failure: true, reason: reason.slice(0, 500), retryable, keptVersion: hasArchitecture },
       },
     });
   } catch (err: unknown) {

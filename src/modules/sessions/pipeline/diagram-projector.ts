@@ -63,14 +63,9 @@ export function projectArchitecture(graph: CanonicalDesignGraph): ProjectedArchi
     ? sensingNodes.map((n) => n.label).slice(0, 3).join(', ')
     : 'User Inputs, Sensors';
 
-  const refineSuggestions: string[] = [
-    'Add battery backup',
-    'Add Wi-Fi connectivity',
-    'Optimize for low power',
-    'Add tamper detection',
-    'Change to PoE',
-    'Add enclosure sensor',
-  ];
+  // The design's own (already de-duplicated) suggestions — this used to be a fixed list that
+  // offered e.g. "Add battery backup" to designs that already had one.
+  const refineSuggestions: string[] = graph.suggestedRefinements ?? [];
 
   return {
     projectMeta: {
