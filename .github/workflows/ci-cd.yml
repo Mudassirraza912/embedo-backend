@@ -1,0 +1,141 @@
+name: Backend CI/CD
+
+# main        -> production   (api.embedo.ai,     /home/etcpanel/apps/embedo-api)
+# development -> development  (dev-api.embedo.ai, /home/etcpanel/apps/embedo-api-dev)
+# Pull requests into either branch run CI only.
+
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+  workflow_dispatch:
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: embedo_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d embedo_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/embedo_ci
+      REDIS_URL: redis://localhost:6379
+      JWT_ACCESS_SECRET: ci-only-access-secret-that-is-at-least-32-chars-long
+      CORS_ORIGIN: http://localhost:5173
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks scans the pushed commit range
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint (includes AI-provider import boundary rule)
+        run: npm run lint
+      - name: Migrations apply cleanly to a fresh database
+        run: npx prisma migrate deploy
+      - name: Unit tests
+        run: npm run test:unit
+      - name: Build
+        run: npm run build
+      - name: Docker image builds
+        run: docker build -t embedo-api:ci .
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }} # required by the action for organization-owned repos
+      - name: Dependency audit (high+, non-blocking)
+        run: npm audit --audit-level=high || true
+
+  deploy:
+    name: Deploy (${{ github.ref_name == 'main' && 'production' || 'development' }})
+    needs: verify
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/development')
+    runs-on: ubuntu-latest
+    # Add required reviewers to the `production` environment in GitHub settings for a manual gate.
+    environment:
+      name: ${{ github.ref_name == 'main' && 'production' || 'development' }}
+      url: ${{ github.ref_name == 'main' && 'https://api.embedo.ai/api/v1/health' || 'https://dev-api.embedo.ai/api/v1/health' }}
+    concurrency:
+      group: deploy-backend-${{ github.ref_name }}
+      cancel-in-progress: false
+    env:
+      ENV_NAME: ${{ github.ref_name == 'main' && 'production' || 'development' }}
+      APP_DIR: ${{ github.ref_name == 'main' && '/home/etcpanel/apps/embedo-api' || '/home/etcpanel/apps/embedo-api-dev' }}
+      PUBLIC_HEALTH_URL: ${{ github.ref_name == 'main' && 'https://api.embedo.ai/api/v1/health' || 'https://dev-api.embedo.ai/api/v1/health' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          test -n "$VPS_SSH_KEY" || { echo "::error::VPS_SSH_KEY secret is not set"; exit 1; }
+          test -n "$VPS_KNOWN_HOSTS" || { echo "::error::VPS_KNOWN_HOSTS secret is not set"; exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts && chmod 644 ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host vps
+            HostName ${{ secrets.VPS_HOST }}
+            User ${{ secrets.VPS_USER || 'etcpanel' }}
+            Port ${{ secrets.VPS_PORT || '22' }}
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            ServerAliveInterval 30
+          EOF
+
+      - name: Upload source to ${{ env.APP_DIR }}.incoming
+        run: |
+          rsync -az --delete \
+            --exclude='.git/' --exclude='node_modules/' --exclude='dist/' --exclude='tests/' \
+            --exclude='/.env' --exclude='/.env.local' \
+            ./ "vps:${APP_DIR}.incoming/"
+
+      - name: Build, migrate, seed and roll out on the VPS
+        run: ssh vps "bash ${APP_DIR}.incoming/scripts/deploy/ci-deploy.sh '${ENV_NAME}' '${GITHUB_SHA}'"
+
+      - name: Public health check
+        # dev-api.embedo.ai may not have DNS/TLS yet; the on-server check above already gates the deploy.
+        continue-on-error: ${{ github.ref_name != 'main' }}
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$PUBLIC_HEALTH_URL" || true)
+            echo "attempt $i: $code"
+            [ "$code" = 200 ] && exit 0
+            sleep 5
+          done
+          echo "::error::$PUBLIC_HEALTH_URL did not return 200"
+          exit 1
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
