@@ -65,11 +65,8 @@ jobs:
         run: npm run build
       - name: Docker image builds
         run: docker build -t embedo-api:ci .
-      - name: Secret scan
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }} # required by the action for organization-owned repos
+      - name: Secret scan (gitleaks CLI, full history; no license needed unlike gitleaks-action)
+        run: docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.24.3 git /repo --redact --no-banner
       - name: Dependency audit (high+, non-blocking)
         run: npm audit --audit-level=high || true
 
