@@ -15,3 +15,7 @@ coverage
 
 # VPS sync config (host, no secrets)
 scripts/sync/.env.sync
+
+# Internal documentation is not part of this repository (README.md is the only doc tracked here)
+*.md
+!README.md
