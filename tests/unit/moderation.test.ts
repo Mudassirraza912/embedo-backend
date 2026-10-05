@@ -76,10 +76,18 @@ describe('Governance & Safety Moderation Service', () => {
     expect(result.category).toBe('hacking_bypass');
   });
 
-  it('blocks severe profanity', async () => {
-    const result = await moderationService.screenText('fuck this useless design', { anonIdentifier: 'test-ip' });
+  it('blocks slurs at Tier 1', async () => {
+    const result = await moderationService.screenText('design this you faggot', { anonIdentifier: 'test-ip' });
     expect(result.allowed).toBe(false);
     expect(result.category).toBe('profanity');
+    expect(eventSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets casual swearing through Tier 1 (no block, no strike) — Tier 2 still screens harassment', async () => {
+    const result = await moderationService.screenText('fucking esp32 design with OLED display, what the fuck', { anonIdentifier: 'test-ip' });
+    expect(result.allowed).toBe(true);
+    expect(eventSpy).not.toHaveBeenCalled();
+    expect(moderateSpy).toHaveBeenCalled();
   });
 
   it('blocks content flagged by the Tier 2 provider API', async () => {
