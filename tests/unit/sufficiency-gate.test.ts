@@ -1,5 +1,5 @@
 import { describe, it, expect } from '@jest/globals';
-import { checkSufficiency } from '../../src/modules/sessions/pipeline/sufficiency-gate.js';
+import { checkSufficiency, isGibberishOrSpam } from '../../src/modules/sessions/pipeline/sufficiency-gate.js';
 import { StructuredIntent } from '../../src/modules/sessions/pipeline/types.js';
 
 describe('Sufficiency Gate', () => {
@@ -104,5 +104,23 @@ describe('Sufficiency Gate — PRD §6.11 worked example', () => {
     };
     const result = checkSufficiency(wallPowered, 'Wall mounted access control terminal on 12V DC.');
     expect(result.sufficient).toBe(true);
+  });
+});
+
+describe('isGibberishOrSpam — conversational replies', () => {
+  it('accepts short answers to a clarification question', () => {
+    for (const reply of ['5V', 'AC', 'no', 'ok', '2', '12V', 'PoE', 'USB-C 5V', 'nRF52 + TPS62']) {
+      expect(isGibberishOrSpam(reply, { conversational: true })).toBe(false);
+    }
+  });
+
+  it('still rejects keyboard mashing and empty punctuation', () => {
+    for (const reply of ['asdasdasdasd', 'aaaaaaa', 'sdfghjkl', '???', '   ']) {
+      expect(isGibberishOrSpam(reply, { conversational: true })).toBe(true);
+    }
+  });
+
+  it('keeps the minimum length for an opening brief', () => {
+    expect(isGibberishOrSpam('5V')).toBe(true);
   });
 });
