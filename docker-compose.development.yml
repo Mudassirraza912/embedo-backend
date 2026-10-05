@@ -1,0 +1,120 @@
+# ==============================================================================
+# Embedo backend: DEVELOPMENT environment on the production VPS
+# ==============================================================================
+# Deployed automatically from the `development` branch by .github/workflows/ci-cd.yml.
+# Lives in /home/etcpanel/apps/embedo-api-dev, compose project `embedo-api-dev`.
+#
+# Fully isolated from production: its own container names, network, volumes, Postgres,
+# Redis and .env. The API is published on 127.0.0.1:4001 only and is reached through
+# Nginx at dev-api.embedo.ai. Never publish it on 0.0.0.0 (see docker-compose.prod.yml).
+#
+# Memory limits are lower than production because both stacks share one 8 GB host.
+# ==============================================================================
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: embedo-dev-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-embedo_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-embedo_dev}
+    # Loopback only: reach it from a laptop with `ssh -L 5433:127.0.0.1:5433 root@<vps>`.
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-embedo_user} -d ${POSTGRES_DB:-embedo_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+    networks:
+      - embedo-dev-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: embedo-dev-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - embedo-dev-network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: embedo-dev-api
+    restart: unless-stopped
+    command: node dist/server.js
+    deploy:
+      resources:
+        limits:
+          memory: 640m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    ports:
+      - "127.0.0.1:4001:4000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - embedo-dev-network
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: embedo-dev-worker
+    restart: unless-stopped
+    command: node dist/worker.js
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          grep -qa 'dist/[w]orker.js' /proc/[0-9]*/cmdline &&
+          node -e "const R=require('ioredis');const r=new R(process.env.REDIS_URL,{lazyConnect:true,connectTimeout:3000,maxRetriesPerRequest:1});r.connect().then(()=>r.ping()).then(()=>process.exit(0)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 640m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - embedo-dev-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  embedo-dev-network:
+    driver: bridge
