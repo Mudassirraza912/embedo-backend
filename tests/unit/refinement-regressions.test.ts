@@ -134,9 +134,42 @@ describe('validateAndRepairDesignGraph — controller filed under another catego
     expect(report.repairedGraph.nodes.find((n) => n.id === 'esp')?.category).toBe('control');
   });
 
-  it('still fails when no node can be identified as the controller', () => {
+  it('recognises an MCU by its part family even when it is not the declared part', () => {
     const report = validateAndRepairDesignGraph(base('connectivity', 'STM32F411CEU6'));
-    expect(report.issues.some((i) => i.code === 'NO_CONTROLLER_NODE')).toBe(true);
+    expect(report.issues.some((i) => i.code === 'NO_CONTROLLER_NODE')).toBe(false);
+    expect(report.repairedGraph.nodes.find((n) => n.id === 'esp')?.category).toBe('control');
+  });
+
+  it('never picks the motor driver of a motor-controller product as the MCU', () => {
+    const g = {
+      projectMeta: { name: 'Industrial Motor Controller', tagline: 't', controller: 'STM32F407VGT6' },
+      controller: { partNumber: 'STM32F407VGT6', manufacturer: 'ST', rationale: 'r' },
+      nodes: [
+        { id: 'motor_controller', label: 'Motor Controller', sublabel: 'Gate driver', category: 'motor', partNumber: 'DRV8301' },
+        { id: 'main_ctrl', label: 'Main Controller', sublabel: 'MCU', category: 'motor', partNumber: 'STM32F407VGT6' },
+      ],
+      edges: [],
+      powerRails: [],
+      bom: [],
+    } as unknown as CanonicalDesignGraph;
+    const report = validateAndRepairDesignGraph(g);
+    expect(report.repairedGraph.nodes.find((n) => n.id === 'main_ctrl')?.category).toBe('control');
+    expect(report.repairedGraph.nodes.find((n) => n.id === 'motor_controller')?.category).toBe('motor');
+  });
+
+  it('adds the declared controller as a node instead of failing when nothing matches', () => {
+    const g = {
+      projectMeta: { name: 'n', tagline: 't', controller: 'XYZ-123' },
+      controller: { partNumber: 'XYZ-123', manufacturer: 'Acme', rationale: 'r' },
+      nodes: [{ id: 'relay', label: 'Relay', sublabel: 's', category: 'motor', partNumber: 'G5LE-1A' }],
+      edges: [],
+      powerRails: [],
+      bom: [],
+    } as unknown as CanonicalDesignGraph;
+    const report = validateAndRepairDesignGraph(g);
+    expect(report.issues.some((i) => i.code === 'NO_CONTROLLER_NODE')).toBe(false);
+    expect(report.issues.some((i) => i.code === 'CONTROLLER_NODE_ADDED')).toBe(true);
+    expect(report.repairedGraph.nodes.some((n) => n.category === 'control' && n.partNumber === 'XYZ-123')).toBe(true);
   });
 });
 

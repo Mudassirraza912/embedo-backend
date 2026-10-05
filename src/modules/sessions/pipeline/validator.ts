@@ -14,6 +14,10 @@ export interface ValidationReport {
   repairedGraph: CanonicalDesignGraph;
 }
 
+/** Common MCU / wireless-SoC families, matched against a node's part number. */
+const MCU_PART_PATTERN =
+  /^(stm32|stm8|esp32|esp8266|nrf5|nrf9|rp2040|rp2350|atmega|attiny|atsam|samd|same|saml|pic1|pic2|pic3|dspic|msp430|msp432|efr32|efm32|cc13|cc26|cc32|gd32|ch32|ra[24]|rx\d|lpc\d|mk\d|mimxrt|imxrt|tms320|xmc|psoc|cy8c|max32|apollo|bl60|bl70|w600|rtl87|bk72|ln88|mspm0|stm32wb|stm32wl)/i;
+
 /** Map a declared interface name onto the closed edge-type union used by the frontend contract. */
 const interfaceToEdgeType = (iface: string | undefined): EdgeType => {
   if (!iface) return 'gpio';
@@ -75,13 +79,26 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
     // design failed with NO_CONTROLLER_NODE and the change was never applied).
     const norm = (s: string | undefined) => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const declared = norm(graph.controller?.partNumber);
+    // A "motor controller" or "motor driver" is NOT the MCU — exactly the confusion that broke an
+    // industrial motor-controller design three times in production.
+    const isDriverLike = (n: DesignNode) => /\b(motor|driver|gate|h[-\s]?bridge|esc|power)\b/i.test(`${n.id} ${n.label}`);
     const candidate =
+      // 1. the declared controller's part number
       (declared
         ? graph.nodes.find((n) => {
             const pn = norm(n.partNumber);
             return pn.length > 0 && (pn === declared || pn.includes(declared) || declared.includes(pn));
           })
-        : undefined) ?? graph.nodes.find((n) => ['mcu', 'controller', 'soc'].includes(n.id.toLowerCase()));
+        : undefined) ??
+      // 2. a recognised MCU/SoC family by part number
+      graph.nodes.find((n) => MCU_PART_PATTERN.test(n.partNumber ?? '')) ??
+      // 3. a node that is plainly named as the MCU
+      graph.nodes.find(
+        (n) =>
+          !isDriverLike(n) &&
+          (['mcu', 'controller', 'soc', 'cpu', 'processor', 'microcontroller'].includes(n.id.toLowerCase()) ||
+            /\b(mcu|microcontroller|micro-controller|soc|processor)\b/i.test(n.label))
+      );
     if (candidate) {
       issues.push({
         severity: 'warning',
@@ -92,6 +109,28 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
       candidate.category = 'control';
       mcuNode = candidate;
     }
+  }
+  if (!mcuNode && graph.controller?.partNumber) {
+    // Last resort: the graph declares its controller but never drew it as a node. Add it rather
+    // than throwing the whole design away (each NO_CONTROLLER_NODE retry re-runs the full Sol call).
+    const added: DesignNode = {
+      id: graph.nodes.some((n) => n.id === 'mcu') ? 'mcu_main' : 'mcu',
+      label: 'Microcontroller',
+      sublabel: graph.controller.partNumber,
+      category: 'control',
+      partNumber: graph.controller.partNumber,
+      ...(graph.controller.manufacturer ? { manufacturer: graph.controller.manufacturer } : {}),
+      ...(graph.controller.rationale ? { rationale: graph.controller.rationale } : {}),
+    };
+    graph.nodes.push(added);
+    nodeMap.set(added.id, added);
+    mcuNode = added;
+    issues.push({
+      severity: 'warning',
+      code: 'CONTROLLER_NODE_ADDED',
+      message: `The declared controller ${graph.controller.partNumber} was missing from the graph and was added as node '${added.id}'.`,
+      nodeId: added.id,
+    });
   }
   if (!mcuNode) {
     issues.push({
