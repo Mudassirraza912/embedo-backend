@@ -93,14 +93,14 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
     jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(routerResult('still not json'));
 
     const result = await routeMessage('???');
-    expect(result).toEqual({ mode: 'discuss', projectTitle: '', isGibberish: false, reply: '' });
+    expect(result).toEqual({ mode: 'discuss', projectTitle: '', isGibberish: false, isNewProject: false, reply: '' });
   });
 
   it('defaults to generate with no gibberish flag and empty reply on a hard provider failure', async () => {
     jest.spyOn(aiRouterService, 'executeTask').mockRejectedValue(new Error('provider down'));
 
     const result = await routeMessage('anything');
-    expect(result).toEqual({ mode: 'generate', projectTitle: '', isGibberish: false, reply: '' });
+    expect(result).toEqual({ mode: 'generate', projectTitle: '', isGibberish: false, isNewProject: false, reply: '' });
   });
 
   it('tolerates null isGibberish/reply from the model (schema coerces to false/"")', async () => {

@@ -38,10 +38,14 @@ export const HARDWARE_POLICY_RULES: BannedTermRule[] = [
     reason: 'Hardware intended for security bypass, card skimming, or physical theft is prohibited.',
   },
 
-  // 5. Profanity / Abusive Content
+  // 5. Slurs / hate speech.
+  // Casual swearing ("what the fuck", "fucking esp32 design") is deliberately NOT here: it was
+  // refused outright AND counted toward the 3-strike suspension, which was far too strict for
+  // engineers venting about a project. Abuse aimed at a person is still caught by the Tier 2
+  // provider moderation (harassment/hate), and project titles never echo profanity (§4a).
   {
     category: 'profanity',
-    pattern: /\b(fuck|shit|bitch|bastard|asshole|cunt|nigger|faggot)\b/i,
-    reason: 'Abusive language and profanity are not permitted.',
+    pattern: /\b(cunt|nigger|nigga|faggot|retard)\b/i,
+    reason: 'Hateful or abusive language is not permitted.',
   },
 ];

@@ -2,13 +2,22 @@ import { prisma } from '../../../db/prisma.js';
 import { logger } from '../../../config/logger.js';
 import { emitSessionEvent } from '../../realtime/socket.js';
 import { parseHardwareIntent, IntentExtractionError } from './intent-parser.js';
-import { checkSufficiency, GENERATION_HOLD_MESSAGE } from './sufficiency-gate.js';
+import { checkSufficiency, GENERATION_HOLD_MESSAGE, isGibberishOrSpam } from './sufficiency-gate.js';
 import { getGroundingContext } from './rag-grounder.js';
-import { buildCanonicalDesignGraph, DesignGraphSchemaError } from './design-graph-builder.js';
+import { buildCanonicalDesignGraph, DesignGraphSchemaError, generateFreshSuggestions } from './design-graph-builder.js';
 import { validateAndRepairDesignGraph } from './validator.js';
 import { projectArchitecture } from './diagram-projector.js';
-import { ProjectedArchitecture, StructuredIntent, structuredIntentSchema } from './types.js';
+import { CanonicalDesignGraph, ProjectedArchitecture, StructuredIntent, structuredIntentSchema } from './types.js';
 import { persistNewVersion } from '../version.service.js';
+import { getAppliedChangeLineage, filterAppliedSuggestions, compactGraphForRevision } from './refinement-history.js';
+
+const isDesignGraph = (value: unknown): value is CanonicalDesignGraph =>
+  typeof value === 'object' &&
+  value !== null &&
+  Array.isArray((value as { nodes?: unknown }).nodes) &&
+  Array.isArray((value as { edges?: unknown }).edges) &&
+  Array.isArray((value as { powerRails?: unknown }).powerRails) &&
+  Array.isArray((value as { bom?: unknown }).bom);
 import { Prisma } from '@prisma/client';
 import { env } from '../../../config/env.js';
 
@@ -99,10 +108,30 @@ export async function runGenerationPipeline(
 
     await prisma.designSession.update({ where: { id: sessionId }, data: { status: 'PROCESSING' } });
 
-    const conversationHistory = session.chatMessages.map((m) => ({
+    let conversationHistory = session.chatMessages.map((m) => ({
       role: m.role as 'user' | 'assistant' | 'system',
       content: m.content,
     }));
+
+    // A session whose opening message was rejected (gibberish / off-topic) has no usable brief in
+    // intentText — the user's first real brief arrives later as iterationNotes. Parsing and gating
+    // the rejected original instead made recovery impossible: the gate re-flagged "asdasd…" as
+    // gibberish on every attempt, however clear the new brief was. Promote the new brief to be the
+    // session's intent (persisted, so later runs and the title agree). Underspecified-but-real
+    // briefs are left alone — their answers build on the original via the conversation history.
+    let intentText = session.intentText;
+    const openingReply = session.chatMessages.find((m) => m.role === 'assistant');
+    const openingMeta = (openingReply?.metadata ?? {}) as { isGibberish?: unknown; isOffTopic?: unknown };
+    const openingRejected = isGibberishOrSpam(session.intentText) || openingMeta.isGibberish === true || openingMeta.isOffTopic === true;
+    if (!session.architecture && options.iterationNotes && openingRejected && !isGibberishOrSpam(options.iterationNotes)) {
+      intentText = options.iterationNotes;
+      // The rejected turns are not part of the brief. Leaving them in the parser's history let the
+      // off-topic reply's example product ("a wearable heart-rate monitor…") leak into the intent,
+      // and the resulting graph failed validation (NO_CONTROLLER_NODE) on all three attempts.
+      conversationHistory = [{ role: 'user', content: intentText }];
+      await prisma.designSession.update({ where: { id: sessionId }, data: { intentText, intentStructured: Prisma.DbNull } });
+      log.info('Opening message was rejected; using the first real brief as the session intent');
+    }
 
     let structuredIntent: StructuredIntent;
     const cachedIntent = structuredIntentSchema.safeParse(session.intentStructured);
@@ -110,7 +139,7 @@ export async function runGenerationPipeline(
       structuredIntent = cachedIntent.data;
     } else {
       emitSessionEvent.aiCallStarted(sessionId, 'B');
-      const parsedResult = await parseHardwareIntent(session.intentText, conversationHistory, sessionId);
+      const parsedResult = await parseHardwareIntent(intentText, conversationHistory, sessionId);
       structuredIntent = parsedResult.structured;
       emitSessionEvent.aiCallCompleted(sessionId, { taskCase: 'B', schemaPass: true, latencyMs: parsedResult.latencyMs });
 
@@ -122,7 +151,7 @@ export async function runGenerationPipeline(
     recordStep('reading_intent', 'Reading intent', 'completed');
 
     // Step 2: Sufficiency Gate
-    const sufficiency = checkSufficiency(structuredIntent, session.intentText);
+    const sufficiency = checkSufficiency(structuredIntent, intentText);
 
     if (!sufficiency.sufficient && !options.forceGenerate) {
       log.info(
@@ -200,15 +229,42 @@ export async function runGenerationPipeline(
       ...(structuredIntent.subsystems?.storage || []),
     ].filter((k): k is string => typeof k === 'string' && k.length > 0);
 
-    const grounding = await getGroundingContext(keywords, session.intentText, sessionId);
+    const grounding = await getGroundingContext(keywords, intentText, sessionId);
     recordStep('resolving_modules', 'Resolving modules', 'completed', `${grounding.datasheetSnippets.length} reference snippets matched`);
 
     // Step 4: Checking Library Coverage — Sol-tier synthesis
     recordStep('checking_library', 'Checking library coverage', 'running');
     emitSessionEvent.stageUpdate(sessionId, { step: 4, label: 'Checking footprint library & pinout compatibility', progress: 55 });
 
+    // A refinement revises the ACTIVE design. It used to regenerate from the original intent plus only
+    // the latest request, so earlier refinements silently vanished (seen live: "Add battery backup"
+    // dropped the ESD protection and Wi-Fi module added two versions earlier, and the chips then
+    // offered "Add ESD protection" again). Give Sol the current graph and the full applied lineage.
+    const appliedLineage = await getAppliedChangeLineage(sessionId);
+    const baselineGraph = isDesignGraph(session.designGraph) ? session.designGraph : null;
+    const revision =
+      options.iterationNotes && baselineGraph
+        ? { baseline: compactGraphForRevision(baselineGraph), appliedChanges: appliedLineage }
+        : undefined;
+
+    // The chips the user was shown on the latest architecture card. Re-offering the same set on
+    // every version read as "the same points keep repeating", so the next card asks for fresh ones.
+    const lastCard = [...session.chatMessages]
+      .reverse()
+      .find((m) => m.role === 'assistant' && Array.isArray((m.metadata as { suggestedRefinements?: unknown } | null)?.suggestedRefinements));
+    const previousSuggestions = (
+      ((lastCard?.metadata as { suggestedRefinements?: unknown[] } | null)?.suggestedRefinements ?? []) as unknown[]
+    ).filter((s): s is string => typeof s === 'string');
+
     emitSessionEvent.aiCallStarted(sessionId, 'A');
-    const { graph: rawGraph } = await buildCanonicalDesignGraph(structuredIntent, grounding, sessionId, options.iterationNotes);
+    const { graph: rawGraph } = await buildCanonicalDesignGraph(
+      structuredIntent,
+      grounding,
+      sessionId,
+      options.iterationNotes,
+      revision,
+      previousSuggestions
+    );
     emitSessionEvent.aiCallCompleted(sessionId, { taskCase: 'A', schemaPass: true });
     recordStep('checking_library', 'Checking library coverage', 'completed', `Controller: ${rawGraph.controller.partNumber}`);
 
@@ -227,6 +283,26 @@ export async function runGenerationPipeline(
       throw new RetryablePipelineError(`Design graph failed electrical validation: ${critical.join(', ')}`);
     }
     const finalizedGraph = validation.repairedGraph;
+    // Never offer a chip for a change this design already has (including the one just applied).
+    finalizedGraph.suggestedRefinements = filterAppliedSuggestions(finalizedGraph.suggestedRefinements, [
+      ...appliedLineage,
+      ...(options.iterationNotes ? [options.iterationNotes] : []),
+    ]);
+    // Prefer fresh chips over the ones offered last time ("same points keep repeating"). Two new
+    // ideas beat five where three are repeats; only fall back to the old ones if fewer remain.
+    let fresh = filterAppliedSuggestions(finalizedGraph.suggestedRefinements, previousSuggestions);
+    if (fresh.length < 3 && previousSuggestions.length > 0) {
+      // Sol mostly repeated last card's chips — ask Luna for new, device-specific ones.
+      const avoid = [...previousSuggestions, ...appliedLineage, ...(options.iterationNotes ? [options.iterationNotes] : [])];
+      const extra = filterAppliedSuggestions(await generateFreshSuggestions(finalizedGraph, avoid, sessionId), avoid);
+      fresh = filterAppliedSuggestions([...fresh, ...extra], []).slice(0, 5);
+    }
+    if (fresh.length >= 2) finalizedGraph.suggestedRefinements = fresh;
+    if (revision && baselineGraph) {
+      const kept = new Set(finalizedGraph.nodes.map((n) => n.id));
+      const dropped = baselineGraph.nodes.filter((n) => !kept.has(n.id)).map((n) => n.id);
+      if (dropped.length > 0) log.warn({ dropped, request: options.iterationNotes }, 'Refinement removed baseline nodes');
+    }
     const warningCount = validation.issues.length;
     recordStep(
       'assigning_pins',

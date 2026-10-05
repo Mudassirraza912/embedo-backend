@@ -1,15 +1,48 @@
 import { z } from 'zod';
 import { aiRouterService } from '../../ai/ai-router.service.js';
-import { CanonicalDesignGraph, StructuredIntent, NODE_CATEGORIES, EDGE_TYPES } from './types.js';
+import { CanonicalDesignGraph, StructuredIntent, NODE_CATEGORIES, EDGE_TYPES, NodeCategory, EdgeType } from './types.js';
 import { GroundingContext } from './rag-grounder.js';
 import { logger } from '../../../config/logger.js';
 import { stripJsonFences } from './json-utils.js';
+
+// The model regularly reaches for a near-synonym of an allowed enum value ("actuation" for a relay,
+// "sensor" for "sensing", "wireless" for "connectivity"). Rejecting the whole graph for one
+// off-vocabulary label threw away otherwise-valid designs and failed the session outright (seen
+// live on a relay-driven water-pump controller), so map known synonyms onto the canonical value
+// before validation. Anything unrecognised still fails validation and goes through the retry.
+const NODE_CATEGORY_SYNONYMS: Readonly<Record<string, NodeCategory>> = {
+  actuation: 'motor', actuator: 'motor', actuators: 'motor', relay: 'motor', driver: 'motor', output: 'motor', outputs: 'motor', load: 'motor',
+  sensor: 'sensing', sensors: 'sensing', input: 'sensing', inputs: 'sensing', measurement: 'sensing',
+  mcu: 'control', controller: 'control', processing: 'control', compute: 'control', protection: 'control',
+  wireless: 'connectivity', communication: 'connectivity', communications: 'connectivity', comms: 'connectivity', radio: 'connectivity', interface: 'connectivity',
+  memory: 'storage', display: 'ui', 'user interface': 'ui', indicator: 'ui', indicators: 'ui',
+  battery: 'power', 'power management': 'power', supply: 'power', regulator: 'power',
+  fuel_gauge: 'gauge', 'fuel gauge': 'gauge', speaker: 'audio', microphone: 'audio', vibration: 'haptic',
+};
+
+const EDGE_TYPE_SYNONYMS: Readonly<Record<string, EdgeType>> = {
+  i2s: 'signal', pwm: 'gpio', digital: 'gpio', control: 'gpio', data: 'signal', 'i²c': 'i2c', can: 'signal', rs485: 'uart', adc: 'analog', sdio: 'sdmmc',
+};
+
+function normalizeEnum<T extends string>(allowed: readonly T[], synonyms: Readonly<Record<string, T>>) {
+  return (value: unknown): unknown => {
+    if (typeof value !== 'string') return value;
+    const key = value.trim().toLowerCase();
+    if ((allowed as readonly string[]).includes(key)) return key;
+    const mapped = synonyms[key];
+    if (mapped) {
+      logger.warn({ received: value, mappedTo: mapped }, 'Design graph enum value normalised');
+      return mapped;
+    }
+    return value;
+  };
+}
 
 const designNodeSchema = z.object({
   id: z.string(),
   label: z.string(),
   sublabel: z.string(),
-  category: z.enum(NODE_CATEGORIES),
+  category: z.preprocess(normalizeEnum(NODE_CATEGORIES, NODE_CATEGORY_SYNONYMS), z.enum(NODE_CATEGORIES)),
   partNumber: z.string(),
   manufacturer: z.string().optional(),
   rationale: z.string().optional(),
@@ -31,7 +64,7 @@ const designEdgeSchema = z.object({
   from: z.string(),
   to: z.string(),
   label: z.string(),
-  type: z.enum(EDGE_TYPES),
+  type: z.preprocess(normalizeEnum(EDGE_TYPES, EDGE_TYPE_SYNONYMS), z.enum(EDGE_TYPES)),
   busType: z.string().optional(),
   dashed: z.boolean().optional(),
 });
@@ -82,7 +115,11 @@ export async function buildCanonicalDesignGraph(
   intent: StructuredIntent,
   grounding: GroundingContext,
   sessionId?: string,
-  iterationNotes?: string
+  iterationNotes?: string,
+  /** Present for refinements: the design being revised and every change it already contains. */
+  revision?: { baseline: unknown; appliedChanges: string[] },
+  /** Suggestions the user was shown last time — offer fresh ideas instead of the same chips again. */
+  avoidSuggestions: string[] = []
 ): Promise<{ graph: CanonicalDesignGraph; rawResponse: string }> {
   const systemPrompt = `You are Sol, the lead embedded systems architect at Embedo.ai.
 Your goal is to synthesize a production-grade, electrically consistent Canonical Design Graph for an embedded hardware system based on user specifications.
@@ -95,14 +132,29 @@ CRITICAL HARDWARE RULES:
 5. Edge types must be one of: power, i2c, spi, uart, usb, sdmmc, gpio, signal, analog.
 6. Power rails must list every active voltage domain (e.g. 5V, 3.3V, VSYS, VBAT) and all consumer node IDs connected to that rail.
 7. Output valid JSON matching the exact schema without markdown formatting or code blocks.
-8. "suggestedRefinements": propose 3-5 short, chip-friendly next steps (max ~6 words each, e.g. "Add battery backup", "Add Wi-Fi connectivity") for things THIS SPECIFIC design does not yet have. Ground them in what's actually missing from the current nodes/edges/powerRails — never suggest something already present in this design (e.g. don't suggest "Add battery backup" if a battery/charger node already exists).
+8. "suggestedRefinements": propose 4-6 short, chip-friendly next steps (2-4 words each) that are SPECIFIC to this device's purpose and domain — what an experienced engineer would actually suggest next for THIS product (e.g. for an access-control terminal: "Add door-ajar sensor", "Add PoE input", "Log access events"; for a soil sensor: "Add rain gauge input", "Use LoRaWAN uplink"). Ground them in what's actually missing from the current nodes/edges/powerRails; never suggest something already present. Avoid generic catch-alls ("Add battery backup", "Include ESD protection", "Add Wi-Fi connectivity", "Optimize power consumption", "Enhance user interface") unless one is clearly the single most valuable gap for this specific design. Cover different areas (sensing, connectivity, power, security, UX) rather than variations of one idea.
 9. When a component's grounded specs include BOTH "recommendedOperating" and "absoluteMaxRatings", the two are DIFFERENT tables from the datasheet, not one range: absoluteMaxRatings is a destructive limit the datasheet itself marks as "stress ratings only, exceeding these may cause permanent damage" — it is NEVER a value to design to. Every node's voltageV and every power rail must come from recommendedOperating (its "typ", or a value inside its min/max). If only absoluteMaxRatings is present for a part, treat its operating range as unknown rather than using the absolute-max figures directly. The same applies to currentMa: never use an absoluteMaxRatings current (e.g. a pin input limit) as a node's current draw. Take currentMa from recommendedOperating or from supply/quiescent/active current figures stated in the grounded text; if none is grounded, give a conservative engineering estimate and say so in the node's rationale.
 10. Grounded specs may also list "powerModes" (supply current per operating mode, already in mA), "interfaces" (role, voltage level, max rate and pull-up requirements), "cautions" (constraints stated in the datasheet) and "pins". Use them: size a node's currentMa from its active/typical powerModes entry, put the required pull-ups and logic-level compatibility on the matching bus edges, never violate a listed caution (e.g. a pin that must not be pulled low at boot), and use the listed pin names for interface pin assignments rather than inventing pins.`;
 
   const userPrompt = `Synthesize the Canonical Design Graph for the following hardware intent:
 ${JSON.stringify(intent, null, 2)}
 
-${iterationNotes ? `User Revision / Focus: ${iterationNotes}\n` : ''}
+${
+  revision
+    ? `REVISION MODE — you are MODIFYING the existing design below, not starting over.
+CURRENT DESIGN (baseline):
+${JSON.stringify(revision.baseline)}
+${
+  revision.appliedChanges.length > 0
+    ? `Changes already applied to this design — every one of them MUST still be present in your output:\n${revision.appliedChanges.map((c) => `- ${c}`).join('\n')}\n`
+    : ''
+}REQUESTED CHANGE NOW: ${iterationNotes ?? ''}
+Revision rules: keep every baseline node, edge, power rail and BOM line unless the requested change explicitly removes or replaces it; keep existing node ids; add or adjust only what the requested change needs. "suggestedRefinements" must not repeat any change listed above or anything already present in the baseline.
+`
+    : iterationNotes
+      ? `User Revision / Focus: ${iterationNotes}\n`
+      : ''
+}
 ${
   grounding.datasheetSnippets.length > 0
     ? `GROUNDED REFERENCE CONTEXT (specs.recommendedOperating = design to this; specs.absoluteMaxRatings = destructive limit, never design to this — see rule 9):\n${grounding.datasheetSnippets.map((s) => s.text).join('\n')}\n`
@@ -110,7 +162,11 @@ ${
 }
 DESIGN GUIDELINES:
 ${grounding.designGuidelines.join('\n')}
-
+${
+  avoidSuggestions.length > 0
+    ? `\nThe user was ALREADY shown these refinement chips — do not offer them (or rewordings of them) again; propose fresh, design-specific ideas instead:\n${avoidSuggestions.map((s) => `- ${s}`).join('\n')}\n`
+    : ''
+}
 Output JSON adhering strictly to:
 {
   "projectMeta": { "name": string, "tagline": string, "controller": string },
@@ -170,11 +226,11 @@ Output JSON adhering strictly to:
     }
   };
 
-  const runOnce = async () =>
+  const runOnce = async (correction?: string) =>
     aiRouterService.executeTask({
       taskCase: 'A', // Sol Tier — model/maxTokens come from the model_routes row
       systemPrompt,
-      userPrompt,
+      userPrompt: correction ? `${userPrompt}\n\n${correction}` : userPrompt,
       sessionId,
       temperature: 0.2,
       jsonMode: true,
@@ -191,7 +247,15 @@ Output JSON adhering strictly to:
       'Sol design graph failed schema validation — retrying once'
     );
     await aiRouterService.markSchemaResult(aiResult.aiCallId, false, parsed.error.message);
-    aiResult = await runOnce();
+    // Tell the model exactly what was wrong — re-sending the identical prompt just reproduced the
+    // same invalid value on the retry.
+    const problems = parsed.error.issues
+      .slice(0, 8)
+      .map((i) => `- ${i.path.join('.')}: ${i.message}`)
+      .join('\n');
+    aiResult = await runOnce(
+      `CORRECTION: your previous response did not match the schema:\n${problems}\nReturn the complete JSON again, using ONLY the allowed enum values listed above.`
+    );
     parsed = canonicalDesignGraphSchema.safeParse(parseGraph(aiResult.content));
     if (!parsed.success) {
       logger.error({ sessionId, issues: parsed.error.issues.slice(0, 5) }, 'Sol design graph failed schema validation twice');
@@ -204,6 +268,39 @@ Output JSON adhering strictly to:
     graph: parsed.data as CanonicalDesignGraph,
     rawResponse: aiResult.content,
   };
+}
+
+const freshSuggestionsSchema = z.object({ suggestions: z.array(z.string().min(2).max(60)).max(8) });
+
+/**
+ * Fallback when the design graph's own suggestedRefinements mostly repeat chips the user has
+ * already been shown (Sol often ignores the avoid-list buried in its long prompt). One small Luna
+ * call asks ONLY for fresh, device-specific ideas. Best-effort: any failure returns [] and the
+ * caller keeps what it had.
+ */
+export async function generateFreshSuggestions(
+  graph: CanonicalDesignGraph,
+  avoid: string[],
+  sessionId?: string
+): Promise<string[]> {
+  try {
+    const parts = graph.nodes.map((n) => `${n.label} (${n.category}${n.partNumber ? `, ${n.partNumber}` : ''})`).join('; ');
+    const result = await aiRouterService.executeTask({
+      taskCase: 'E',
+      systemPrompt:
+        'You suggest next design refinements for an embedded hardware product. Return strict JSON {"suggestions": string[]} with 4-5 items, each 2-4 words, imperative ("Add …", "Use …", "Log …"). They must be specific to THIS product\'s purpose, must not already exist in its parts list, and must not repeat or reword any suggestion in the avoid list. Cover different areas (sensing, connectivity, power, security, UX).',
+      userPrompt: `Product: ${graph.projectMeta.name} — ${graph.projectMeta.tagline}\nController: ${graph.controller.partNumber}\nCurrent parts: ${parts}\nAvoid (already shown or applied): ${avoid.join('; ') || 'none'}`,
+      sessionId,
+      jsonMode: true,
+      maxTokens: 300,
+      temperature: 0.7,
+    });
+    const parsed = freshSuggestionsSchema.safeParse(JSON.parse(stripJsonFences(result.content)));
+    return parsed.success ? parsed.data.suggestions : [];
+  } catch (err) {
+    logger.warn({ sessionId, err }, 'Fresh refinement suggestions unavailable — keeping the existing ones');
+    return [];
+  }
 }
 
 /**

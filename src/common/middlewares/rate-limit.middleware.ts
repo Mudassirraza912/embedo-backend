@@ -46,6 +46,7 @@ const buildLimiter = (spec: LimiterSpec): RateLimiterAbstract => {
 let limiters: {
   global: RateLimiterAbstract;
   auth: RateLimiterAbstract;
+  refresh: RateLimiterAbstract;
   sessionDailyIp: RateLimiterAbstract;
   discuss: RateLimiterAbstract;
   passwordReset: RateLimiterAbstract;
@@ -58,6 +59,11 @@ const getLimiters = () => {
       global: buildLimiter({ keyPrefix: 'rl:global', points: env.RATE_LIMIT_MAX, duration: Math.max(1, Math.round(env.RATE_LIMIT_WINDOW_MS / 1000)) }),
       // Auth endpoints: 10 attempts / minute / IP (anti brute-force)
       auth: buildLimiter({ keyPrefix: 'rl:auth', points: 10, duration: 60 }),
+      // Token refresh gets its own bucket. It used to share the 10/min brute-force budget above,
+      // but the SPA calls it on every page load (guests included), so a few page views used up the
+      // allowance and blocked the next real login from that IP — worse behind a shared office NAT.
+      // A refresh needs the httpOnly refresh cookie, so it is not a password-guessing vector.
+      refresh: buildLimiter({ keyPrefix: 'rl:refresh', points: 60, duration: 60 }),
       // Absolute daily ceiling per IP regardless of auth state (cost circuit breaker)
       sessionDailyIp: buildLimiter({ keyPrefix: 'rl:session:daily', points: env.SESSION_CREATE_DAILY_MAX_PER_IP, duration: 86400 }),
       // Discuss refinement: 30 / hour / session (plus the global IP limiter)
@@ -119,6 +125,18 @@ export const rateLimitAuth = async (req: Request, res: Response, next: NextFunct
     getLimiters().auth,
     clientIp(req),
     'Too many authentication attempts. Please try again later.',
+    next,
+    res
+  );
+  if (ok) next();
+};
+
+export const rateLimitTokenRefresh = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  if (isBypassed()) return next();
+  const ok = await consumeOr429(
+    getLimiters().refresh,
+    clientIp(req),
+    'Too many session refresh requests. Please try again shortly.',
     next,
     res
   );
