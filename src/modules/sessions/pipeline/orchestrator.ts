@@ -4,7 +4,7 @@ import { emitSessionEvent } from '../../realtime/socket.js';
 import { parseHardwareIntent, IntentExtractionError } from './intent-parser.js';
 import { checkSufficiency, GENERATION_HOLD_MESSAGE, isGibberishOrSpam } from './sufficiency-gate.js';
 import { getGroundingContext } from './rag-grounder.js';
-import { buildCanonicalDesignGraph, DesignGraphSchemaError } from './design-graph-builder.js';
+import { buildCanonicalDesignGraph, DesignGraphSchemaError, generateFreshSuggestions } from './design-graph-builder.js';
 import { validateAndRepairDesignGraph } from './validator.js';
 import { projectArchitecture } from './diagram-projector.js';
 import { CanonicalDesignGraph, ProjectedArchitecture, StructuredIntent, structuredIntentSchema } from './types.js';
@@ -108,7 +108,7 @@ export async function runGenerationPipeline(
 
     await prisma.designSession.update({ where: { id: sessionId }, data: { status: 'PROCESSING' } });
 
-    const conversationHistory = session.chatMessages.map((m) => ({
+    let conversationHistory = session.chatMessages.map((m) => ({
       role: m.role as 'user' | 'assistant' | 'system',
       content: m.content,
     }));
@@ -125,6 +125,10 @@ export async function runGenerationPipeline(
     const openingRejected = isGibberishOrSpam(session.intentText) || openingMeta.isGibberish === true || openingMeta.isOffTopic === true;
     if (!session.architecture && options.iterationNotes && openingRejected && !isGibberishOrSpam(options.iterationNotes)) {
       intentText = options.iterationNotes;
+      // The rejected turns are not part of the brief. Leaving them in the parser's history let the
+      // off-topic reply's example product ("a wearable heart-rate monitor…") leak into the intent,
+      // and the resulting graph failed validation (NO_CONTROLLER_NODE) on all three attempts.
+      conversationHistory = [{ role: 'user', content: intentText }];
       await prisma.designSession.update({ where: { id: sessionId }, data: { intentText, intentStructured: Prisma.DbNull } });
       log.info('Opening message was rejected; using the first real brief as the session intent');
     }
@@ -243,8 +247,24 @@ export async function runGenerationPipeline(
         ? { baseline: compactGraphForRevision(baselineGraph), appliedChanges: appliedLineage }
         : undefined;
 
+    // The chips the user was shown on the latest architecture card. Re-offering the same set on
+    // every version read as "the same points keep repeating", so the next card asks for fresh ones.
+    const lastCard = [...session.chatMessages]
+      .reverse()
+      .find((m) => m.role === 'assistant' && Array.isArray((m.metadata as { suggestedRefinements?: unknown } | null)?.suggestedRefinements));
+    const previousSuggestions = (
+      ((lastCard?.metadata as { suggestedRefinements?: unknown[] } | null)?.suggestedRefinements ?? []) as unknown[]
+    ).filter((s): s is string => typeof s === 'string');
+
     emitSessionEvent.aiCallStarted(sessionId, 'A');
-    const { graph: rawGraph } = await buildCanonicalDesignGraph(structuredIntent, grounding, sessionId, options.iterationNotes, revision);
+    const { graph: rawGraph } = await buildCanonicalDesignGraph(
+      structuredIntent,
+      grounding,
+      sessionId,
+      options.iterationNotes,
+      revision,
+      previousSuggestions
+    );
     emitSessionEvent.aiCallCompleted(sessionId, { taskCase: 'A', schemaPass: true });
     recordStep('checking_library', 'Checking library coverage', 'completed', `Controller: ${rawGraph.controller.partNumber}`);
 
@@ -268,6 +288,16 @@ export async function runGenerationPipeline(
       ...appliedLineage,
       ...(options.iterationNotes ? [options.iterationNotes] : []),
     ]);
+    // Prefer fresh chips over the ones offered last time ("same points keep repeating"). Two new
+    // ideas beat five where three are repeats; only fall back to the old ones if fewer remain.
+    let fresh = filterAppliedSuggestions(finalizedGraph.suggestedRefinements, previousSuggestions);
+    if (fresh.length < 3 && previousSuggestions.length > 0) {
+      // Sol mostly repeated last card's chips — ask Luna for new, device-specific ones.
+      const avoid = [...previousSuggestions, ...appliedLineage, ...(options.iterationNotes ? [options.iterationNotes] : [])];
+      const extra = filterAppliedSuggestions(await generateFreshSuggestions(finalizedGraph, avoid, sessionId), avoid);
+      fresh = filterAppliedSuggestions([...fresh, ...extra], []).slice(0, 5);
+    }
+    if (fresh.length >= 2) finalizedGraph.suggestedRefinements = fresh;
     if (revision && baselineGraph) {
       const kept = new Set(finalizedGraph.nodes.map((n) => n.id));
       const dropped = baselineGraph.nodes.filter((n) => !kept.has(n.id)).map((n) => n.id);

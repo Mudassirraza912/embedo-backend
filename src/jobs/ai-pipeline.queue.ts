@@ -51,7 +51,7 @@ const markSessionFailed = async (sessionId: string, reason: string, retryable: b
           versionTag ? ` (${versionTag})` : ''
         } is unchanged. ${retryable ? 'Please try sending it again.' : 'Try rephrasing the change or asking for it in smaller steps.'}`
       : retryable
-        ? 'Architecture generation could not be completed right now due to a temporary AI provider issue. Please try again in a moment.'
+        ? "I couldn't complete this architecture on this attempt. Please send your request again — or add a detail or two (e.g. the main controller or power source) to help me pin it down."
         : 'Architecture generation could not be completed for this request. Please refine your description and try again.';
 
     await prisma.chatMessage.create({

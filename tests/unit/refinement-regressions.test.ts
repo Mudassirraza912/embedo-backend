@@ -134,9 +134,42 @@ describe('validateAndRepairDesignGraph — controller filed under another catego
     expect(report.repairedGraph.nodes.find((n) => n.id === 'esp')?.category).toBe('control');
   });
 
-  it('still fails when no node can be identified as the controller', () => {
+  it('recognises an MCU by its part family even when it is not the declared part', () => {
     const report = validateAndRepairDesignGraph(base('connectivity', 'STM32F411CEU6'));
-    expect(report.issues.some((i) => i.code === 'NO_CONTROLLER_NODE')).toBe(true);
+    expect(report.issues.some((i) => i.code === 'NO_CONTROLLER_NODE')).toBe(false);
+    expect(report.repairedGraph.nodes.find((n) => n.id === 'esp')?.category).toBe('control');
+  });
+
+  it('never picks the motor driver of a motor-controller product as the MCU', () => {
+    const g = {
+      projectMeta: { name: 'Industrial Motor Controller', tagline: 't', controller: 'STM32F407VGT6' },
+      controller: { partNumber: 'STM32F407VGT6', manufacturer: 'ST', rationale: 'r' },
+      nodes: [
+        { id: 'motor_controller', label: 'Motor Controller', sublabel: 'Gate driver', category: 'motor', partNumber: 'DRV8301' },
+        { id: 'main_ctrl', label: 'Main Controller', sublabel: 'MCU', category: 'motor', partNumber: 'STM32F407VGT6' },
+      ],
+      edges: [],
+      powerRails: [],
+      bom: [],
+    } as unknown as CanonicalDesignGraph;
+    const report = validateAndRepairDesignGraph(g);
+    expect(report.repairedGraph.nodes.find((n) => n.id === 'main_ctrl')?.category).toBe('control');
+    expect(report.repairedGraph.nodes.find((n) => n.id === 'motor_controller')?.category).toBe('motor');
+  });
+
+  it('adds the declared controller as a node instead of failing when nothing matches', () => {
+    const g = {
+      projectMeta: { name: 'n', tagline: 't', controller: 'XYZ-123' },
+      controller: { partNumber: 'XYZ-123', manufacturer: 'Acme', rationale: 'r' },
+      nodes: [{ id: 'relay', label: 'Relay', sublabel: 's', category: 'motor', partNumber: 'G5LE-1A' }],
+      edges: [],
+      powerRails: [],
+      bom: [],
+    } as unknown as CanonicalDesignGraph;
+    const report = validateAndRepairDesignGraph(g);
+    expect(report.issues.some((i) => i.code === 'NO_CONTROLLER_NODE')).toBe(false);
+    expect(report.issues.some((i) => i.code === 'CONTROLLER_NODE_ADDED')).toBe(true);
+    expect(report.repairedGraph.nodes.some((n) => n.category === 'control' && n.partNumber === 'XYZ-123')).toBe(true);
   });
 });
 
@@ -169,5 +202,54 @@ describe('refinement history — applied changes are not suggested again', () =>
     ] as never);
     await expect(getAppliedChangeLineage('s1')).resolves.toEqual(['Include ESD protection', 'Add status LED']);
     jest.restoreAllMocks();
+  });
+});
+
+describe('routeMessage — a different product inside an existing chat', () => {
+  afterEach(() => jest.restoreAllMocks());
+  const accessHistory = [
+    { role: 'user' as const, content: 'Smart access-control terminal with RFID, keypad and relay outputs' },
+    { role: 'assistant' as const, content: 'Architecture generated successfully!' },
+  ];
+  const routed = (body: Record<string, unknown>) =>
+    jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(aiResult(JSON.stringify({ projectTitle: '', isGibberish: false, reply: '', ...body })));
+
+  it('flags a self-contained brief for another product as a new project', async () => {
+    routed({ mode: 'generate', isNewProject: true, projectTitle: 'ESP32 OLED Board' });
+    const r = await routeMessage('esp32 with OLED display on 5V USB-C', 's1', accessHistory);
+    expect(r.mode).toBe('generate');
+    expect(r.isNewProject).toBe(true);
+  });
+
+  it('never treats a design-change command as a new project, even if the model says so', async () => {
+    routed({ mode: 'generate', isNewProject: true });
+    const r = await routeMessage('Add an OLED display', 's1', accessHistory);
+    expect(r.isNewProject).toBe(false);
+  });
+
+  it('is never a new project on the first message of a chat', async () => {
+    routed({ mode: 'generate', isNewProject: true });
+    const r = await routeMessage('esp32 with OLED display on 5V USB-C', 's1', []);
+    expect(r.isNewProject).toBe(false);
+  });
+});
+
+describe('buildCanonicalDesignGraph — chips already shown are not offered again', () => {
+  afterEach(() => jest.restoreAllMocks());
+  it('passes the previously shown chips to the model as ones to avoid', async () => {
+    const graph = JSON.stringify({
+      projectMeta: { name: 'n', tagline: 't', controller: 'ESP32' },
+      controller: { partNumber: 'ESP32', manufacturer: 'Espressif', rationale: 'r' },
+      nodes: [{ id: 'mcu', label: 'MCU', sublabel: 's', category: 'control', partNumber: 'ESP32' }],
+      edges: [],
+      powerRails: [],
+      bom: [],
+    });
+    const spy = jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(aiResult(graph));
+    await buildCanonicalDesignGraph({} as unknown as StructuredIntent, { datasheetSnippets: [], designGuidelines: [] } as unknown as GroundingContext, 's1', undefined, undefined, ['Add battery backup', 'Include ESD protection']);
+    const prompt = (spy.mock.calls[0]?.[0] as Parameters<ExecuteTask>[0]).userPrompt;
+    expect(prompt).toContain('ALREADY shown');
+    expect(prompt).toContain('- Add battery backup');
+    expect(prompt).toContain('- Include ESD protection');
   });
 });
