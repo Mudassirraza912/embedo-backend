@@ -13,9 +13,6 @@ export interface SufficiencyResult {
 export const GENERATION_HOLD_MESSAGE =
   'Your request looks good — architecture synthesis Work is in Progress and will available shortly';
 
-export const OFF_TOPIC_CLARIFICATION =
-  "Embedo.ai is focused specifically on embedded hardware architecture, so I'm not able to help with that. Describe an embedded product or concept you'd like to design — e.g. \"Battery-powered BLE asset tracker with GPS and accelerometer\" or \"Smart greenhouse environmental monitor with Wi-Fi and OLED display\" — and I'll get started.";
-
 export interface GibberishCheckOptions {
   /**
    * A reply inside an existing conversation rather than an opening brief. Short answers are normal
@@ -89,7 +86,9 @@ export function checkSufficiency(intent: StructuredIntent, rawInputText?: string
     return {
       sufficient: false,
       missingFields: ['deviceType', 'purpose', 'subsystems'],
-      clarificationQuestions: [OFF_TOPIC_CLARIFICATION],
+      // The caller generates a contextual AI response for this case; a fixed rejection string
+      // here used to be shown even when the conversation context made the request relevant.
+      clarificationQuestions: [],
       isOffTopic: true,
     };
   }
