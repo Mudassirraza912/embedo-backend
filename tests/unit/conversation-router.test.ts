@@ -1,6 +1,6 @@
 import { describe, it, expect, jest, afterEach } from '@jest/globals';
 import { aiRouterService } from '../../src/modules/ai/ai-router.service.js';
-import { routeMessage } from '../../src/modules/sessions/conversation-router.service.js';
+import { resumePendingClarification, routeMessage } from '../../src/modules/sessions/conversation-router.service.js';
 
 const routerResult = (content: string) => ({
   content,
@@ -90,6 +90,52 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it('resumes the pipeline for an answer even when the router mislabels it off-topic', () => {
+    const result = resumePendingClarification(
+      { mode: 'off_topic', projectTitle: '', isGibberish: false, isNewProject: false, reply: 'What do you mean?' },
+      true
+    );
+
+    expect(result.mode).toBe('generate');
+    expect(result.reply).toBe('');
+  });
+
+  it('recognizes a short reply to an intake question even when it is labeled discuss', async () => {
+    const spy = jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(
+      routerResult(JSON.stringify({
+        mode: 'discuss',
+        projectTitle: 'Embedded Controller',
+        isGibberish: false,
+        isNewProject: false,
+        reply: '',
+        isAnswerToPendingQuestion: true,
+      }))
+    );
+
+    const result = await routeMessage(
+      '12 V DC',
+      'session-1',
+      [{ role: 'assistant', content: 'What voltage does the actuator require?' }],
+      { projectTitle: 'Embedded Controller', originalBrief: 'embedded controller' }
+    );
+
+    expect(result.isAnswerToPendingQuestion).toBe(true);
+    expect(resumePendingClarification(result, result.isAnswerToPendingQuestion).mode).toBe('generate');
+    expect(spy.mock.calls[0]?.[0].systemPrompt).toContain('specific question in the immediately preceding assistant message');
+    expect(spy.mock.calls[0]?.[0].systemPrompt).not.toContain('water motor');
+  });
+
+  it('treats a concise product concept as an implicit new design request', async () => {
+    const spy = jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(
+      routerResult(JSON.stringify({ mode: 'generate', projectTitle: 'Environmental Sensor Node', isGibberish: false, isNewProject: false, reply: '' }))
+    );
+
+    const result = await routeMessage('remote environmental sensor node');
+
+    expect(result.mode).toBe('generate');
+    expect(spy.mock.calls[0]?.[0].systemPrompt).toContain('concise name or description of an embedded product');
+  });
+
   it('retries once on unparseable JSON, still populating the new fields on success', async () => {
     const spy = jest
       .spyOn(aiRouterService, 'executeTask')
@@ -106,14 +152,14 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
     jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(routerResult('still not json'));
 
     const result = await routeMessage('???');
-    expect(result).toEqual({ mode: 'discuss', projectTitle: '', isGibberish: false, isNewProject: false, reply: '' });
+    expect(result).toEqual({ mode: 'discuss', projectTitle: '', isGibberish: false, isNewProject: false, reply: '', isAnswerToPendingQuestion: false });
   });
 
   it('defaults to generate with no gibberish flag and empty reply on a hard provider failure', async () => {
     jest.spyOn(aiRouterService, 'executeTask').mockRejectedValue(new Error('provider down'));
 
     const result = await routeMessage('anything');
-    expect(result).toEqual({ mode: 'generate', projectTitle: '', isGibberish: false, isNewProject: false, reply: '' });
+    expect(result).toEqual({ mode: 'generate', projectTitle: '', isGibberish: false, isNewProject: false, reply: '', isAnswerToPendingQuestion: false });
   });
 
   it('tolerates null isGibberish/reply from the model (schema coerces to false/"")', async () => {
