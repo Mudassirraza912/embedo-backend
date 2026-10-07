@@ -101,7 +101,7 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
   });
 
   it('recognizes a short reply to the assistant\'s intake question even when it is labeled discuss', async () => {
-    jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(
+    const spy = jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(
       routerResult(JSON.stringify({
         mode: 'discuss',
         projectTitle: 'Water Motor Controller',
@@ -121,6 +121,7 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
 
     expect(result.isAnswerToPendingQuestion).toBe(true);
     expect(resumePendingClarification(result, result.isAnswerToPendingQuestion).mode).toBe('generate');
+    expect(spy.mock.calls[0]?.[0].systemPrompt).toContain('USB-C 5V');
   });
 
   it('treats a concise product concept as an implicit new design request', async () => {

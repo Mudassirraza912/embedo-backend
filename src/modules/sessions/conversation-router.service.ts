@@ -78,6 +78,8 @@ const ROUTER_SYSTEM_PROMPT = `Classify the latest message for Embedo.ai (embedde
 
 isAnswerToPendingQuestion: true only when the latest user message meaningfully answers the specific question in the immediately preceding assistant message (for example, the assistant asks how a water motor controller is powered and the user says "USB-C 5V"). This is independent of mode: use it to resume design intake even when the answer is too short to look like a standalone build request. It is false for a new question, an unrelated message, a generic offer to generate, or when the previous assistant message did not ask for a requirement.
 
+Example: prior assistant asked "How is this water motor controller powered?" and latest user says "USB-C 5V" -> {"mode":"discuss","projectTitle":"Water Motor Controller","isGibberish":false,"isNewProject":false,"reply":"","isAnswerToPendingQuestion":true}. This flag means the answer should be merged into the design intake; the mode can still be discuss.
+
 Distinguish command from question by the user's wording: "Implement secure boot" asks you to update the design; "How do I implement secure boot?" asks for an explanation. Do not answer a direct design command with procedural steps.
 
 isNewProject: true ONLY when earlier turns or CURRENT PROJECT CONTEXT establish a specific product AND the latest message is a self-contained brief for a clearly different product. Compare device and purpose, not just wording. If it names the same device/product as the current project, it is the same project. A short product name alone, profanity, or an insult is not a self-contained new brief. If uncertain, set false. A change, addition or question about the current product is false. Always false when there is no earlier context.
