@@ -59,13 +59,18 @@ export function evaluateCompatibility(controller: AllocInstance, peripherals: Al
     for (const [address, devices] of byAddress) {
       if (devices.length < 2) continue;
       const movable = devices.find((d) => d.alternates.length > 0);
+      // The clashing devices' bus pins, so their pin rows and links show the conflict.
+      const ids = new Set(devices.map((d) => d.p.instanceId));
+      const busPins = allocation.nets
+        .filter((n) => n.class === 'i2c')
+        .flatMap((n) => n.members.filter((m) => ids.has(m.instanceId)).map((m) => m.pinId));
       out.push(
         make(
           'bus_address_conflict',
           'BLOCKER',
           `${devices.length} devices share I2C address ${address}: ${devices.map((d) => d.p.instanceId).join(', ')}.`,
-          devices.map((d) => d.p.instanceId),
-          [],
+          [...ids],
+          [...new Set(busPins)],
           movable
             ? `Set ${movable.p.instanceId} to ${movable.alternates[0]}${movable.altNote ? ` (${movable.altNote})` : ''}, or add an I2C multiplexer.`
             : 'Add an I2C multiplexer (e.g. TCA9548A) — these boards have no alternate address.'

@@ -104,6 +104,25 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
     expect(p.pinList.summary.assigned).toBeGreaterThan(0);
   });
 
+  it('marks an I2C address clash as a conflict on the pin rows and blocks those links', () => {
+    const p = assemblePrototype(
+      {
+        kind: 'prototype_composition',
+        controller: { instanceId: 'mcu', hardwareEntityId: FIXTURE_IDS.qtPy },
+        modules: [
+          { instanceId: 'bme1', hardwareEntityId: FIXTURE_IDS.bme280, role: '', links: [{ interface: 'I2C' }] },
+          { instanceId: 'bme2', hardwareEntityId: FIXTURE_IDS.bme280, role: '', links: [{ interface: 'I2C' }] },
+        ],
+        gaps: [],
+      },
+      entities,
+      options
+    );
+    expect(p.compatibility.counts.BLOCKER).toBe(1);
+    expect(p.pinList.summary.conflict).toBeGreaterThan(0);
+    expect(p.connections.every((c) => c.state === 'blocked')).toBe(true);
+  });
+
   it('exports a standalone SVG with per-instance id prefixes', () => {
     const p = assemblePrototype(
       { ...composition, modules: [...composition.modules, { instanceId: 'bme2', hardwareEntityId: FIXTURE_IDS.bme280, role: 'second', links: [] }] },

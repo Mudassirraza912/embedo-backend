@@ -500,7 +500,8 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
   const mcuGround = mcu.record.pins.find((pin) => (pin.direction === 'ground' || pin.signal_class === 'ground') && mcu.isWireable(pin.pin_id)) ?? null;
   const mcuRails = mcu.record.pins
     .filter((pin) => pin.direction === 'power_out' && mcu.isWireable(pin.pin_id))
-    .map((pin) => ({ pin, volts: parseVolts(pin.pin_name) ?? parseVolts(pin.voltage_domain) }))
+    // The declared domain first: a pin named "3V" (QT Py) is a 3.3 V rail, which its name alone misreads as 3.0 V.
+    .map((pin) => ({ pin, volts: parseVolts(pin.voltage_domain) ?? parseVolts(pin.pin_name) }))
     .filter((r): r is { pin: HardwarePin; volts: number } => r.volts !== null && (r.volts === 3.3 || r.volts === 5));
   const mcuLogic = mcu.logicVolts();
   const peripheralRails = new Map<string, number | null>();

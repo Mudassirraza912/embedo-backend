@@ -111,6 +111,13 @@ describe('prototype pin allocator (fixture library)', () => {
     const conflict = evaluateCompatibility(controller, peripherals, allocation).find((r) => r.ruleType === 'bus_address_conflict');
     expect(conflict).toMatchObject({ status: 'BLOCKER', instanceIds: ['bme1', 'bme2'] });
     expect(conflict!.suggestedFix).toContain('0x76');
+    expect(conflict!.pinIds.sort()).toEqual(['HW-FX03:SCK', 'HW-FX03:SDI']);
+  });
+
+  it("reads a rail pin's voltage from its domain, so the QT Py \"3V\" pin is a 3.3 V rail", () => {
+    const result = allocatePins(mcu(lib.qtPy), [mod('gps1', lib.gps, { interface: 'UART' })]);
+    expect(result.peripheralRails.get('gps1')).toBe(3.3);
+    expect(netNamed(result.nets, '3V3')!.members.map((m) => m.pinId).sort()).toEqual(['HW-FX02:3V', 'HW-FX04:VIN']);
   });
 
   it('reports UNKNOWN, not PASS, when a module supply range is not in its record', () => {
