@@ -102,6 +102,7 @@ model DesignSession {
   userFeedback     UserFeedback[]
   designOutcome    DesignOutcome?
   moderationEvents ModerationEvent[]
+  privateHardware  HardwareEntity[]
 
   @@index([userId], map: "design_sessions_user_idx")
   @@index([anonSessionToken], map: "design_sessions_anon_idx")
@@ -344,4 +345,108 @@ model PlanLimit {
   updatedAt           DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
 
   @@map("plan_limits")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Prototype Hardware Database (Prototype Hardware Database v3.3, truth file §14) — first slice:
+// families, entities, sources and SVG artwork. Table and column names follow §14. Relational
+// columns own governance and readiness; metadata_json owns the deep engineering facts. Controlled
+// vocabularies are strings checked in SQL (see the migration) and in hardware.schema.ts.
+// Entities are never hard-deleted: session versions reference them by hardware_entity_id.
+// ---------------------------------------------------------------------------------------------
+
+model ProductFamily {
+  productFamilyId           String   @id @map("product_family_id") @db.VarChar(120)
+  vendor                    String   @db.VarChar(120)
+  familyName                String   @map("family_name") @db.Text
+  canonicalGroup            String   @map("canonical_group") @db.VarChar(60)
+  /// Set by reviewers (§6.3). Null until then; the resolver falls back to the only eligible member.
+  preferredHardwareEntityId String?  @map("preferred_hardware_entity_id") @db.VarChar(64)
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt                 DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  entities HardwareEntity[]
+
+  @@map("product_families")
+}
+
+model HardwareEntity {
+  hardwareEntityId      String    @id @map("hardware_entity_id") @db.VarChar(64)
+  productFamilyId       String    @map("product_family_id") @db.VarChar(120)
+  hardwareRevision      String?   @map("hardware_revision") @db.VarChar(60)
+  supersedes            String?   @db.VarChar(64)
+  supersededBy          String?   @map("superseded_by") @db.VarChar(64)
+  forkedFrom            String?   @map("forked_from") @db.VarChar(64)
+  /// provisional | confirmed | rejected
+  reviewStatus          String    @map("review_status") @db.VarChar(20)
+  /// active | nrnd | discontinued | unknown
+  lifecycleStatus       String    @map("lifecycle_status") @db.VarChar(20)
+  /// shared_library | private_project
+  scope                 String    @db.VarChar(20)
+  verificationMethod    String    @map("verification_method") @db.VarChar(30)
+  recordOrigin          String    @map("record_origin") @db.VarChar(30)
+  /// catalog_only | metadata_ready | visual_ready | wiring_ready | needs_review | failed
+  assetReadiness        String    @map("asset_readiness") @db.VarChar(20)
+  createdBy             String    @map("created_by") @db.VarChar(120)
+  /// design_sessions.id for private_project records.
+  projectId             String?   @map("project_id") @db.Uuid
+  promotedAt            DateTime? @map("promoted_at") @db.Timestamp(6)
+  promotedBy            String?   @map("promoted_by") @db.VarChar(120)
+  metadataSchemaVersion String    @map("metadata_schema_version") @db.VarChar(10)
+  lastVerifiedAt        DateTime? @map("last_verified_at") @db.Timestamp(6)
+  /// sha256 of the imported record JSON. Lets a re-import skip unchanged boards and refuse to
+  /// silently overwrite changed ones (§4.3).
+  contentHash           String    @map("content_hash") @db.VarChar(80)
+  metadataJson          Json      @map("metadata_json")
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  family   ProductFamily    @relation(fields: [productFamilyId], references: [productFamilyId])
+  project  DesignSession?   @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  sources  HardwareSource[]
+  svgAsset SvgAsset?
+
+  @@index([scope, reviewStatus, assetReadiness], map: "hardware_entities_eligibility_idx")
+  @@index([productFamilyId], map: "hardware_entities_family_idx")
+  @@index([projectId], map: "hardware_entities_project_idx")
+  @@map("hardware_entities")
+}
+
+model HardwareSource {
+  sourceId           String    @id @default(dbgenerated("gen_random_uuid()")) @map("source_id") @db.Uuid
+  hardwareEntityId   String    @map("hardware_entity_id") @db.VarChar(64)
+  sourceType         String    @map("source_type") @db.VarChar(30)
+  url                String?   @db.Text
+  official           Boolean   @default(false)
+  verifiedAt         DateTime? @map("verified_at") @db.Timestamp(6)
+  lastCheckedAt      DateTime? @map("last_checked_at") @db.Timestamp(6)
+  /// Hash only — page content is never stored (§8.4).
+  contentFingerprint String?   @map("content_fingerprint") @db.VarChar(100)
+  lastHttpStatus     Int?      @map("last_http_status")
+
+  entity HardwareEntity @relation(fields: [hardwareEntityId], references: [hardwareEntityId], onDelete: Cascade)
+
+  @@index([hardwareEntityId], map: "hardware_sources_entity_idx")
+  @@map("hardware_sources")
+}
+
+model SvgAsset {
+  hardwareEntityId     String    @id @map("hardware_entity_id") @db.VarChar(64)
+  fileName             String    @map("file_name") @db.VarChar(120)
+  storagePath          String    @map("storage_path") @db.VarChar(255)
+  buildStatus          String    @map("build_status") @db.VarChar(20)
+  validationStatus     String    @map("validation_status") @db.VarChar(20)
+  anchorIds            Json      @map("anchor_ids")
+  generationSourceHash String    @map("generation_source_hash") @db.VarChar(100)
+  generatedAt          DateTime? @map("generated_at") @db.Timestamp(6)
+  approvedBy           String?   @map("approved_by") @db.VarChar(120)
+  approvedAt           DateTime? @map("approved_at") @db.Timestamp(6)
+  artworkOriginal      Boolean   @default(true) @map("artwork_original")
+  /// The sanitized perimeter-v1 SVG. Stored inline until the R2 client exists; storage_path keeps
+  /// the R2 key so moving it out later is a data migration, not a contract change.
+  svgMarkup            String    @map("svg_markup") @db.Text
+
+  entity HardwareEntity @relation(fields: [hardwareEntityId], references: [hardwareEntityId], onDelete: Cascade)
+
+  @@map("svg_assets")
 }

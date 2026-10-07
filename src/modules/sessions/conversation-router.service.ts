@@ -3,6 +3,7 @@ import { aiRouterService } from '../ai/ai-router.service.js';
 import { logger } from '../../config/logger.js';
 import { stripJsonFences } from './pipeline/json-utils.js';
 import { isGibberishOrSpam } from './pipeline/sufficiency-gate.js';
+import { SessionType } from './session-type.js';
 
 /**
  * Decides what the user actually wants from a message, so the copilot behaves like a
@@ -114,11 +115,18 @@ const DESIGN_CHANGE_PATTERN =
 const AFFIRMATIVE_RESPONSE_PATTERN = /^(yes|yeah|yep|sure|certainly|please|yes please|go ahead|do it|proceed|sounds good|that works)[.!\s]*$/i;
 const GENERATION_OFFER_PATTERN = /(?:would you like|shall i|want me to|should i)[^?]{0,240}\b(?:generate|generating|create|creating|build|building|produce|producing)\b[^?]{0,180}\b(?:architecture|design|diagram|block diagram|power tree|protocol map|bom)\b/i;
 
+/**
+ * Prototype projects wire existing modules together; without this the classifier only knows the
+ * Architect vocabulary and reads "wire a BME280 to a Pico" as a how-to question.
+ */
+const PROTOTYPE_MODE_CONTEXT = `\n\nPROJECT TYPE: Prototype. The user builds a bench prototype from existing modules (dev boards, breakout boards) in Embedo's hardware library; the output is a module diagram, a pin-by-pin wiring list and the library records of the boards used. Requests to build, wire, connect, hook up, add, remove or swap a module or board are generate. Questions about how a module works or which one to pick are discuss.`;
+
 export async function routeMessage(
   message: string,
   sessionId?: string,
   history?: Array<{ role: 'user' | 'assistant'; content: string }>,
-  projectContext?: { projectTitle: string; originalBrief: string }
+  projectContext?: { projectTitle: string; originalBrief: string },
+  sessionType: SessionType = 'architect'
 ): Promise<RouteMessageResult> {
   const previousAssistantMessage = [...(history ?? [])].reverse().find((turn) => turn.role === 'assistant');
   if (
@@ -151,7 +159,9 @@ export async function routeMessage(
   const runOnce = (extraInstruction?: string) =>
     aiRouterService.executeTask({
       taskCase: 'F',
-      systemPrompt: `${ROUTER_SYSTEM_PROMPT}${currentProjectContext}${extraInstruction ? `\n\n${extraInstruction}` : ''}`,
+      systemPrompt: `${ROUTER_SYSTEM_PROMPT}${sessionType === 'prototype' ? PROTOTYPE_MODE_CONTEXT : ''}${currentProjectContext}${
+        extraInstruction ? `\n\n${extraInstruction}` : ''
+      }`,
       userPrompt: message,
       messages: [...(history ?? []).slice(-12), { role: 'user' as const, content: message }],
       sessionId,

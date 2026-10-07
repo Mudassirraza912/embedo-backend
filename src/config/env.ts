@@ -92,6 +92,20 @@ const envSchema = z
       .enum(['true', 'false'])
       .default('true')
       .transform((v) => v === 'true'),
+
+    // Prototype mode (type=prototype on the chat endpoints). When false, prototype requests are
+    // refused with a clear 403 and existing prototype sessions are not re-run.
+    PROTOTYPE_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+    // Truth-file gate: production searches only confirmed library records. Dev/test environments
+    // set this to also use provisional records that already have artwork (visual_ready / wiring_ready),
+    // which is every seed board until reviewers confirm them. Never enable in production.
+    PROTOTYPE_ALLOW_PROVISIONAL: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
   })
   .superRefine((cfg, ctx) => {
     const isProd = cfg.NODE_ENV === 'production';

@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 352 264" width="352" height="264" data-hardware-entity-id="HW-FX03" data-embedo-svg="perimeter-v1">
+  <g id="deco-HW-FX03-board"><rect x="64" y="64" width="224" height="136" rx="10" fill="#0A3A40" stroke="#075F69" stroke-width="2"/></g>
+  <g id="deco-HW-FX03-title"><text x="176" y="128" fill="#EAF6F6" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="600" text-anchor="middle">Adafruit BME280 I2C or SPI T…</text>
+    <text x="176" y="144" fill="#9CD7D5" font-family="Inter, Arial, sans-serif" font-size="9" text-anchor="middle">BME280 · Adafruit</text></g>
+  <g id="blk-HW-FX03-CONN4" class="embedo-connector" data-connector-id="HW-FX03:CONN4">
+    <rect x="64" y="106" width="14" height="52" rx="2" fill="#06262B" stroke="#20E6E0" stroke-width="1.5"/>
+    <line x1="64" y1="132" x2="44" y2="132" stroke="#20E6E0" stroke-width="2"/>
+    <circle id="a-HW-FX03-CONN4" class="embedo-anchor embedo-anchor-whole" cx="44" cy="132" r="5" fill="#20E6E0" data-connector-id="HW-FX03:CONN4"/>
+    <text x="84" y="135" fill="#20E6E0" font-family="monospace" font-size="8" text-anchor="start">STEMMA QT</text>
+  </g>
+  <g id="blk-HW-FX03-CONN3" class="embedo-connector" data-connector-id="HW-FX03:CONN3">
+    <rect x="274" y="106" width="14" height="52" rx="2" fill="#06262B" stroke="#20E6E0" stroke-width="1.5"/>
+    <line x1="288" y1="132" x2="308" y2="132" stroke="#20E6E0" stroke-width="2"/>
+    <circle id="a-HW-FX03-CONN3" class="embedo-anchor embedo-anchor-whole" cx="308" cy="132" r="5" fill="#20E6E0" data-connector-id="HW-FX03:CONN3"/>
+    <text x="268" y="135" fill="#20E6E0" font-family="monospace" font-size="8" text-anchor="end">STEMMA QT</text>
+  </g>
+  <g id="blk-HW-FX03-JP1" class="embedo-connector" data-connector-id="HW-FX03:JP1">
+    <rect x="103.5" y="182" width="13" height="18" rx="3" fill="#9CD7D5"/>
+    <line x1="110" y1="200" x2="110" y2="220" stroke="#9CD7D5" stroke-width="1.4"/>
+    <circle id="a-HW-FX03-JP1-1" class="embedo-anchor" cx="110" cy="220" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX03:JP1" data-contact-id="HW-FX03:JP1:1" data-pin-id="HW-FX03:VIN"/>
+    <text x="110" y="178" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start" transform="rotate(-90 110 178)" dominant-baseline="middle">VIN</text>
+    <rect x="125.5" y="182" width="13" height="18" rx="3" fill="#9CD7D5"/>
+    <line x1="132" y1="200" x2="132" y2="220" stroke="#9CD7D5" stroke-width="1.4"/>
+    <circle id="a-HW-FX03-JP1-2" class="embedo-anchor" cx="132" cy="220" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX03:JP1" data-contact-id="HW-FX03:JP1:2" data-pin-id="HW-FX03:3Vo"/>
+    <text x="132" y="178" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start" transform="rotate(-90 132 178)" dominant-baseline="middle">3Vo</text>
+    <rect x="147.5" y="182" width="13" height="18" rx="3" fill="#9CD7D5"/>
+    <line x1="154" y1="200" x2="154" y2="220" stroke="#9CD7D5" stroke-width="1.4"/>
+    <circle id="a-HW-FX03-JP1-3" class="embedo-anchor" cx="154" cy="220" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX03:JP1" data-contact-id="HW-FX03:JP1:3" data-pin-id="HW-FX03:GND"/>
+    <text x="154" y="178" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start" transform="rotate(-90 154 178)" dominant-baseline="middle">GND</text>
+    <rect x="169.5" y="182" width="13" height="18" rx="3" fill="#9CD7D5"/>
+    <line x1="176" y1="200" x2="176" y2="220" stroke="#9CD7D5" stroke-width="1.4"/>
+    <circle id="a-HW-FX03-JP1-4" class="embedo-anchor" cx="176" cy="220" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX03:JP1" data-contact-id="HW-FX03:JP1:4" data-pin-id="HW-FX03:SCK"/>
+    <text x="176" y="178" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start" transform="rotate(-90 176 178)" dominant-baseline="middle">SCK</text>
+    <rect x="191.5" y="182" width="13" height="18" rx="3" fill="#9CD7D5"/>
+    <line x1="198" y1="200" x2="198" y2="220" stroke="#9CD7D5" stroke-width="1.4"/>
+    <circle id="a-HW-FX03-JP1-5" class="embedo-anchor" cx="198" cy="220" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX03:JP1" data-contact-id="HW-FX03:JP1:5" data-pin-id="HW-FX03:SDO"/>
+    <text x="198" y="178" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start" transform="rotate(-90 198 178)" dominant-baseline="middle">SDO</text>
+    <rect x="213.5" y="182" width="13" height="18" rx="3" fill="#9CD7D5"/>
+    <line x1="220" y1="200" x2="220" y2="220" stroke="#9CD7D5" stroke-width="1.4"/>
+    <circle id="a-HW-FX03-JP1-6" class="embedo-anchor" cx="220" cy="220" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX03:JP1" data-contact-id="HW-FX03:JP1:6" data-pin-id="HW-FX03:SDI"/>
+    <text x="220" y="178" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start" transform="rotate(-90 220 178)" dominant-baseline="middle">SDI</text>
+    <rect x="235.5" y="182" width="13" height="18" rx="3" fill="#9CD7D5"/>
+    <line x1="242" y1="200" x2="242" y2="220" stroke="#9CD7D5" stroke-width="1.4"/>
+    <circle id="a-HW-FX03-JP1-7" class="embedo-anchor" cx="242" cy="220" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX03:JP1" data-contact-id="HW-FX03:JP1:7" data-pin-id="HW-FX03:CS"/>
+    <text x="242" y="178" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start" transform="rotate(-90 242 178)" dominant-baseline="middle">CS</text>
+  </g>
+</svg>
