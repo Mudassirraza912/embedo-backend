@@ -13,19 +13,26 @@ export interface SufficiencyResult {
 export const GENERATION_HOLD_MESSAGE =
   'Your request looks good — architecture synthesis Work is in Progress and will available shortly';
 
-export const OFF_TOPIC_CLARIFICATION =
-  "Embedo.ai is focused specifically on embedded hardware architecture, so I'm not able to help with that. Describe an embedded product or concept you'd like to design — e.g. \"Battery-powered BLE asset tracker with GPS and accelerometer\" or \"Smart greenhouse environmental monitor with Wi-Fi and OLED display\" — and I'll get started.";
+export interface GibberishCheckOptions {
+  /**
+   * A reply inside an existing conversation rather than an opening brief. Short answers are normal
+   * there ("5V", "AC", "no", "2") — often a direct answer to a clarification question — so the
+   * minimum-length rule is dropped, and part numbers ("nRF52 + TPS62") skip the vowel-ratio rule.
+   */
+  conversational?: boolean;
+}
 
 /**
  * Heuristic detector for spam, repetitive keyboard mashing, and non-sensical strings
  * (e.g., "asdasdasdasdasd", "qwertyuiop", "aaaaaa", "111111").
  */
-export function isGibberishOrSpam(text: string): boolean {
+export function isGibberishOrSpam(text: string, options: GibberishCheckOptions = {}): boolean {
   if (!text || text.trim().length === 0) return true;
   const clean = text.trim().toLowerCase();
+  const conversational = options.conversational === true;
 
-  // 1. Minimum character length
-  if (clean.length < 3) return true;
+  // 1. Minimum character length for an opening brief; a reply only needs a letter or digit
+  if (conversational ? !/[a-z0-9]/.test(clean) : clean.length < 3) return true;
 
   // 2. Character repetition (e.g. "aaaaa", "asdasdasd")
   if (/(.)\1{4,}/.test(clean)) return true;
@@ -39,7 +46,7 @@ export function isGibberishOrSpam(text: string): boolean {
 
   // 4. Vowel ratio check for Latin strings longer than 6 characters
   const alphaChars = clean.replace(/[^a-z]/g, '');
-  if (alphaChars.length >= 6) {
+  if (alphaChars.length >= 6 && !(conversational && /\d/.test(clean))) {
     const vowels = alphaChars.replace(/[^aeiou]/g, '');
     const vowelRatio = vowels.length / alphaChars.length;
     // Unnatural vowel ratios (e.g. zero vowels "sdfghjkl" or all vowels "aaaaeeeee")
@@ -79,7 +86,9 @@ export function checkSufficiency(intent: StructuredIntent, rawInputText?: string
     return {
       sufficient: false,
       missingFields: ['deviceType', 'purpose', 'subsystems'],
-      clarificationQuestions: [OFF_TOPIC_CLARIFICATION],
+      // The caller generates a contextual AI response for this case; a fixed rejection string
+      // here used to be shown even when the conversation context made the request relevant.
+      clarificationQuestions: [],
       isOffTopic: true,
     };
   }
