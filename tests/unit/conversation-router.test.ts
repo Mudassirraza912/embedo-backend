@@ -100,11 +100,11 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
     expect(result.reply).toBe('');
   });
 
-  it('recognizes a short reply to the assistant\'s intake question even when it is labeled discuss', async () => {
+  it('recognizes a short reply to an intake question even when it is labeled discuss', async () => {
     const spy = jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(
       routerResult(JSON.stringify({
         mode: 'discuss',
-        projectTitle: 'Water Motor Controller',
+        projectTitle: 'Embedded Controller',
         isGibberish: false,
         isNewProject: false,
         reply: '',
@@ -113,26 +113,27 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
     );
 
     const result = await routeMessage(
-      'USB-C 5V',
+      '12 V DC',
       'session-1',
-      [{ role: 'assistant', content: 'How is this device powered: USB-C 5V, DC supply, mains, or battery?' }],
-      { projectTitle: 'Water Motor Controller', originalBrief: 'water motor controller' }
+      [{ role: 'assistant', content: 'What voltage does the actuator require?' }],
+      { projectTitle: 'Embedded Controller', originalBrief: 'embedded controller' }
     );
 
     expect(result.isAnswerToPendingQuestion).toBe(true);
     expect(resumePendingClarification(result, result.isAnswerToPendingQuestion).mode).toBe('generate');
-    expect(spy.mock.calls[0]?.[0].systemPrompt).toContain('USB-C 5V');
+    expect(spy.mock.calls[0]?.[0].systemPrompt).toContain('specific question in the immediately preceding assistant message');
+    expect(spy.mock.calls[0]?.[0].systemPrompt).not.toContain('water motor');
   });
 
   it('treats a concise product concept as an implicit new design request', async () => {
     const spy = jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(
-      routerResult(JSON.stringify({ mode: 'generate', projectTitle: 'Water Motor Controller', isGibberish: false, isNewProject: false, reply: '' }))
+      routerResult(JSON.stringify({ mode: 'generate', projectTitle: 'Environmental Sensor Node', isGibberish: false, isNewProject: false, reply: '' }))
     );
 
-    const result = await routeMessage('water motor controller');
+    const result = await routeMessage('remote environmental sensor node');
 
     expect(result.mode).toBe('generate');
-    expect(spy.mock.calls[0]?.[0].systemPrompt).toContain('concise product concept');
+    expect(spy.mock.calls[0]?.[0].systemPrompt).toContain('concise name or description of an embedded product');
   });
 
   it('retries once on unparseable JSON, still populating the new fields on success', async () => {
