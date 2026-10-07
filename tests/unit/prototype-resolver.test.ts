@@ -59,6 +59,12 @@ describe('prototype resolver contract', () => {
     expect(validateResolverOutput(output, byId).join(' ')).toContain(message);
   });
 
+  it('carries quick-refinement chips for the bench', () => {
+    const out = resolverOutputSchema.parse({ ...valid, suggestedRefinements: ['Add a microSD data logger', 'Swap to a STEMMA QT sensor'] });
+    expect(out.suggestedRefinements).toEqual(['Add a microSD data logger', 'Swap to a STEMMA QT sensor']);
+    expect(resolverOutputSchema.parse(valid).suggestedRefinements).toEqual([]);
+  });
+
   it('accepts a valid selection', () => {
     expect(validateResolverOutput(resolverOutputSchema.parse(valid), byId)).toEqual([]);
   });

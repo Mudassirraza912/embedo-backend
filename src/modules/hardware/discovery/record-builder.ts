@@ -153,34 +153,118 @@ export function buildRecord(b: BoardDef, governance: GovernanceOverrides = {}) {
 const PITCH = 22;
 const LEAD = 20;
 const MARGIN = 64;
-const PAL = { pcb: '#0A3A40', edge: '#075F69', silk: '#9CD7D5', text: '#EAF6F6', hole: '#06262B', qt: '#20E6E0' };
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const HEADER = 50; // title band at the top of the board
+const PAL = {
+  pcbTop: '#0D4950',
+  pcb: '#0A3A40',
+  edge: '#13737C',
+  band: '#082F34',
+  silk: '#9CD7D5',
+  pad: '#B9E3E1',
+  text: '#EAF6F6',
+  label: '#CFE9E8',
+  muted: '#7FB3B5',
+  hole: '#04191C',
+  qt: '#20E6E0',
+  power: '#F5B84B',
+  ground: '#8EA7AA',
+};
+const MONO = 'JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace';
+const SANS = 'Inter, Segoe UI, Arial, sans-serif';
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 /** Slots along an edge: each individual contact takes one pitch, a whole connector takes three. */
 const slotsOf = (c: ConnectorDef) => (c.mode === 'whole_connector' ? 3 : c.contacts.length);
+
+/** Approximate rendered width of text (px) — enough to size the board so nothing overlaps. */
+const textWidth = (text: string, size: number, mono: boolean) => text.length * size * (mono ? 0.62 : 0.56);
+
+/** Fits a title into `max` px, cutting at a word boundary. */
+function fitTitle(title: string, max: number, size: number): string {
+  if (textWidth(title, size, false) <= max) return title;
+  let out = '';
+  for (const w of title.split(/\s+/)) {
+    const next = out ? `${out} ${w}` : w;
+    if (textWidth(`${next}…`, size, false) > max) break;
+    out = next;
+  }
+  const cut = out || title.slice(0, Math.max(4, Math.floor(max / (size * 0.56)) - 1));
+  return `${cut.replace(/[\s\-–—,:;]+$/, '')}…`;
+}
 
 export function buildSvg(b: BoardDef): { svg: string; anchors: string[] } {
   const byEdge: Record<Edge, ConnectorDef[]> = { left: [], right: [], top: [], bottom: [] };
   for (const c of b.connectors) byEdge[c.edge].push(c);
   const edgeSlots = (e: Edge) => byEdge[e].reduce((n, c) => n + slotsOf(c), 0) + Math.max(byEdge[e].length - 1, 0);
-  const bw = Math.max(220, Math.max(edgeSlots('top'), edgeSlots('bottom')) * PITCH + 70);
-  const bh = Math.max(130, Math.max(edgeSlots('left'), edgeSlots('right')) * PITCH + 70);
+  const pinClass = new Map(b.pins.map((p) => [p.name, p.cls]));
+  const longest = (e: Edge) =>
+    Math.max(0, ...byEdge[e].flatMap((c) => (c.mode === 'whole_connector' ? ['STEMMA QT'] : c.contacts.map(([, pin]) => pin))).map((n) => n.length));
+
+  // Rotated labels of top/bottom pins grow into the board; side labels need horizontal room.
+  const topZone = byEdge.top.length > 0 ? Math.max(30, longest('top') * 8.5 * 0.62 + 30) : 0;
+  const bottomZone = byEdge.bottom.length > 0 ? Math.max(30, longest('bottom') * 8.5 * 0.62 + 30) : 0;
+  const sideLabel = (e: Edge) => (byEdge[e].length > 0 ? textWidth('M'.repeat(longest(e)), 8.5, true) + 30 : 14);
+  const subtitle = `${b.silicon} · ${b.vendor}`;
+
+  const sideSlots = Math.max(edgeSlots('left'), edgeSlots('right'));
+  const pinBlock = sideSlots * PITCH;
+  const bw = Math.round(
+    Math.max(
+      240,
+      Math.max(edgeSlots('top'), edgeSlots('bottom')) * PITCH + 60,
+      sideLabel('left') + sideLabel('right') + 90,
+      Math.min(textWidth(b.name, 13, false), 300) + 48,
+      textWidth(subtitle, 9.5, false) + 48
+    )
+  );
+  // Side pins sit below the title band (and below any top label zone).
+  const sideStart = topZone + HEADER + 8;
+  const bh = Math.round(Math.max(140, sideStart + pinBlock + 16 + bottomZone, topZone + HEADER + bottomZone + 40));
   const W = bw + 2 * MARGIN;
   const H = bh + 2 * MARGIN;
   const x0 = MARGIN;
   const y0 = MARGIN;
+  const title = fitTitle(b.name, bw - 32, 13);
+  const gid = `grad-${b.id}`;
 
   const out: string[] = [];
   const anchors: string[] = [];
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" data-hardware-entity-id="${b.id}" data-embedo-svg="perimeter-v1">`);
-  out.push(`  <g id="deco-${b.id}-board"><rect x="${x0}" y="${y0}" width="${bw}" height="${bh}" rx="10" fill="${PAL.pcb}" stroke="${PAL.edge}" stroke-width="2"/></g>`);
-  out.push(`  <g id="deco-${b.id}-title"><text x="${x0 + bw / 2}" y="${y0 + bh / 2 - 4}" fill="${PAL.text}" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="600" text-anchor="middle">${esc(b.name.length > 30 ? `${b.name.slice(0, 28)}…` : b.name)}</text>`);
-  out.push(`    <text x="${x0 + bw / 2}" y="${y0 + bh / 2 + 12}" fill="${PAL.silk}" font-family="Inter, Arial, sans-serif" font-size="9" text-anchor="middle">${esc(`${b.silicon} · ${b.vendor}`)}</text></g>`);
+  out.push(`  <title>${esc(b.name)}</title>`);
+  out.push(
+    `  <defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${PAL.pcbTop}"/><stop offset="1" stop-color="${PAL.pcb}"/></linearGradient></defs>`
+  );
+  out.push(`  <g id="deco-${b.id}-board">`);
+  out.push(`    <rect x="${x0}" y="${y0}" width="${bw}" height="${bh}" rx="12" fill="url(#${gid})" stroke="${PAL.edge}" stroke-width="1.5"/>`);
+  out.push(`    <rect x="${x0 + 4}" y="${y0 + 4}" width="${bw - 8}" height="${bh - 8}" rx="9" fill="none" stroke="${PAL.silk}" stroke-opacity="0.08"/>`);
+  for (const [hx, hy] of [
+    [x0 + 11, y0 + 11],
+    [x0 + bw - 11, y0 + 11],
+    [x0 + 11, y0 + bh - 11],
+    [x0 + bw - 11, y0 + bh - 11],
+  ]) {
+    out.push(`    <circle cx="${hx}" cy="${hy}" r="4" fill="${PAL.hole}" stroke="${PAL.silk}" stroke-opacity="0.35" stroke-width="1.2"/>`);
+  }
+  out.push('  </g>');
+
+  // Title band: name + silicon/vendor, never overlapping pins.
+  const bandY = y0 + topZone + 6;
+  out.push(`  <g id="deco-${b.id}-title">`);
+  out.push(`    <rect x="${x0 + 14}" y="${bandY}" width="${bw - 28}" height="${HEADER - 10}" rx="7" fill="${PAL.band}" fill-opacity="0.75"/>`);
+  out.push(
+    `    <text x="${x0 + bw / 2}" y="${bandY + 18}" fill="${PAL.text}" font-family="${SANS}" font-size="13" font-weight="600" text-anchor="middle">${esc(title)}</text>`
+  );
+  out.push(
+    `    <text x="${x0 + bw / 2}" y="${bandY + 32}" fill="${PAL.muted}" font-family="${SANS}" font-size="9.5" text-anchor="middle" letter-spacing="0.2">${esc(fitTitle(subtitle, bw - 40, 9.5))}</text>`
+  );
+  out.push('  </g>');
 
   for (const edge of ['left', 'right', 'top', 'bottom'] as Edge[]) {
     const horizontal = edge === 'top' || edge === 'bottom';
-    const length = horizontal ? bw : bh;
-    let cursor = (length - edgeSlots(edge) * PITCH) / 2 + PITCH / 2;
+    // Side pins are centred in the area below the title band; top/bottom pins across the width.
+    let cursor = horizontal
+      ? (bw - edgeSlots(edge) * PITCH) / 2 + PITCH / 2
+      : sideStart + ((sideSlots - edgeSlots(edge)) * PITCH) / 2 + PITCH / 2;
     for (const c of byEdge[edge]) {
       const cid = `${b.id}:${c.ref}`;
       out.push(`  <g id="blk-${b.id}-${c.ref}" class="embedo-connector" data-connector-id="${cid}">`);
@@ -192,37 +276,53 @@ export function buildSvg(b: BoardDef): { svg: string; anchors: string[] } {
         return { ex: x0 + offset, ey: y0 + bh, ax: x0 + offset, ay: y0 + bh + LEAD };
       };
       if (c.mode === 'whole_connector') {
+        // JST-SH socket: dark housing, four contacts, a cyan lead to the whole-connector anchor.
         const mid = cursor + PITCH;
         const p = at(mid);
-        const [w, h] = horizontal ? [52, 14] : [14, 52];
-        const rx = horizontal ? p.ex - w / 2 : edge === 'left' ? p.ex : p.ex - w;
-        const ry = horizontal ? (edge === 'top' ? p.ey : p.ey - h) : p.ey - h / 2;
-        out.push(`    <rect x="${rx}" y="${ry}" width="${w}" height="${h}" rx="2" fill="${PAL.hole}" stroke="${PAL.qt}" stroke-width="1.5"/>`);
-        out.push(`    <line x1="${p.ex}" y1="${p.ey}" x2="${p.ax}" y2="${p.ay}" stroke="${PAL.qt}" stroke-width="2"/>`);
+        const [w, h] = horizontal ? [50, 16] : [16, 50];
+        const rx = horizontal ? p.ex - w / 2 : edge === 'left' ? p.ex + 1 : p.ex - w - 1;
+        const ry = horizontal ? (edge === 'top' ? p.ey + 1 : p.ey - h - 1) : p.ey - h / 2;
+        out.push(`    <rect x="${rx}" y="${ry}" width="${w}" height="${h}" rx="3" fill="${PAL.hole}" stroke="${PAL.qt}" stroke-width="1.4"/>`);
+        for (let k = 0; k < 4; k++) {
+          const off = -15 + k * 10;
+          const cx = horizontal ? p.ex + off : rx + w / 2;
+          const cy = horizontal ? ry + h / 2 : p.ey + off;
+          out.push(`    <rect x="${cx - 2}" y="${cy - 2}" width="4" height="4" rx="1" fill="${PAL.qt}" fill-opacity="0.75"/>`);
+        }
+        out.push(`    <line x1="${p.ex}" y1="${p.ey}" x2="${p.ax}" y2="${p.ay}" stroke="${PAL.qt}" stroke-width="2" stroke-linecap="round"/>`);
         const id = anchorId(b, c.ref);
         anchors.push(id);
-        out.push(`    <circle id="${id}" class="embedo-anchor embedo-anchor-whole" cx="${p.ax}" cy="${p.ay}" r="5" fill="${PAL.qt}" data-connector-id="${cid}"/>`);
-        const lx = horizontal ? p.ex : edge === 'left' ? p.ex + 20 : p.ex - 20;
-        const ly = horizontal ? (edge === 'top' ? p.ey + 26 : p.ey - 20) : p.ey + 3;
-        out.push(`    <text x="${lx}" y="${ly}" fill="${PAL.qt}" font-family="monospace" font-size="8" text-anchor="${horizontal ? 'middle' : edge === 'left' ? 'start' : 'end'}">STEMMA QT</text>`);
+        out.push(
+          `    <circle id="${id}" class="embedo-anchor embedo-anchor-whole" cx="${p.ax}" cy="${p.ay}" r="5" fill="${PAL.qt}" stroke="${PAL.hole}" stroke-width="1.5" data-connector-id="${cid}"/>`
+        );
+        const lx = horizontal ? p.ex : edge === 'left' ? p.ex + 24 : p.ex - 24;
+        const ly = horizontal ? (edge === 'top' ? p.ey + 30 : p.ey - 24) : p.ey + 3;
+        out.push(
+          `    <text x="${lx}" y="${ly}" fill="${PAL.qt}" font-family="${MONO}" font-size="8" font-weight="600" letter-spacing="0.4" text-anchor="${horizontal ? 'middle' : edge === 'left' ? 'start' : 'end'}">STEMMA QT</text>`
+        );
         cursor += 3 * PITCH;
       } else {
         for (const [pad, pin] of c.contacts) {
           const p = at(cursor);
           const id = anchorId(b, c.ref, pad);
           anchors.push(id);
-          const [w, h] = horizontal ? [13, 18] : [18, 13];
-          const rx = horizontal ? p.ex - w / 2 : edge === 'left' ? p.ex : p.ex - w;
-          const ry = horizontal ? (edge === 'top' ? p.ey : p.ey - h) : p.ey - h / 2;
-          out.push(`    <rect x="${rx}" y="${ry}" width="${w}" height="${h}" rx="3" fill="${PAL.silk}"/>`);
-          out.push(`    <line x1="${p.ex}" y1="${p.ey}" x2="${p.ax}" y2="${p.ay}" stroke="${PAL.silk}" stroke-width="1.4"/>`);
+          const cls = pinClass.get(pin);
+          const tone = cls === 'power' ? PAL.power : cls === 'ground' ? PAL.ground : PAL.label;
+          // Plated pad with a drilled hole, then the lead out to the anchor.
+          const [w, h] = horizontal ? [12, 17] : [17, 12];
+          const rx = horizontal ? p.ex - w / 2 : edge === 'left' ? p.ex + 1 : p.ex - w - 1;
+          const ry = horizontal ? (edge === 'top' ? p.ey + 1 : p.ey - h - 1) : p.ey - h / 2;
+          out.push(`    <rect x="${rx}" y="${ry}" width="${w}" height="${h}" rx="3" fill="${PAL.pad}"/>`);
+          out.push(`    <circle cx="${rx + w / 2}" cy="${ry + h / 2}" r="2.2" fill="${PAL.hole}"/>`);
+          out.push(`    <line x1="${p.ex}" y1="${p.ey}" x2="${p.ax}" y2="${p.ay}" stroke="${PAL.silk}" stroke-width="1.4" stroke-linecap="round"/>`);
           out.push(
-            `    <circle id="${id}" class="embedo-anchor" cx="${p.ax}" cy="${p.ay}" r="3.6" fill="${PAL.silk}" data-connector-id="${cid}" data-contact-id="${cid}:${pad}" data-pin-id="${pinId(b, pin)}"/>`
+            `    <circle id="${id}" class="embedo-anchor" cx="${p.ax}" cy="${p.ay}" r="3.6" fill="${PAL.silk}" stroke="${PAL.hole}" stroke-width="1.2" data-connector-id="${cid}" data-contact-id="${cid}:${pad}" data-pin-id="${pinId(b, pin)}"/>`
           );
-          // Pin name inside the outline, reading away from its pad.
+          // Pin name inside the outline, reading away from its pad (power amber, ground grey).
+          const ly = edge === 'top' ? p.ey + 24 : p.ey - 24;
           const label = horizontal
-            ? `<text x="${p.ex}" y="${edge === 'top' ? p.ey + 24 : p.ey - 22}" fill="${PAL.text}" font-family="monospace" font-size="8" text-anchor="${edge === 'top' ? 'end' : 'start'}" transform="rotate(-90 ${p.ex} ${edge === 'top' ? p.ey + 24 : p.ey - 22})" dominant-baseline="middle">${esc(pin)}</text>`
-            : `<text x="${edge === 'left' ? p.ex + 22 : p.ex - 22}" y="${p.ey + 3}" fill="${PAL.text}" font-family="monospace" font-size="8" text-anchor="${edge === 'left' ? 'start' : 'end'}">${esc(pin)}</text>`;
+            ? `<text x="${p.ex}" y="${ly}" fill="${tone}" font-family="${MONO}" font-size="8.5" font-weight="500" text-anchor="${edge === 'top' ? 'end' : 'start'}" transform="rotate(-90 ${p.ex} ${ly})" dominant-baseline="middle">${esc(pin)}</text>`
+            : `<text x="${edge === 'left' ? p.ex + 24 : p.ex - 24}" y="${p.ey + 3}" fill="${tone}" font-family="${MONO}" font-size="8.5" font-weight="500" text-anchor="${edge === 'left' ? 'start' : 'end'}">${esc(pin)}</text>`;
           out.push(`    ${label}`);
           cursor += PITCH;
         }
@@ -234,4 +334,3 @@ export function buildSvg(b: BoardDef): { svg: string; anchors: string[] } {
   out.push('</svg>');
   return { svg: `${out.join('\n')}\n`, anchors };
 }
-
