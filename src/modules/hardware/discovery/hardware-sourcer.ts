@@ -190,9 +190,10 @@ export function pageMatchesProduct(text: string, product: { product_name: string
 const inferHostRequirement = (f: SourcedFacts): 'standalone' | 'host_required' | 'optional_host' => {
   if (f.is_controller) return 'standalone';
   if (f.host_requirement) return f.host_requirement;
+  // Status pins (CHG, DONE, PGOOD) do not make a charger host-powered; a bus (fuel gauge) does.
   const powerOnly = f.functional_categories.every((c) => c === 'Power');
-  const hasDataBus = f.interfaces.some((i) => /I2C|SPI|UART|STEMMA|QWIIC/i.test(i.type)) || f.pins.some((p) => p.signal_class === 'data');
-  return powerOnly && !hasDataBus ? 'optional_host' : 'host_required';
+  const hasBus = f.interfaces.some((i) => /I2C|SPI|UART|STEMMA|QWIIC/i.test(i.type));
+  return powerOnly && !hasBus ? 'optional_host' : 'host_required';
 };
 
 /** Cross-checks the model output against itself before anything is built. */

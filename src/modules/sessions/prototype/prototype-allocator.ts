@@ -532,13 +532,20 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       continue;
     }
     // Power modules (chargers, regulators, battery boards) run on their own supply; feeding them
-    // from the controller's rail would be wrong, so they are left for the user to connect.
-    if (board.record.interfaces.host_requirement !== 'host_required' && p.links.length === 0) {
+    // from the controller's rail would be wrong. Their status signals (if linked) still need a
+    // common ground with the controller.
+    if (board.record.interfaces.host_requirement !== 'host_required') {
+      const ground = board.record.pins.find((pin) => (pin.direction === 'ground' || pin.signal_class === 'ground') && board.isWireable(pin.pin_id));
+      if (p.links.length > 0 && ground && mcuGround) {
+        nets.add('GND', 'ground', claim(mcu, mcuGround, false));
+        nets.add('GND', 'ground', claim(board, ground, false));
+        require(p.instanceId, ground);
+      }
       results.push(
         result(
           'required_power_rail',
           'WARNING',
-          `${board.label} has its own supply and is not wired to ${mcu.label} here. Connect its input and output as its documentation describes.`,
+          `${board.label} has its own supply and is not powered from ${mcu.label}${p.links.length > 0 ? ' (only its signals and a common ground are wired)' : ''}. Connect its input and output as its documentation describes.`,
           [p.instanceId]
         )
       );

@@ -263,6 +263,22 @@ describe('hardware sourcing (vendor pages → private board + review queue)', ()
     expect(result.nets.flatMap((n) => n.members).some((m) => m.instanceId === 'power1')).toBe(false);
     expect(result.results.filter((r) => r.status === 'BLOCKER')).toEqual([]);
     expect(result.results.find((r) => r.instanceIds.includes('power1'))).toMatchObject({ status: 'WARNING', ruleType: 'required_power_rail' });
+
+    // With a status pin linked, the charger gets that signal and a common ground, never the 3V3 rail.
+    const withStatus = await entityFromFacts(
+      {
+        ...charger,
+        pins: [...charger.pins, { name: 'CHG', signal_class: 'data', direction: 'output', voltage_domain: null, functions: [] }],
+        connectors: [{ ref: 'JP1', kind: 'header', pins: ['5V', 'BAT', 'GND', 'CHG'] }],
+      },
+      'HWP-CHARGER2'
+    );
+    expect(withStatus.record.interfaces.host_requirement).toBe('optional_host');
+    const linked = allocatePins({ instanceId: 'mcu', entity: pico, links: [] }, [{ instanceId: 'power1', entity: withStatus, links: [{ interface: 'GPIO', pinName: 'CHG' }] }]);
+    expect(linked.nets.find((n) => n.name === 'POWER1_CHG')!.members.map((m) => m.pinId)).toContain('HWP-CHARGER2:CHG');
+    expect(linked.nets.find((n) => n.class === 'ground')!.members.map((m) => m.pinId)).toContain('HWP-CHARGER2:GND');
+    expect(linked.nets.filter((n) => n.class === 'power').flatMap((n) => n.members).some((m) => m.instanceId === 'power1')).toBe(false);
+    expect(linked.results.filter((r) => r.status === 'BLOCKER')).toEqual([]);
   });
 
   it('only trusts a fetched page that actually names the product', () => {
