@@ -10,6 +10,8 @@ export interface ContactRef {
   contact: HardwareContact;
   connector: HardwareConnector;
   anchorId: string | null;
+  /** Reached through a STEMMA QT / Qwiic to male-header cable on a whole connector. */
+  viaAdapter?: boolean;
 }
 
 /** Function tokens are instance-qualified in the library (I2C1_SDA, SPI0_RX, UART1_TX, PWM5_A, ADC0). */
@@ -65,13 +67,16 @@ export class Board {
   ) {
     this.pinsById = new Map(entity.record.pins.map((p) => [p.pin_id, p]));
     for (const connector of entity.record.connectors) {
+      // A whole connector (STEMMA QT / Qwiic) can still reach jumper wires through a socket-to-
+      // male-header cable; those contacts land on the connector's whole anchor.
+      const adapterAnchor = connector.connection_mode === 'whole_connector' && isStemmaConnector(connector) ? this.wholeAnchorOf(connector) : null;
       for (const contact of connector.contacts) {
-        const anchorId =
+        const direct =
           connector.connection_mode !== 'whole_connector' && contact.svg_anchor_id && this.hasAnchor(contact.svg_anchor_id)
             ? contact.svg_anchor_id
             : null;
         const list = this.contactsByPin.get(contact.pin_id) ?? [];
-        list.push({ contact, connector, anchorId });
+        list.push(direct ? { contact, connector, anchorId: direct } : { contact, connector, anchorId: adapterAnchor, viaAdapter: adapterAnchor !== null });
         this.contactsByPin.set(contact.pin_id, list);
       }
     }
@@ -107,6 +112,11 @@ export class Board {
     return this.wireableContacts(pinId).length > 0;
   }
 
+  /** On a header contact a jumper reaches directly (no adapter cable). */
+  isHeaderWireable(pinId: string): boolean {
+    return this.wireableContacts(pinId).some((c) => !c.viaAdapter);
+  }
+
   /**
    * One wireable contact for a pin. Prefers a connector already in use on this board (keeps a
    * module's wires on one header), then a contact not yet taken, then record order.
@@ -114,7 +124,9 @@ export class Board {
   pickContact(pinId: string, usedContacts: Set<string>, preferConnectors: Set<string> = new Set()): ContactRef | null {
     const candidates = this.wireableContacts(pinId);
     if (candidates.length === 0) return null;
-    const score = (c: ContactRef) => (preferConnectors.has(c.connector.connector_id) ? 0 : 2) + (usedContacts.has(c.contact.contact_id) ? 1 : 0);
+    // Header contacts first; an adapter cable only when the pin has no header contact at all.
+    const score = (c: ContactRef) =>
+      (c.viaAdapter ? 4 : 0) + (preferConnectors.has(c.connector.connector_id) ? 0 : 2) + (usedContacts.has(c.contact.contact_id) ? 1 : 0);
     return [...candidates].sort((a, b) => score(a) - score(b))[0]!;
   }
 

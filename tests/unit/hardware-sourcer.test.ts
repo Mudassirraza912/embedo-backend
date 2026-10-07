@@ -4,7 +4,7 @@ import { aiRouterService } from '../../src/modules/ai/ai-router.service.js';
 import { prepareBundle } from '../../src/modules/hardware/hardware-admin.service.js';
 import { hardwareLibraryService } from '../../src/modules/hardware/hardware-library.service.js';
 import { hardwareProposalService } from '../../src/modules/hardware/hardware-proposal.service.js';
-import { checkFacts, factsToBoard, sourceHardware, SourcedFacts } from '../../src/modules/hardware/discovery/hardware-sourcer.js';
+import { checkFacts, factsSchema, factsToBoard, sourceHardware, SourcedFacts } from '../../src/modules/hardware/discovery/hardware-sourcer.js';
 import { buildRecord, buildSvg } from '../../src/modules/hardware/discovery/record-builder.js';
 import { htmlToText, isAllowedVendorUrl } from '../../src/modules/hardware/discovery/vendor-page.js';
 import { allocatePins } from '../../src/modules/sessions/prototype/prototype-allocator.js';
@@ -158,6 +158,111 @@ describe('hardware sourcing (vendor pages → private board + review queue)', ()
     const result = await sourceHardware({ sessionId: 's', requestText: 'relay', library: [], catalogueLines: [], gaps: [], needController: false });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.sourced[0]).toMatchObject({ factsSource: 'model_knowledge', pageRead: false });
+  });
+
+  // --- shapes the model really returned on dev ---------------------------------------------------
+  const entityFromFacts = async (facts: SourcedFacts, id: string) => {
+    const board = factsToBoard(facts, id, `FAM-${id}`, null);
+    const { bundle, issues } = prepareBundle({ record: buildRecord(board), svg: buildSvg(board).svg });
+    if (!bundle) throw new Error(issues.map((i) => i.message).join('; '));
+    const base = await loadFixtureEntity(FIXTURE_IDS.bme280);
+    return {
+      ...base,
+      hardwareEntityId: id,
+      isController: isControllerRecord(bundle.record),
+      record: bundle.record,
+      svg: { hash: id, markup: bundle.svg, parsed: parseModuleSvg(bundle.svg) },
+    };
+  };
+
+  it('accepts bare pin names and free-form connector refs instead of rejecting the board', () => {
+    const parsed = factsSchema.parse({
+      ...relayFacts,
+      pins: ['SIG', 'VIN', 'GND', 'NO', 'COM', 'NC'],
+      connectors: [
+        { ref: 'Header-1 (bottom)', kind: 'header', pins: ['SIG', 'VIN', 'GND'] },
+        { ref: 'Header-1 (bottom)', kind: 'screw_terminal', pins: ['NO', 'COM', 'NC'] },
+      ],
+    });
+    expect(parsed.pins.find((p) => p.name === 'GND')).toMatchObject({ signal_class: 'ground', direction: 'ground' });
+    expect(parsed.pins.find((p) => p.name === 'VIN')).toMatchObject({ direction: 'power_in' });
+    const board = factsToBoard(parsed, 'HWP-REFS0001', 'FAM-X', null);
+    expect(board.connectors.map((c) => c.ref)).toEqual(['HEADER1B', 'HEADER2']);
+  });
+
+  it('wires a Qwiic-only module through a socket-to-header cable and says which cable to use', async () => {
+    const qwiicOnly: SourcedFacts = {
+      ...relayFacts,
+      product_name: 'Qwiic-only Pulse Sensor',
+      functional_categories: ['Sensing'],
+      required_host_interfaces: ['I2C'],
+      pins: [
+        { name: 'GND', signal_class: 'ground', direction: 'ground', voltage_domain: null, functions: [] },
+        { name: '3V3', signal_class: 'power', direction: 'power_in', voltage_domain: '3V3', functions: [] },
+        { name: 'SDA', signal_class: 'data', direction: 'bidirectional', voltage_domain: '3V3', functions: [] },
+        { name: 'SCL', signal_class: 'data', direction: 'input', voltage_domain: '3V3', functions: [] },
+      ],
+      connectors: [{ ref: 'QWIIC', kind: 'stemma_qt', pins: ['GND', '3V3', 'SDA', 'SCL'] }],
+      interfaces: [{ type: 'I2C', role: 'target', addresses: ['0x55'], sda: 'SDA', scl: 'SCL' }],
+    };
+    const sensor = await entityFromFacts(qwiicOnly, 'HWP-QWIIC001');
+    const pico = await loadFixtureEntity(FIXTURE_IDS.pico);
+    const result = allocatePins({ instanceId: 'mcu', entity: pico, links: [] }, [{ instanceId: 'ppg1', entity: sensor, links: [{ interface: 'I2C' }] }]);
+    expect(result.nets.find((n) => n.name === 'I2C0_SDA')!.members.map((m) => m.pinId).sort()).toEqual(['HW-FX01:GP4', 'HWP-QWIIC001:SDA']);
+    expect(result.nets.find((n) => n.class === 'ground')!.members.map((m) => m.pinId)).toContain('HWP-QWIIC001:GND');
+    const adapter = result.results.find((r) => r.ruleType === 'connector_family_compatibility' && r.status === 'WARNING');
+    expect(adapter?.suggestedFix).toContain('male-header');
+    expect(result.results.filter((r) => r.status === 'BLOCKER')).toEqual([]);
+  });
+
+  it('finds a controller bus by its silkscreened SDA/SCL names when the record has no function tokens', async () => {
+    const feather: SourcedFacts = {
+      ...relayFacts,
+      product_name: 'Feather nRF52840 (no tokens)',
+      is_controller: true,
+      functional_categories: ['Processing', 'Connectivity'],
+      prototype_role: 'Main Controller',
+      pins: [
+        { name: '3V', signal_class: 'power', direction: 'power_out', voltage_domain: '3V3', functions: [] },
+        { name: 'GND', signal_class: 'ground', direction: 'ground', voltage_domain: null, functions: [] },
+        { name: 'SDA', signal_class: 'data', direction: 'bidirectional', voltage_domain: '3V3', functions: [] },
+        { name: 'SCL', signal_class: 'data', direction: 'bidirectional', voltage_domain: '3V3', functions: [] },
+        { name: 'D5', signal_class: 'data', direction: 'bidirectional', voltage_domain: '3V3', functions: [] },
+      ],
+      connectors: [{ ref: 'JP1', kind: 'header', edge: 'left', pins: ['3V', 'GND', 'SDA', 'SCL', 'D5'] }],
+      interfaces: [{ type: 'I2C', role: 'controller', addresses: [] }],
+    };
+    const mcu = await entityFromFacts(feather, 'HWP-FEATHER1');
+    expect(mcu.isController).toBe(true);
+    const bme = await loadFixtureEntity(FIXTURE_IDS.bme280);
+    const result = allocatePins({ instanceId: 'mcu', entity: mcu, links: [] }, [{ instanceId: 'bme1', entity: bme, links: [{ interface: 'I2C' }] }]);
+    const sda = result.nets.find((n) => n.class === 'i2c' && n.name.endsWith('SDA'))!;
+    expect(sda.members.map((m) => m.pinId).sort()).toEqual(['HW-FX03:SDI', 'HWP-FEATHER1:SDA']);
+  });
+
+  it('leaves a self-powered module (charger) on its own supply instead of the controller rail', async () => {
+    const charger: SourcedFacts = {
+      ...relayFacts,
+      product_name: 'Micro Lipo Charger',
+      functional_categories: ['Power'],
+      prototype_role: 'LiPo charging',
+      host_requirement: 'optional_host',
+      supply_voltage_min_v: 4.8,
+      supply_voltage_max_v: 5.2,
+      required_host_interfaces: [],
+      pins: [
+        { name: '5V', signal_class: 'power', direction: 'power_in', voltage_domain: '5V', functions: [] },
+        { name: 'BAT', signal_class: 'power', direction: 'power_out', voltage_domain: null, functions: [] },
+        { name: 'GND', signal_class: 'ground', direction: 'ground', voltage_domain: null, functions: [] },
+      ],
+      connectors: [{ ref: 'JP1', kind: 'header', pins: ['5V', 'BAT', 'GND'] }],
+    };
+    const chg = await entityFromFacts(charger, 'HWP-CHARGER1');
+    const pico = await loadFixtureEntity(FIXTURE_IDS.pico);
+    const result = allocatePins({ instanceId: 'mcu', entity: pico, links: [] }, [{ instanceId: 'power1', entity: chg, links: [] }]);
+    expect(result.nets.flatMap((n) => n.members).some((m) => m.instanceId === 'power1')).toBe(false);
+    expect(result.results.filter((r) => r.status === 'BLOCKER')).toEqual([]);
+    expect(result.results.find((r) => r.instanceIds.includes('power1'))).toMatchObject({ status: 'WARNING', ruleType: 'required_power_rail' });
   });
 
   it('does nothing for a non-prototype request', async () => {

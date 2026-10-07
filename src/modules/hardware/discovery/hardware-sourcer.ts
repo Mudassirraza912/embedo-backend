@@ -43,7 +43,22 @@ const proposalOutputSchema = z.object({
 
 const pinNameRe = /^[A-Za-z0-9][A-Za-z0-9_.+\-/]{0,23}$/;
 
-const factsSchema = z.object({
+/** Models sometimes list a pin as a bare name; classify it from the name instead of rejecting the board. */
+const pinFromName = (raw: unknown): unknown => {
+  if (typeof raw !== 'string') return raw;
+  const name = raw.trim();
+  const upper = name.toUpperCase();
+  if (/^(GND|AGND|DGND|VSS)$/.test(upper)) return { name, signal_class: 'ground', direction: 'ground', voltage_domain: null, functions: [] };
+  if (/^(3V3|3\.3V|3V|3VO|5V|VIN|VCC|VDD|VBUS|VUSB|VBAT|BAT|USB|VSYS)$/.test(upper)) {
+    const out = /^(3VO|3V3|3\.3V|3V)$/.test(upper);
+    return { name, signal_class: 'power', direction: out ? 'power_out' : 'power_in', voltage_domain: out ? '3V3' : null, functions: [] };
+  }
+  if (/^(RST|RESET|EN|BOOT|NRST)$/.test(upper)) return { name, signal_class: 'control', direction: 'input', voltage_domain: null, functions: [] };
+  if (/^A\d+$/.test(upper)) return { name, signal_class: 'analog', direction: 'bidirectional', voltage_domain: null, functions: [] };
+  return { name, signal_class: 'data', direction: 'bidirectional', voltage_domain: null, functions: [] };
+};
+
+export const factsSchema = z.object({
   product_name: z.string().min(2).max(160),
   vendor: z.string().min(2).max(80),
   vendor_sku: z.string().max(60).nullable().optional(),
@@ -57,22 +72,25 @@ const factsSchema = z.object({
   logic_level_summary: z.string().max(80).nullable().optional(),
   power_source_types: z.array(z.string().max(40)).max(6).default([]),
   required_host_interfaces: z.array(z.string().max(40)).max(4).default([]),
+  /** Power modules (chargers, regulators, battery packs) are not driven by the controller. */
+  host_requirement: z.enum(['standalone', 'host_required', 'optional_host']).optional(),
   pins: z
     .array(
-      z.object({
+      z.preprocess(pinFromName, z.object({
         name: z.string().regex(pinNameRe, 'pin names are short silkscreen labels'),
         signal_class: z.enum(SIGNAL_CLASSES),
         direction: z.enum(DIRECTIONS),
         voltage_domain: z.string().max(12).nullable().optional(),
         functions: z.array(z.string().max(24)).max(12).default([]),
-      })
+      }))
     )
     .min(2)
     .max(80),
   connectors: z
     .array(
       z.object({
-        ref: z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,9}$/),
+        // Any label; normalised to a short refdes when the board is built.
+        ref: z.string().min(1).max(32),
         kind: z.enum(['header', 'stemma_qt', 'screw_terminal', 'other']),
         edge: z.enum(['left', 'right', 'top', 'bottom']).optional(),
         pins: z.array(z.string()).min(1).max(48),
@@ -129,11 +147,13 @@ RULES
 4. signal_class: power | ground | data | control | debug | analog | other. direction: input | output | bidirectional | power_in | power_out | ground. A module's supply input is power_in; a regulator output (e.g. 3Vo) is power_out; relay contacts are "other"/"bidirectional".
 5. voltage_domain: "3V3", "5V", "VIN" (follows the supply) or null. Never guess.
 6. For a controller (is_controller true), give each GPIO pin its function tokens in this exact format: GPIOn, I2C0_SDA, I2C0_SCL, SPI0_SCK, SPI0_TX (MOSI), SPI0_RX (MISO), SPI0_CSN, UART0_TX, UART0_RX, PWM3_A, ADC1. Never list boot/strapping/USB/flash pins as plain GPIO — give them a token such as STRAPPING, BOOT or USB_DP.
-7. interfaces: list each bus the board offers with the pin NAMES it uses (sda/scl, sck/mosi/miso/cs, tx/rx) and I2C addresses ("0x76"). A module's I2C role is "target"; a controller's is "controller".
+7. interfaces: list each bus the board offers with the pin NAMES it uses (sda/scl, sck/mosi/miso/cs, tx/rx) and I2C addresses ("0x76"). A module's I2C role is "target"; a controller's is "controller". For a controller ALWAYS name the default (silkscreened) pins of its I2C, SPI and UART.
+10. host_requirement: "standalone" for controllers; "host_required" for sensors, displays, drivers and anything the controller talks to; "optional_host" for power modules (chargers, regulators, battery boards) that work on their own.
+11. Return pins[] as objects, never as bare strings.
 8. functional_categories from: ${FUNCTIONAL_CATEGORIES.join(', ')}.
 9. Unknown → null. Volts as numbers.
 
-Return ONLY the JSON object with keys: product_name, vendor, vendor_sku, is_controller, functional_categories, prototype_role, main_silicon, secondary_ics, supply_voltage_min_v, supply_voltage_max_v, logic_level_summary, power_source_types, required_host_interfaces, pins[], connectors[], interfaces[], required_accessories, notes, facts_source.`;
+Return ONLY the JSON object with keys: product_name, vendor, vendor_sku, is_controller, functional_categories, prototype_role, main_silicon, secondary_ics, supply_voltage_min_v, supply_voltage_max_v, logic_level_summary, power_source_types, required_host_interfaces, host_requirement, pins[], connectors[], interfaces[], required_accessories, notes, facts_source.`;
 
 const safeParseJson = (text: string): unknown => {
   try {
@@ -186,17 +206,35 @@ export function factsToBoard(f: SourcedFacts, id: string, family: string, source
   const defaultEdges: Edge[] = f.is_controller ? ['left', 'right', 'bottom', 'top'] : ['bottom', 'left', 'right', 'top'];
   const pins: PinDef[] = f.pins.map((p) => ({ name: p.name, cls: p.signal_class, dir: p.direction, domain: p.voltage_domain ?? null, functions: p.functions }));
   let headerIndex = 0;
+  const usedRefs = new Set<string>();
+  const refOf = (raw: string, kind: string) => {
+    let base = raw.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || (kind === 'stemma_qt' ? 'QT' : 'J');
+    if (!/^[A-Z]/.test(base)) base = `J${base}`.slice(0, 8);
+    let ref = base;
+    for (let n = 2; usedRefs.has(ref); n++) ref = `${base.slice(0, 6)}${n}`;
+    usedRefs.add(ref);
+    return ref;
+  };
   const connectors: ConnectorDef[] = f.connectors.map((c) => {
     const edge = c.edge ?? (c.kind === 'stemma_qt' ? (headerIndex % 2 === 0 ? 'left' : 'right') : defaultEdges[Math.min(headerIndex++, defaultEdges.length - 1)]!);
     const stemma = c.kind === 'stemma_qt';
     return {
-      ref: c.ref.toUpperCase(),
+      ref: refOf(c.ref, c.kind),
       type: stemma ? 'stemma_qt_jst_sh_4pin_right_angle' : c.kind === 'screw_terminal' ? `screw_terminal_1x${c.pins.length}` : `pin_header_1x${c.pins.length}_2.54mm`,
       mode: stemma ? 'whole_connector' : 'individual_contacts',
       edge,
       contacts: c.pins.map((p, i) => [String(i + 1), pinName(p)] as [string, string]),
     };
   });
+  // A controller's buses fall back to its silkscreened pin names when the extraction left them out.
+  const byName = (...names: string[]) => names.map((n) => canonical.get(n)).find(Boolean) ?? null;
+  const fallbackPins: Record<string, Record<string, string | null>> = f.is_controller
+    ? {
+        I2C: { sda: byName('SDA', 'SDA0', 'SDA1'), scl: byName('SCL', 'SCL0', 'SCL1') },
+        SPI: { sck: byName('SCK', 'SCLK'), mosi: byName('MOSI', 'MO', 'COPI'), miso: byName('MISO', 'MI', 'CIPO') },
+        UART: { tx: byName('TX', 'TXD', 'TX0', 'D1'), rx: byName('RX', 'RXD', 'RX0', 'D0') },
+      }
+    : {};
   const interfaces = f.interfaces.map((i) => {
     const details: Record<string, unknown> = {};
     if (i.role) details['role'] = i.role;
@@ -210,7 +248,11 @@ export function factsToBoard(f: SourcedFacts, id: string, family: string, source
       ['tx', 'tx_pin_id'],
       ['rx', 'rx_pin_id'],
     ];
-    for (const [from, to] of map) if (typeof i[from] === 'string' && i[from]) details[to] = pinName(i[from] as string);
+    const fallback = fallbackPins[i.type.toUpperCase()] ?? {};
+    for (const [from, to] of map) {
+      const value = (typeof i[from] === 'string' && i[from] ? (i[from] as string) : null) ?? fallback[from as string] ?? null;
+      if (value) details[to] = pinName(value);
+    }
     if (i.addresses.length > 0) details['default_address'] = i.addresses[0];
     return { type: i.type.toUpperCase().replace('QWIIC', 'STEMMA QT'), addresses: i.addresses, details };
   });
@@ -225,7 +267,7 @@ export function factsToBoard(f: SourcedFacts, id: string, family: string, source
     role: f.is_controller ? 'Main Controller' : f.prototype_role,
     silicon: f.main_silicon ?? f.product_name,
     secondary: f.secondary_ics,
-    hostRequirement: f.is_controller ? 'standalone' : 'host_required',
+    hostRequirement: f.is_controller ? 'standalone' : (f.host_requirement ?? 'host_required'),
     requiredHostInterfaces: f.required_host_interfaces,
     supply: [f.supply_voltage_min_v ?? null, f.supply_voltage_max_v ?? null],
     logic: f.logic_level_summary ?? 'not specified',
@@ -251,6 +293,8 @@ export interface SourcingInput {
   catalogueLines: string[];
   gaps: Array<{ category: string; need: string; suggestion: string }>;
   needController: boolean;
+  /** Products already sourced in this run; never proposed again. */
+  exclude?: string[];
 }
 
 export interface SourcedBoard {
@@ -283,6 +327,7 @@ async function proposeProducts(input: SourcingInput) {
     `NEEDS:\n${needs.length > 0 ? needs.map((n) => `- ${n}`).join('\n') : '- everything the request needs (controller and modules)'}`,
     '',
     `REQUEST:\n${input.requestText.slice(0, 3000)}`,
+    input.exclude && input.exclude.length > 0 ? `\nALREADY SOURCED (do not propose again): ${input.exclude.join('; ')}` : '',
   ].join('\n');
   const result = await aiRouterService.executeTask({
     taskCase: SOURCING_TASK_CASE,

@@ -259,6 +259,7 @@ export async function resolvePrototype(input: ResolverInput): Promise<ResolverRe
     `LIBRARY (${input.catalogue.length} boards):`,
     ...input.catalogue.map(catalogueLine),
     '',
+    input.catalogue.some((e) => e.isController) ? null : 'NOTE: LIBRARY has no controller board. Return controller null, no modules, and a Processing gap for the controller.\n',
     input.current ? `CURRENT DESIGN:\n${describeCurrentDesign(input.current)}\n` : null,
     `REQUEST:\n${input.requestText}`,
   ]
@@ -280,10 +281,18 @@ export async function resolvePrototype(input: ResolverInput): Promise<ResolverRe
       },
     });
 
+  const hasController = input.catalogue.some((e) => e.isController);
   const evaluate = (content: string): { output?: ResolverOutput; problems: string[] } => {
     const parsed = resolverOutputSchema.safeParse(safeParseJson(content));
     if (!parsed.success) {
       return { problems: parsed.error.issues.slice(0, 8).map((i) => `${i.path.join('.') || 'root'}: ${i.message}`) };
+    }
+    // Nothing can be built without a controller: report it as a gap rather than failing the run.
+    if (!hasController && !parsed.data.controller && parsed.data.modules.length > 0) {
+      parsed.data.modules = [];
+      if (!parsed.data.gaps.some((g) => /controller|processing|mcu/i.test(`${g.category} ${g.need}`))) {
+        parsed.data.gaps.unshift({ category: 'Processing', need: 'a controller board', suggestion: '' });
+      }
     }
     const problems = validateResolverOutput(parsed.data, byId);
     return problems.length === 0 ? { output: parsed.data, problems } : { problems };

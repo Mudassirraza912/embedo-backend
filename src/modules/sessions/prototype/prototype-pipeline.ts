@@ -134,36 +134,48 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
 
     // Without any controller in the library the resolver cannot build anything; go straight to sourcing.
     let output = library.some((e) => e.isController) ? await resolve() : null;
-    let sourcing: SourcingResult | null = null;
+    // Declared via a cast so the closures and loop below see the full type, not the initial null.
+    let sourcing = null as SourcingResult | null;
 
     // Library gaps are filled from vendor product pages: the boards found are private to this
     // project (drawn as unverified) and queued for admin review before anyone else can use them.
-    const needsSourcing = !output || (output.isPrototypeRequest && (output.gaps.length > 0 || !output.controller));
-    if (needsSourcing && env.PROTOTYPE_SOURCING_ENABLED) {
+    // Up to two rounds: the second one fills gaps the first resolve still reported.
+    const MAX_SOURCING_ROUNDS = 2;
+    for (let round = 1; round <= MAX_SOURCING_ROUNDS && env.PROTOTYPE_SOURCING_ENABLED; round++) {
+      const needsSourcing = !output || (output.isPrototypeRequest && (output.gaps.length > 0 || !output.controller));
+      if (!needsSourcing) break;
       recordStep('checking_library', 'Checking library coverage', 'running', 'Searching vendor sites for modules the library is missing');
-      emitSessionEvent.stageUpdate(sessionId, { step: 3, label: 'Sourcing missing modules from vendor sites', progress: 45 });
+      emitSessionEvent.stageUpdate(sessionId, { step: 3, label: 'Sourcing missing modules from vendor sites', progress: round === 1 ? 45 : 60 });
       emitSessionEvent.aiCallStarted(sessionId, SOURCING_TASK_CASE);
+      let roundResult: SourcingResult | null = null;
       try {
-        sourcing = await sourceHardware({
+        roundResult = await sourceHardware({
           sessionId,
           requestText,
           library,
           catalogueLines: library.slice(0, 80).map(catalogueLine),
           gaps: output?.gaps ?? [],
           needController: !output?.controller,
+          exclude: sourcing?.sourced.map((b) => `${b.productName} (${b.vendor})`) ?? [],
         });
       } catch (err) {
-        log.warn({ err }, 'Hardware sourcing failed; continuing with the library only');
+        log.warn({ err, round }, 'Hardware sourcing failed; continuing with the library only');
       }
-      emitSessionEvent.aiCallCompleted(sessionId, { taskCase: SOURCING_TASK_CASE, schemaPass: Boolean(sourcing) });
-      if (sourcing && sourcing.entities.length > 0) {
-        library = [...library, ...sourcing.entities.filter((e) => !library.some((l) => l.hardwareEntityId === e.hardwareEntityId))];
-        output = await resolve();
-      }
-      log.info(
-        { sourced: sourcing?.sourced.map((b) => `${b.hardwareEntityId}:${b.factsSource}`), failures: sourcing?.failures },
-        'Hardware sourcing finished'
-      );
+      emitSessionEvent.aiCallCompleted(sessionId, { taskCase: SOURCING_TASK_CASE, schemaPass: Boolean(roundResult) });
+      if (!roundResult) break;
+      const previous: SourcingResult | null = sourcing;
+      sourcing = previous
+        ? {
+            ...previous,
+            sourced: [...previous.sourced, ...roundResult.sourced],
+            entities: [...previous.entities, ...roundResult.entities],
+            failures: [...previous.failures, ...roundResult.failures],
+          }
+        : roundResult;
+      log.info({ round, sourced: roundResult.sourced.map((b) => `${b.hardwareEntityId}:${b.factsSource}`), failures: roundResult.failures }, 'Hardware sourcing round finished');
+      if (!roundResult.isPrototypeRequest || roundResult.entities.length === 0) break;
+      library = [...library, ...roundResult.entities.filter((e) => !library.some((l) => l.hardwareEntityId === e.hardwareEntityId))];
+      output = await resolve();
     }
 
     if (!output) {
