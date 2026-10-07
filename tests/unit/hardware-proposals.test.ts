@@ -27,6 +27,19 @@ describe('hardware review queue (scraped hardware needs admin acceptance)', () =
     expect(save).not.toHaveBeenCalled();
   });
 
+  it('refreshes the open proposal for a board instead of adding a duplicate row', async () => {
+    jest.spyOn(prisma.hardwareChangeProposal, 'findFirst')
+      .mockResolvedValueOnce(null) // no identical content
+      .mockResolvedValueOnce({ proposalId: 'open-1' } as never); // but an open proposal for this board
+    jest.spyOn(prisma.hardwareEntity, 'findUnique').mockResolvedValue(null);
+    const create = jest.spyOn(prisma.hardwareChangeProposal, 'create');
+    const update = jest.spyOn(prisma.hardwareChangeProposal, 'update').mockResolvedValue({ proposalId: 'open-1', status: 'pending' } as never);
+    const result = await hardwareProposalService.submitProposal(fixtureUpload(FIXTURE_IDS.gps), { sourceType: 'vendor_agent', proposedBy: 'vendor-agent' });
+    expect(create).not.toHaveBeenCalled();
+    expect(update.mock.calls[0]![0].where).toEqual({ proposalId: 'open-1' });
+    expect(result).toMatchObject({ proposalId: 'open-1', duplicate: true });
+  });
+
   it('classifies a changed pin table as engineering-sensitive and an invalid scrape as needs_review', async () => {
     const upload = fixtureUpload(FIXTURE_IDS.gps);
     const record = upload.record as Record<string, unknown>;
