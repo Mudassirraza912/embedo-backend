@@ -5,6 +5,7 @@ import { validate } from '../../common/middlewares/validate.middleware.js';
 import {
   ingestUrlQuerySchema,
   ingestUrlBodySchema,
+  ingestJsonBodySchema,
   ingestBatchSchema,
   listComponentsQuerySchema,
   userIdParamSchema,
@@ -22,6 +23,7 @@ router.use(requireAuth, requireRole('admin'));
 
 router.get('/components/ingest/stream', validate({ query: ingestUrlQuerySchema }), adminController.ingestStream);
 router.post('/components/ingest', validate({ body: ingestUrlBodySchema }), adminController.ingestDirect);
+router.post('/components/ingest/json', validate({ body: ingestJsonBodySchema }), adminController.ingestJson);
 router.post('/components/ingest/batch', validate({ body: ingestBatchSchema }), adminController.ingestBatch);
 router.get(
   '/components/:partNumber/revisions',
