@@ -180,7 +180,6 @@ export async function runGenerationPipeline(
       isOffTopic?: unknown;
     };
     const answeringClarification =
-      refiningExistingArchitecture &&
       latestAssistantMetadata.isOffTopic !== true &&
       Array.isArray(latestAssistantMetadata.clarificationQuestions) &&
       latestAssistantMetadata.clarificationQuestions.length > 0;

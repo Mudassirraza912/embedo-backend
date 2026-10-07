@@ -40,6 +40,7 @@ const routerResultSchema = z.object({
     .nullable()
     .optional()
     .transform((v) => (v ?? '').trim().slice(0, 500)),
+  isAnswerToPendingQuestion: z.boolean().nullable().optional().transform((v) => v ?? false),
 });
 
 export interface RouteMessageResult {
@@ -55,6 +56,8 @@ export interface RouteMessageResult {
   isNewProject: boolean;
   /** AI-written reply for off_topic; empty for generate/discuss. */
   reply: string;
+  /** Whether the latest turn answers a requirement question asked by the assistant. */
+  isAnswerToPendingQuestion: boolean;
 }
 
 /** A pending intake question owns the next coherent user turn; the pipeline rechecks its meaning. */
@@ -65,13 +68,15 @@ export function resumePendingClarification(result: RouteMessageResult, isAwaitin
 const FALLBACK_TITLE = 'New project';
 
 const ROUTER_SYSTEM_PROMPT = `Classify the latest message for Embedo.ai (embedded hardware architecture: block diagrams, power trees, protocol maps, BOMs). Return strict JSON, all keys always present:
-{"mode":"generate"|"discuss"|"off_topic","projectTitle":string,"isGibberish":boolean,"isNewProject":boolean,"reply":string}
+{"mode":"generate"|"discuss"|"off_topic","projectTitle":string,"isGibberish":boolean,"isNewProject":boolean,"reply":string,"isAnswerToPendingQuestion":boolean}
 
 - Read the recent conversation as context, then classify the LATEST user message by what it means in that context. Short phrases, follow-ups, pronouns, and suggestion-chip text may rely on earlier turns; resolve their subject from the conversation instead of judging the words in isolation.
 - Ignore casual profanity or insults aimed at the product or assistant when interpreting intent. They do not make a hardware request off-topic, gibberish, or a new project. Respond calmly and do not repeat the abusive wording in the reply or project title.
-- generate: the latest message asks to create, revise, or apply a hardware design. A direct imperative such as "Implement X" is an instruction to change the current architecture; route it to generate, not to a how-to answer. This also applies when X is a firmware/security feature represented through hardware capabilities or architecture constraints.
+- generate: the latest message asks to create, revise, or apply a hardware design. A concise product concept (for example, "water motor controller") is an implicit request to start designing it, even without a verb. A direct imperative such as "Implement X" is an instruction to change the current architecture; route it to generate, not to a how-to answer. This also applies when X is a firmware/security feature represented through hardware capabilities or architecture constraints.
 - discuss: asks a question, seeks explanation/advice, or acknowledges something without requesting a design change. In an existing project, merely repeating its device name or expressing sentiment about it is not a new build request; choose discuss unless the user asks to create or change the design. If a short message could plausibly continue the hardware conversation but the intended action is unclear, choose discuss so the copilot can ask a contextual clarification.
 - off_topic: choose this only when the latest message is clearly unrelated to the hardware conversation, or is unreadable noise. Do not classify an underspecified or unfamiliar hardware-related follow-up as off_topic.
+
+isAnswerToPendingQuestion: true only when the latest user message meaningfully answers the specific question in the immediately preceding assistant message (for example, the assistant asks how a water motor controller is powered and the user says "USB-C 5V"). This is independent of mode: use it to resume design intake even when the answer is too short to look like a standalone build request. It is false for a new question, an unrelated message, a generic offer to generate, or when the previous assistant message did not ask for a requirement.
 
 Distinguish command from question by the user's wording: "Implement secure boot" asks you to update the design; "How do I implement secure boot?" asks for an explanation. Do not answer a direct design command with procedural steps.
 
@@ -127,6 +132,7 @@ export async function routeMessage(
       isGibberish: false,
       isNewProject: false,
       reply: '',
+      isAnswerToPendingQuestion: false,
     };
   }
 
@@ -175,7 +181,7 @@ export async function routeMessage(
       // Let the contextual copilot resolve unclear intent rather than show a canned rejection or
       // launch an expensive design run from an invalid classifier response.
       logger.warn({ sessionId, raw: result.content.slice(0, 200) }, 'Conversation router unparseable twice — defaulting to discuss');
-      return { mode: 'discuss', projectTitle: '', isGibberish: false, isNewProject: false, reply: '' };
+      return { mode: 'discuss', projectTitle: '', isGibberish: false, isNewProject: false, reply: '', isAnswerToPendingQuestion: false };
     }
 
     if (isDirectDesignChange) {
@@ -186,6 +192,7 @@ export async function routeMessage(
         isGibberish: false,
         isNewProject: false,
         reply: '',
+        isAnswerToPendingQuestion: false,
       };
     }
 
@@ -193,7 +200,14 @@ export async function routeMessage(
     // turn to the conversational copilot, which receives the same history and can clarify naturally.
     if (parsed.data.mode === 'off_topic' && !parsed.data.reply) {
       logger.warn({ sessionId }, 'Conversation router omitted its off-topic reply — routing to discuss');
-      return { mode: 'discuss', projectTitle: parsed.data.projectTitle, isGibberish: false, isNewProject: false, reply: '' };
+      return {
+        mode: 'discuss',
+        projectTitle: parsed.data.projectTitle,
+        isGibberish: false,
+        isNewProject: false,
+        reply: '',
+        isAnswerToPendingQuestion: parsed.data.isAnswerToPendingQuestion,
+      };
     }
 
     // "New project" only makes sense for a build request inside an existing conversation, and an
@@ -210,12 +224,13 @@ export async function routeMessage(
       isGibberish: parsed.data.isGibberish,
       isNewProject,
       reply: parsed.data.reply,
+      isAnswerToPendingQuestion: parsed.data.isAnswerToPendingQuestion,
     };
   } catch (err) {
     // Hard provider failure. Generation has its own gates (moderation, sufficiency) and surfaces
     // a retryable error, so this keeps the previous behaviour rather than silently answering.
     logger.error({ sessionId, err }, 'Conversation router failed — defaulting to generate');
-    return { mode: 'generate', projectTitle: '', isGibberish: false, isNewProject: false, reply: '' };
+    return { mode: 'generate', projectTitle: '', isGibberish: false, isNewProject: false, reply: '', isAnswerToPendingQuestion: false };
   }
 }
 

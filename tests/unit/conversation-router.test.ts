@@ -100,6 +100,40 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
     expect(result.reply).toBe('');
   });
 
+  it('recognizes a short reply to the assistant\'s intake question even when it is labeled discuss', async () => {
+    jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(
+      routerResult(JSON.stringify({
+        mode: 'discuss',
+        projectTitle: 'Water Motor Controller',
+        isGibberish: false,
+        isNewProject: false,
+        reply: '',
+        isAnswerToPendingQuestion: true,
+      }))
+    );
+
+    const result = await routeMessage(
+      'USB-C 5V',
+      'session-1',
+      [{ role: 'assistant', content: 'How is this device powered: USB-C 5V, DC supply, mains, or battery?' }],
+      { projectTitle: 'Water Motor Controller', originalBrief: 'water motor controller' }
+    );
+
+    expect(result.isAnswerToPendingQuestion).toBe(true);
+    expect(resumePendingClarification(result, result.isAnswerToPendingQuestion).mode).toBe('generate');
+  });
+
+  it('treats a concise product concept as an implicit new design request', async () => {
+    const spy = jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(
+      routerResult(JSON.stringify({ mode: 'generate', projectTitle: 'Water Motor Controller', isGibberish: false, isNewProject: false, reply: '' }))
+    );
+
+    const result = await routeMessage('water motor controller');
+
+    expect(result.mode).toBe('generate');
+    expect(spy.mock.calls[0]?.[0].systemPrompt).toContain('concise product concept');
+  });
+
   it('retries once on unparseable JSON, still populating the new fields on success', async () => {
     const spy = jest
       .spyOn(aiRouterService, 'executeTask')
@@ -116,14 +150,14 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
     jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(routerResult('still not json'));
 
     const result = await routeMessage('???');
-    expect(result).toEqual({ mode: 'discuss', projectTitle: '', isGibberish: false, isNewProject: false, reply: '' });
+    expect(result).toEqual({ mode: 'discuss', projectTitle: '', isGibberish: false, isNewProject: false, reply: '', isAnswerToPendingQuestion: false });
   });
 
   it('defaults to generate with no gibberish flag and empty reply on a hard provider failure', async () => {
     jest.spyOn(aiRouterService, 'executeTask').mockRejectedValue(new Error('provider down'));
 
     const result = await routeMessage('anything');
-    expect(result).toEqual({ mode: 'generate', projectTitle: '', isGibberish: false, isNewProject: false, reply: '' });
+    expect(result).toEqual({ mode: 'generate', projectTitle: '', isGibberish: false, isNewProject: false, reply: '', isAnswerToPendingQuestion: false });
   });
 
   it('tolerates null isGibberish/reply from the model (schema coerces to false/"")', async () => {
