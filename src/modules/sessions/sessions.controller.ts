@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { sessionsService } from './sessions.service.js';
+import { sessionTypeOf } from './session-type.js';
 import {
   CreateSessionInput,
   DiscussInput,
@@ -28,6 +29,8 @@ export class SessionsController {
           // true => the assistant reply is streaming over the socket; the client should wait for
           // chat_delta/chat_complete instead of fetching an (as yet unwritten) reply.
           replyStreaming: result.replyStreaming,
+          type: sessionTypeOf(result.session.applicationContext),
+          applicationContext: result.session.applicationContext,
           intentText: result.session.intentText,
           createdAt: result.session.createdAt,
           ...(result.issuedAnonToken ? { anonSessionToken: result.issuedAnonToken } : {}),
@@ -52,7 +55,8 @@ export class SessionsController {
         // conversation-router.service.ts, which generates this title).
         projectName: s.title || 'Untitled Project',
         intent: s.intentText,
-        mode: s.applicationContext === 'rapid_prototyping' ? 'prototype' : 'architect',
+        mode: sessionTypeOf(s.applicationContext),
+        type: sessionTypeOf(s.applicationContext),
         status: s.status,
         architecture: s.architecture,
         messages: s.chatMessages,
@@ -87,6 +91,7 @@ export class SessionsController {
         intentStructured: session.intentStructured,
         domain: session.domain,
         applicationContext: session.applicationContext,
+        type: sessionTypeOf(session.applicationContext),
         status: session.status,
         architecture: session.architecture,
         createdAt: session.createdAt,

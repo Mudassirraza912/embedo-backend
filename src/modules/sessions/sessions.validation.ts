@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import { SESSION_TYPES } from './session-type.js';
+
+/** architect (default) | prototype. Omitted on /discuss = keep the session's own type. */
+export const sessionTypeSchema = z.enum(SESSION_TYPES);
 
 export const sessionIdParamSchema = z.object({
   id: z.string().uuid('Invalid session UUID format'),
@@ -12,7 +16,9 @@ export const versionParamSchema = z.object({
 export const createSessionSchema = z.object({
   intentText: z.string().min(3, 'Intent text must be at least 3 characters long').max(2000, 'Intent text cannot exceed 2000 characters'),
   domain: z.string().max(100).optional(),
-  applicationContext: z.string().max(200).optional(),
+  // Matches the VARCHAR(100) column; 200 used to pass validation and then fail the insert.
+  applicationContext: z.string().max(100).optional(),
+  type: sessionTypeSchema.optional(),
 });
 
 export const discussMessageSchema = z.object({
@@ -22,6 +28,7 @@ export const discussMessageSchema = z.object({
 
 export const discussSchema = z.object({
   messages: z.array(discussMessageSchema).min(1, 'At least one message is required').max(30, 'Conversation history cannot exceed 30 messages'),
+  type: sessionTypeSchema.optional(),
 });
 
 export const feedbackSchema = z.object({
