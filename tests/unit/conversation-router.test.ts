@@ -1,6 +1,6 @@
 import { describe, it, expect, jest, afterEach } from '@jest/globals';
 import { aiRouterService } from '../../src/modules/ai/ai-router.service.js';
-import { routeMessage } from '../../src/modules/sessions/conversation-router.service.js';
+import { resumePendingClarification, routeMessage } from '../../src/modules/sessions/conversation-router.service.js';
 
 const routerResult = (content: string) => ({
   content,
@@ -88,6 +88,16 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
     expect(result.mode).toBe('generate');
     expect(result.projectTitle).toBe('Water Motor Controller');
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('resumes the pipeline for an answer even when the router mislabels it off-topic', () => {
+    const result = resumePendingClarification(
+      { mode: 'off_topic', projectTitle: '', isGibberish: false, isNewProject: false, reply: 'What do you mean?' },
+      true
+    );
+
+    expect(result.mode).toBe('generate');
+    expect(result.reply).toBe('');
   });
 
   it('retries once on unparseable JSON, still populating the new fields on success', async () => {
