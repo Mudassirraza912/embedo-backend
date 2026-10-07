@@ -171,6 +171,30 @@ const slug = (s: string) =>
     .replace(/^-|-$/g, '')
     .slice(0, 40);
 
+/**
+ * A fetched page only counts as the product's source when it names the product: the SKU, or most
+ * of the product name's significant words. A wrong URL from the model must never be recorded as
+ * the board's documentation.
+ */
+export function pageMatchesProduct(text: string, product: { product_name: string; vendor_sku?: string | null }): boolean {
+  const hay = text.toLowerCase();
+  const sku = product.vendor_sku?.trim().toLowerCase();
+  if (sku && sku.length >= 3 && hay.includes(sku)) return true;
+  const words = (product.product_name.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length >= 3 && !['the', 'and', 'with', 'for', 'board', 'breakout', 'module'].includes(w));
+  if (words.length === 0) return false;
+  const found = words.filter((w) => hay.includes(w)).length;
+  return found / words.length >= 0.6;
+}
+
+/** Power-only boards with no data bus (chargers, regulators) run on their own supply. */
+const inferHostRequirement = (f: SourcedFacts): 'standalone' | 'host_required' | 'optional_host' => {
+  if (f.is_controller) return 'standalone';
+  if (f.host_requirement) return f.host_requirement;
+  const powerOnly = f.functional_categories.every((c) => c === 'Power');
+  const hasDataBus = f.interfaces.some((i) => /I2C|SPI|UART|STEMMA|QWIIC/i.test(i.type)) || f.pins.some((p) => p.signal_class === 'data');
+  return powerOnly && !hasDataBus ? 'optional_host' : 'host_required';
+};
+
 /** Cross-checks the model output against itself before anything is built. */
 export function checkFacts(f: SourcedFacts): string[] {
   const problems: string[] = [];
@@ -267,7 +291,7 @@ export function factsToBoard(f: SourcedFacts, id: string, family: string, source
     role: f.is_controller ? 'Main Controller' : f.prototype_role,
     silicon: f.main_silicon ?? f.product_name,
     secondary: f.secondary_ics,
-    hostRequirement: f.is_controller ? 'standalone' : (f.host_requirement ?? 'host_required'),
+    hostRequirement: inferHostRequirement(f),
     requiredHostInterfaces: f.required_host_interfaces,
     supply: [f.supply_voltage_min_v ?? null, f.supply_voltage_max_v ?? null],
     logic: f.logic_level_summary ?? 'not specified',
@@ -380,12 +404,13 @@ async function extractFacts(sessionId: string, product: z.infer<typeof productSc
 }
 
 /** Builds, validates and stores one sourced board; returns its private entity id. */
-async function persistSourced(sessionId: string, facts: SourcedFacts, page: VendorPage | null, productUrl: string | null) {
+async function persistSourced(sessionId: string, facts: SourcedFacts, page: VendorPage | null) {
   const identityKey = `${facts.vendor}|${facts.vendor_sku ?? facts.product_name}`.toLowerCase();
   const family = `FAM-SRC-${slug(facts.vendor)}-${slug(facts.vendor_sku ?? facts.product_name)}`.slice(0, 120);
   const verification = page && facts.facts_source === 'vendor_page' ? 'vendor_live' : 'inferred';
   const note = `Sourced automatically from ${page ? `the vendor product page (${page.url})` : "the model's product knowledge"} for a Prototype session. Not reviewed: verify the pinout against the official schematic before use.`;
-  const sourceUrl = page?.url ?? (isAllowedVendorUrl(productUrl) ? productUrl : null);
+  // Only a page that was read and names the product is recorded as a source.
+  const sourceUrl = page?.url ?? null;
 
   const build = (id: string, scope: 'private_project' | 'shared_library') => {
     const board = factsToBoard(facts, id, family, sourceUrl);
@@ -441,19 +466,23 @@ export async function sourceHardware(input: SourcingInput): Promise<SourcingResu
           try {
             page = await fetchVendorPage(product.product_url!);
             if (page.text.length < 400) page = null; // a script-rendered shell has nothing to read
+            else if (!pageMatchesProduct(page.text, product)) {
+              logger.info({ url: product.product_url, product: label }, 'Vendor page does not describe this product; ignoring it');
+              page = null;
+            }
           } catch (err) {
             logger.info({ url: product.product_url, err: err instanceof Error ? err.message : err }, 'Vendor page not readable; using model knowledge');
           }
         }
         const facts = await extractFacts(input.sessionId, product, page);
-        const saved = await persistSourced(input.sessionId, facts, page, product.product_url ?? null);
+        const saved = await persistSourced(input.sessionId, facts, page);
         return {
           ok: true as const,
           board: {
             hardwareEntityId: saved.privateId,
             productName: facts.product_name,
             vendor: facts.vendor,
-            productUrl: page?.url ?? product.product_url ?? null,
+            productUrl: page?.url ?? null,
             factsSource: facts.facts_source,
             pageRead: Boolean(page),
             proposalQueued: saved.proposalQueued,

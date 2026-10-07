@@ -4,7 +4,7 @@ import { aiRouterService } from '../../src/modules/ai/ai-router.service.js';
 import { prepareBundle } from '../../src/modules/hardware/hardware-admin.service.js';
 import { hardwareLibraryService } from '../../src/modules/hardware/hardware-library.service.js';
 import { hardwareProposalService } from '../../src/modules/hardware/hardware-proposal.service.js';
-import { checkFacts, factsSchema, factsToBoard, sourceHardware, SourcedFacts } from '../../src/modules/hardware/discovery/hardware-sourcer.js';
+import { checkFacts, factsSchema, factsToBoard, pageMatchesProduct, sourceHardware, SourcedFacts } from '../../src/modules/hardware/discovery/hardware-sourcer.js';
 import { buildRecord, buildSvg } from '../../src/modules/hardware/discovery/record-builder.js';
 import { htmlToText, isAllowedVendorUrl } from '../../src/modules/hardware/discovery/vendor-page.js';
 import { allocatePins } from '../../src/modules/sessions/prototype/prototype-allocator.js';
@@ -263,6 +263,24 @@ describe('hardware sourcing (vendor pages → private board + review queue)', ()
     expect(result.nets.flatMap((n) => n.members).some((m) => m.instanceId === 'power1')).toBe(false);
     expect(result.results.filter((r) => r.status === 'BLOCKER')).toEqual([]);
     expect(result.results.find((r) => r.instanceIds.includes('power1'))).toMatchObject({ status: 'WARNING', ruleType: 'required_power_rail' });
+  });
+
+  it('only trusts a fetched page that actually names the product', () => {
+    const relay = { product_name: 'SparkFun Qwiic Single Relay', vendor_sku: 'COM-15093' };
+    expect(pageMatchesProduct('SparkFun Qwiic EEPROM Breakout - 512Kbit. Store data over I2C.', relay)).toBe(false);
+    expect(pageMatchesProduct('SparkFun Qwiic Single Relay ... SKU: COM-15093', relay)).toBe(true);
+    expect(pageMatchesProduct('The Qwiic Single Relay from SparkFun switches up to 5A', { product_name: relay.product_name })).toBe(true);
+  });
+
+  it('treats a power-only board without a data bus as self-powered when the model did not say', () => {
+    const charger = factsSchema.parse({
+      ...relayFacts,
+      functional_categories: ['Power'],
+      pins: ['5V', 'BAT', 'GND'],
+      connectors: [{ ref: 'JP1', kind: 'header', pins: ['5V', 'BAT', 'GND'] }],
+    });
+    expect(factsToBoard(charger, 'HWP-CHG00002', 'FAM-X', null).hostRequirement).toBe('optional_host');
+    expect(factsToBoard(relayFacts, 'HWP-RLY00002', 'FAM-X', null).hostRequirement).toBe('host_required');
   });
 
   it('does nothing for a non-prototype request', async () => {
