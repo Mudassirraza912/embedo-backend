@@ -57,6 +57,11 @@ export interface RouteMessageResult {
   reply: string;
 }
 
+/** A pending intake question owns the next coherent user turn; the pipeline rechecks its meaning. */
+export function resumePendingClarification(result: RouteMessageResult, isAwaitingAnswer: boolean): RouteMessageResult {
+  return isAwaitingAnswer ? { ...result, mode: 'generate', isNewProject: false, reply: '' } : result;
+}
+
 const FALLBACK_TITLE = 'New project';
 
 const ROUTER_SYSTEM_PROMPT = `Classify the latest message for Embedo.ai (embedded hardware architecture: block diagrams, power trees, protocol maps, BOMs). Return strict JSON, all keys always present:
