@@ -102,20 +102,33 @@ export const hardwareProposalService = {
     if (result.existing && result.changed.length === 0) {
       throw new AppError(409, 'CONFLICT', `${result.proposedId} is already in the library with identical content`);
     }
+    const data = {
+      hardwareEntityId: result.existing ? result.proposedId : null,
+      proposedHardwareEntityId: result.proposedId,
+      candidatePayload: upload as unknown as Prisma.InputJsonValue,
+      diff: result.existing ? ({ changedBlocks: result.changed } as Prisma.InputJsonValue) : Prisma.DbNull,
+      changeClass: result.changeClass,
+      sourceType: source.sourceType,
+      sourceReference: source.sourceReference ?? null,
+      status: result.valid ? 'pending' : 'needs_review',
+      validationIssues: result.issues as unknown as Prisma.InputJsonValue,
+      contentHash: result.contentHash,
+    };
+    // One open proposal per board: a re-scrape of the same board refreshes it instead of adding
+    // another row to the admin's queue.
+    if (result.proposedId) {
+      const open = await prisma.hardwareChangeProposal.findFirst({
+        where: { proposedHardwareEntityId: result.proposedId, status: { in: ['pending', 'needs_review'] } },
+        orderBy: { proposedAt: 'desc' },
+        select: { proposalId: true },
+      });
+      if (open) {
+        const refreshed = await prisma.hardwareChangeProposal.update({ where: { proposalId: open.proposalId }, data, select: proposalSelect });
+        return { ...refreshed, duplicate: true };
+      }
+    }
     const proposal = await prisma.hardwareChangeProposal.create({
-      data: {
-        hardwareEntityId: result.existing ? result.proposedId : null,
-        proposedHardwareEntityId: result.proposedId,
-        candidatePayload: upload as unknown as Prisma.InputJsonValue,
-        diff: result.existing ? ({ changedBlocks: result.changed } as Prisma.InputJsonValue) : Prisma.DbNull,
-        changeClass: result.changeClass,
-        sourceType: source.sourceType,
-        sourceReference: source.sourceReference ?? null,
-        status: result.valid ? 'pending' : 'needs_review',
-        validationIssues: result.issues as unknown as Prisma.InputJsonValue,
-        contentHash: result.contentHash,
-        proposedBy: source.proposedBy,
-      },
+      data: { ...data, proposedBy: source.proposedBy },
       select: proposalSelect,
     });
     logger.info({ proposalId: proposal.proposalId, proposedId: result.proposedId, status: proposal.status, changeClass: result.changeClass }, 'Hardware proposal queued for admin review');
