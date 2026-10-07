@@ -2,7 +2,15 @@ import { Request, Response, NextFunction } from 'express';
 import { AppError } from '../../common/errors/AppError.js';
 import { hardwareAdminService } from './hardware-admin.service.js';
 import { hardwareEmbeddingService } from './hardware-embedding.service.js';
-import { HardwareGovernanceInput, HardwareListQuery, HardwareUploadInput } from './hardware.validation.js';
+import { hardwareProposalService } from './hardware-proposal.service.js';
+import {
+  HardwareGovernanceInput,
+  HardwareListQuery,
+  HardwareUploadInput,
+  ProposalApproveInput,
+  ProposalListQuery,
+  ProposalSubmitInput,
+} from './hardware.validation.js';
 
 /** Admin panel endpoints for the Prototype hardware library (mounted under /admin, admin-only). */
 const actorOf = (req: Request) => ({ userId: req.user?.id ?? null, label: req.user?.email ?? req.user?.id ?? 'admin' });
@@ -67,6 +75,65 @@ export class HardwareAdminController {
       const result = await hardwareEmbeddingService.embedEntity(id, { force: true });
       if (result.outcome === 'not_found') throw new AppError(404, 'NOT_FOUND', 'Hardware entity not found');
       res.status(result.outcome === 'embedded' ? 200 : 502).json({ success: result.outcome === 'embedded', data: { hardwareEntityId: id, ...result } });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  // --- review queue for scraped hardware -------------------------------------------------------
+  listProposals = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.status(200).json({ success: true, data: await hardwareProposalService.list(req.query as unknown as ProposalListQuery) });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  getProposal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.status(200).json({ success: true, data: await hardwareProposalService.get(req.params['proposalId'] as string) });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  /** Queues a candidate for review (what a scraper or vendor agent calls). Never writes the library. */
+  submitProposal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { sourceType, sourceReference, ...upload } = req.body as ProposalSubmitInput;
+      const proposal = await hardwareProposalService.submitProposal(upload, { sourceType, sourceReference, proposedBy: actorOf(req).label });
+      res.status(proposal.duplicate ? 200 : 201).json({ success: true, data: proposal });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  editProposal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.status(200).json({
+        success: true,
+        data: await hardwareProposalService.edit(req.params['proposalId'] as string, req.body as HardwareUploadInput, actorOf(req)),
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  approveProposal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      res.status(200).json({
+        success: true,
+        data: await hardwareProposalService.approve(req.params['proposalId'] as string, req.body as ProposalApproveInput, actorOf(req)),
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  rejectProposal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { notes } = req.body as { notes: string };
+      res.status(200).json({ success: true, data: await hardwareProposalService.reject(req.params['proposalId'] as string, notes, actorOf(req)) });
     } catch (err) {
       next(err);
     }

@@ -438,6 +438,38 @@ model HardwareSource {
   @@map("hardware_sources")
 }
 
+/// Review queue (truth file §16, plan ERD 2). Scraped or otherwise machine-sourced hardware never
+/// enters the library directly: it waits here until an admin approves (or rejects) it.
+model HardwareChangeProposal {
+  proposalId                String    @id @default(dbgenerated("gen_random_uuid()")) @map("proposal_id") @db.Uuid
+  /// The library entity this would change; null for a board that does not exist yet.
+  hardwareEntityId          String?   @map("hardware_entity_id") @db.VarChar(64)
+  /// The id inside the candidate record (what approval would create or replace).
+  proposedHardwareEntityId  String?   @map("proposed_hardware_entity_id") @db.VarChar(64)
+  /// { record, svg, asset? } exactly as the admin upload takes it.
+  candidatePayload          Json      @map("candidate_payload")
+  /// Top-level record blocks that differ from the current entity (null for a new board).
+  diff                      Json?
+  /// new_entity | non_structural | engineering_sensitive
+  changeClass               String    @map("change_class") @db.VarChar(40)
+  /// vendor_agent | user | import | admin
+  sourceType                String    @map("source_type") @db.VarChar(30)
+  sourceReference           String?   @map("source_reference") @db.Text
+  /// pending | approved | rejected | needs_review
+  status                    String    @default("pending") @db.VarChar(20)
+  validationIssues          Json      @map("validation_issues")
+  contentHash               String?   @map("content_hash") @db.VarChar(80)
+  proposedBy                String    @map("proposed_by") @db.VarChar(120)
+  proposedAt                DateTime  @default(now()) @map("proposed_at") @db.Timestamp(6)
+  reviewedBy                String?   @map("reviewed_by") @db.VarChar(120)
+  reviewedAt                DateTime? @map("reviewed_at") @db.Timestamp(6)
+  reviewNotes               String?   @map("review_notes") @db.Text
+
+  @@index([status, proposedAt], map: "hardware_change_proposals_status_idx")
+  @@index([proposedHardwareEntityId], map: "hardware_change_proposals_proposed_idx")
+  @@map("hardware_change_proposals")
+}
+
 model SvgAsset {
   hardwareEntityId     String    @id @map("hardware_entity_id") @db.VarChar(64)
   fileName             String    @map("file_name") @db.VarChar(120)

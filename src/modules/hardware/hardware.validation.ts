@@ -31,6 +31,33 @@ export const hardwareGovernanceSchema = z
   })
   .strict();
 
+export const proposalParamSchema = z.object({ proposalId: z.string().uuid('Invalid proposal id') });
+
+/** A scraped / machine-sourced candidate submitted for admin review. */
+export const proposalSubmitSchema = hardwareUploadSchema.extend({
+  sourceType: z.enum(['vendor_agent', 'user', 'import', 'admin']).default('vendor_agent'),
+  sourceReference: z.string().max(2000).optional(),
+});
+
+export const proposalListQuerySchema = z.object({
+  status: z.enum(['pending', 'approved', 'rejected', 'needs_review']).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(25),
+});
+
+export const proposalApproveSchema = z
+  .object({
+    reviewStatus: z.enum(['provisional', 'confirmed']).optional(),
+    assetReadiness: z.enum(['catalog_only', 'metadata_ready', 'visual_ready', 'wiring_ready', 'needs_review']).optional(),
+    notes: z.string().max(2000).optional(),
+  })
+  .strict();
+
+export const proposalRejectSchema = z.object({ notes: z.string().trim().min(3, 'Say why it was rejected').max(2000) });
+
 export type HardwareUploadInput = z.infer<typeof hardwareUploadSchema>;
+export type ProposalSubmitInput = z.infer<typeof proposalSubmitSchema>;
+export type ProposalListQuery = z.infer<typeof proposalListQuerySchema>;
+export type ProposalApproveInput = z.infer<typeof proposalApproveSchema>;
 export type HardwareListQuery = z.infer<typeof hardwareListQuerySchema>;
 export type HardwareGovernanceInput = z.infer<typeof hardwareGovernanceSchema>;

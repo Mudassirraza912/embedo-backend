@@ -21,6 +21,11 @@ import {
   hardwareGovernanceSchema,
   hardwareListQuerySchema,
   hardwareUploadSchema,
+  proposalApproveSchema,
+  proposalListQuerySchema,
+  proposalParamSchema,
+  proposalRejectSchema,
+  proposalSubmitSchema,
 } from '../hardware/hardware.validation.js';
 
 const router = Router();
@@ -48,6 +53,21 @@ router.get('/hardware', validate({ query: hardwareListQuerySchema }), hardwareAd
 router.post('/hardware', validate({ body: hardwareUploadSchema }), hardwareAdminController.create);
 router.post('/hardware/validate', validate({ body: hardwareUploadSchema }), hardwareAdminController.validate);
 router.post('/hardware/embeddings/backfill', hardwareAdminController.embedMissing);
+// Review queue: scraped hardware waits here until an admin accepts it into the library.
+router.get('/hardware/proposals', validate({ query: proposalListQuerySchema }), hardwareAdminController.listProposals);
+router.post('/hardware/proposals', validate({ body: proposalSubmitSchema }), hardwareAdminController.submitProposal);
+router.get('/hardware/proposals/:proposalId', validate({ params: proposalParamSchema }), hardwareAdminController.getProposal);
+router.put('/hardware/proposals/:proposalId', validate({ params: proposalParamSchema, body: hardwareUploadSchema }), hardwareAdminController.editProposal);
+router.post(
+  '/hardware/proposals/:proposalId/approve',
+  validate({ params: proposalParamSchema, body: proposalApproveSchema }),
+  hardwareAdminController.approveProposal
+);
+router.post(
+  '/hardware/proposals/:proposalId/reject',
+  validate({ params: proposalParamSchema, body: proposalRejectSchema }),
+  hardwareAdminController.rejectProposal
+);
 router.get('/hardware/:id', validate({ params: hardwareEntityParamSchema }), hardwareAdminController.get);
 router.put('/hardware/:id', validate({ params: hardwareEntityParamSchema, body: hardwareUploadSchema }), hardwareAdminController.replace);
 router.patch(
