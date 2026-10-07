@@ -296,6 +296,8 @@ describe('hardware sourcing (vendor pages → private board + review queue)', ()
       connectors: [{ ref: 'JP1', kind: 'header', pins: ['5V', 'BAT', 'GND'] }],
     });
     expect(factsToBoard(charger, 'HWP-CHG00002', 'FAM-X', null).hostRequirement).toBe('optional_host');
+    // Even when the model explicitly (and wrongly) says host_required, as it did on dev.
+    expect(factsToBoard({ ...charger, host_requirement: 'host_required' }, 'HWP-CHG00003', 'FAM-X', null).hostRequirement).toBe('optional_host');
     expect(factsToBoard(relayFacts, 'HWP-RLY00002', 'FAM-X', null).hostRequirement).toBe('host_required');
   });
 

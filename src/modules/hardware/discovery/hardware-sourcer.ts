@@ -189,11 +189,12 @@ export function pageMatchesProduct(text: string, product: { product_name: string
 /** Power-only boards with no data bus (chargers, regulators) run on their own supply. */
 const inferHostRequirement = (f: SourcedFacts): 'standalone' | 'host_required' | 'optional_host' => {
   if (f.is_controller) return 'standalone';
-  if (f.host_requirement) return f.host_requirement;
   // Status pins (CHG, DONE, PGOOD) do not make a charger host-powered; a bus (fuel gauge) does.
+  // This is decided from the facts, even when the model labelled the board host_required.
   const powerOnly = f.functional_categories.every((c) => c === 'Power');
   const hasBus = f.interfaces.some((i) => /I2C|SPI|UART|STEMMA|QWIIC/i.test(i.type));
-  return powerOnly && !hasBus ? 'optional_host' : 'host_required';
+  if (powerOnly && !hasBus) return 'optional_host';
+  return f.host_requirement ?? 'host_required';
 };
 
 /** Cross-checks the model output against itself before anything is built. */
