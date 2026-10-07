@@ -27,16 +27,21 @@ export interface LibraryEntity {
 const PLACEABLE_READINESS: AssetReadiness[] = ['visual_ready', 'wiring_ready'];
 
 /**
- * Truth-file eligibility (plan D4): shared confirmed records, plus private records of this project.
+ * Truth-file eligibility (plan D4): shared confirmed records, plus this project's private records
+ * (including provisional ones the sourcer created for it).
  * With PROTOTYPE_ALLOW_PROVISIONAL (dev only) provisional records with artwork are searchable too.
  */
 export function eligibilityWhere(projectId: string | null, allowProvisional = env.PROTOTYPE_ALLOW_PROVISIONAL): Prisma.HardwareEntityWhereInput {
   return {
-    reviewStatus: allowProvisional ? { in: ['confirmed', 'provisional'] } : 'confirmed',
     assetReadiness: { in: PLACEABLE_READINESS },
     lifecycleStatus: { not: 'discontinued' },
-    OR: [{ scope: 'shared_library' }, ...(projectId ? [{ scope: 'private_project', projectId }] : [])],
     svgAsset: { isNot: null },
+    OR: [
+      { scope: 'shared_library', reviewStatus: allowProvisional ? { in: ['confirmed', 'provisional'] } : 'confirmed' },
+      // A project's own sourced boards are usable in that project while they await review; they
+      // are drawn as unverified and never appear in any other project.
+      ...(projectId ? [{ scope: 'private_project', projectId, reviewStatus: { in: ['confirmed', 'provisional'] } }] : []),
+    ],
   };
 }
 

@@ -211,7 +211,7 @@ const toDate = (value: string | null | undefined): Date | null => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
-async function writeBundle(bundle: PreparedBundle, actor: string, replace: boolean): Promise<void> {
+export async function writeBundle(bundle: PreparedBundle, actor: string, replace: boolean): Promise<void> {
   const { record, asset } = bundle;
   const id = bundle.hardwareEntityId;
   const governance = record.status_governance;
@@ -225,6 +225,11 @@ async function writeBundle(bundle: PreparedBundle, actor: string, replace: boole
     recordOrigin: governance.record_origin,
     assetReadiness: governance.asset_readiness,
     createdBy: governance.created_by ?? actor,
+    // A private record belongs to exactly one project (design_sessions.id); shared ones to none.
+    projectId:
+      governance.scope === 'private_project' && typeof (governance as Record<string, unknown>)['project_id'] === 'string'
+        ? ((governance as Record<string, unknown>)['project_id'] as string)
+        : null,
     metadataSchemaVersion: record.metadata_schema_version ?? governance.metadata_schema_version ?? '3.3',
     contentHash: bundle.contentHash,
     metadataJson: bundle.rawRecord as Prisma.InputJsonValue,

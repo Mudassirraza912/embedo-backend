@@ -69,7 +69,7 @@ async function seedAdmin(): Promise<void> {
  * operator changes made through the model_routes table survive deploys.
  */
 async function seedModelRoutes(): Promise<void> {
-  console.log('Seeding default model routes (Cases A-F, M, R) where missing...');
+  console.log('Seeding default model routes (Cases A-F, M, R, X) where missing...');
 
   const initialRoutes = [
     { taskCase: 'M', domain: null, modelProvider: 'openai', modelName: 'gpt-4o-mini', temperature: 0.0, maxTokens: 500, isActive: true },
@@ -81,6 +81,8 @@ async function seedModelRoutes(): Promise<void> {
     { taskCase: 'F', domain: null, modelProvider: 'openai', modelName: 'gpt-4o-mini', temperature: 0.1, maxTokens: 4096, isActive: true },
     // Prototype resolver: chooses library modules + interface-level links (pins are assigned in code).
     { taskCase: 'R', domain: null, modelProvider: 'openai', modelName: 'gpt-4o', temperature: 0.1, maxTokens: 4096, isActive: true },
+    // Hardware sourcing: names real products for library gaps and extracts their facts from vendor pages.
+    { taskCase: 'X', domain: null, modelProvider: 'openai', modelName: 'gpt-4o', temperature: 0.0, maxTokens: 4096, isActive: true },
   ];
 
   for (const route of initialRoutes) {

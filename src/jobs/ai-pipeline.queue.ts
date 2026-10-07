@@ -106,8 +106,9 @@ export const createAiPipelineWorker = () => {
     {
       connection: redis,
       concurrency: 5,
-      // A single pipeline run should never exceed this; stalled jobs are re-queued.
-      lockDuration: 120_000,
+      // A single pipeline run should never exceed this; stalled jobs are re-queued. Prototype runs
+      // that source hardware (vendor page fetch + extraction per module) need more than Architect.
+      lockDuration: 300_000,
     }
   );
 

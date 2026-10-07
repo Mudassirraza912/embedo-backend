@@ -101,7 +101,7 @@ export function linkInterfacesOf(entity: LibraryEntity): Set<LinkInterface> {
 const ecosystemOf = (entity: LibraryEntity): string[] => {
   const tags = new Set(entity.record.compatibility_hints.ecosystem_tags);
   for (const c of entity.record.connectors) {
-    if (/stemma|qwiic/i.test(c.connector_type)) tags.add('STEMMA QT/Qwiic');
+    if (/stemma|qwiic/i.test(c.connector_type) && ![...tags].some((t) => /stemma|qwiic/i.test(t))) tags.add('STEMMA QT/Qwiic');
   }
   return [...tags];
 };

@@ -18,7 +18,7 @@ export interface ResolvedModelRoute {
 }
 
 export interface ExecuteTaskOptions {
-  /** A-F generation cases, M = moderation classification, R = Prototype resolver. */
+  /** A-F generation cases, M = moderation classification, R = Prototype resolver, X = hardware sourcing/extraction. */
   taskCase: string;
   systemPrompt?: string;
   userPrompt: string;
@@ -82,8 +82,8 @@ export class AiRouterService {
       logger.warn({ taskCase, domain }, 'No route in model_routes table, using OpenAI Sol/Luna default fallback');
       resolved = {
         provider: 'openai',
-        // A (Sol synthesis), D and R (Prototype resolver) need the stronger model.
-        model: taskCase === 'A' || taskCase === 'D' || taskCase === 'R' ? 'gpt-4o' : 'gpt-4o-mini',
+        // A (Sol synthesis), D, R (Prototype resolver) and X (hardware sourcing) need the stronger model.
+        model: taskCase === 'A' || taskCase === 'D' || taskCase === 'R' || taskCase === 'X' ? 'gpt-4o' : 'gpt-4o-mini',
         temperature: taskCase === 'A' ? 0.2 : taskCase === 'D' ? 0.4 : 0.1,
         maxTokens: taskCase === 'A' ? 8192 : 4096,
       };

@@ -7,7 +7,8 @@ import { hardwareLibraryService } from '../../hardware/hardware-library.service.
 import { persistNewVersion } from '../version.service.js';
 import { GENERATION_HOLD_MESSAGE } from '../pipeline/sufficiency-gate.js';
 import { NonRetryablePipelineError, PipelineExecutionOptions, PipelineExecutionResult } from '../pipeline/orchestrator.js';
-import { PrototypeResolverError, RESOLVER_TASK_CASE, resolvePrototype, retrieveCatalogue } from './prototype-resolver.js';
+import { catalogueLine, PrototypeResolverError, RESOLVER_TASK_CASE, resolvePrototype, retrieveCatalogue } from './prototype-resolver.js';
+import { SOURCING_TASK_CASE, sourceHardware, SourcingResult } from '../../hardware/discovery/hardware-sourcer.js';
 import { assemblePrototype } from './prototype-assembler.js';
 import { isPrototypeArchitecture, isPrototypeComposition, PrototypeArchitecture, PrototypeComposition } from './prototype.types.js';
 
@@ -112,30 +113,69 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     // Step 2: choose modules from the library.
     recordStep('resolving_modules', 'Resolving modules', 'running');
     emitSessionEvent.stageUpdate(sessionId, { step: 2, label: 'Choosing modules from the hardware library', progress: 35 });
-    const library = await hardwareLibraryService.listEligible(sessionId);
-    if (library.length === 0) {
-      log.warn({ allowProvisional: env.PROTOTYPE_ALLOW_PROVISIONAL }, 'Prototype library has no eligible boards');
-      recordStep('resolving_modules', 'Resolving modules', 'warning', 'No eligible boards in the hardware library');
-      return await replyWithoutDesign(
-        'The hardware library has no boards available for prototyping yet — every board is still waiting for review. I can’t assemble a bench without real modules, and I won’t invent one. Please try again once the library has been reviewed.',
-        { prototypeLibraryEmpty: true }
-      );
-    }
-
+    let library = await hardwareLibraryService.listEligible(sessionId);
     const keepIds = currentComposition
       ? [currentComposition.controller?.hardwareEntityId, ...currentComposition.modules.map((m) => m.hardwareEntityId)].filter((id): id is string => Boolean(id))
       : [];
-    const catalogue = await retrieveCatalogue(library, `${requestText}\n${turns.slice(-4).map((t) => t.content).join('\n')}`, keepIds);
+    const retrievalText = `${requestText}\n${turns.slice(-4).map((t) => t.content).join('\n')}`;
+    const resolve = async () => {
+      const catalogue = await retrieveCatalogue(library, retrievalText, keepIds);
+      emitSessionEvent.aiCallStarted(sessionId, RESOLVER_TASK_CASE);
+      const resolved = await resolvePrototype({
+        requestText,
+        history: turns.slice(-LLM_HISTORY_TURNS - 1, -1),
+        catalogue,
+        current: currentComposition,
+        sessionId,
+      });
+      emitSessionEvent.aiCallCompleted(sessionId, { taskCase: RESOLVER_TASK_CASE, schemaPass: true, latencyMs: resolved.latencyMs });
+      return resolved.output;
+    };
 
-    emitSessionEvent.aiCallStarted(sessionId, RESOLVER_TASK_CASE);
-    const { output, latencyMs } = await resolvePrototype({
-      requestText,
-      history: turns.slice(-LLM_HISTORY_TURNS - 1, -1),
-      catalogue,
-      current: currentComposition,
-      sessionId,
-    });
-    emitSessionEvent.aiCallCompleted(sessionId, { taskCase: RESOLVER_TASK_CASE, schemaPass: true, latencyMs });
+    // Without any controller in the library the resolver cannot build anything; go straight to sourcing.
+    let output = library.some((e) => e.isController) ? await resolve() : null;
+    let sourcing: SourcingResult | null = null;
+
+    // Library gaps are filled from vendor product pages: the boards found are private to this
+    // project (drawn as unverified) and queued for admin review before anyone else can use them.
+    const needsSourcing = !output || (output.isPrototypeRequest && (output.gaps.length > 0 || !output.controller));
+    if (needsSourcing && env.PROTOTYPE_SOURCING_ENABLED) {
+      recordStep('checking_library', 'Checking library coverage', 'running', 'Searching vendor sites for modules the library is missing');
+      emitSessionEvent.stageUpdate(sessionId, { step: 3, label: 'Sourcing missing modules from vendor sites', progress: 45 });
+      emitSessionEvent.aiCallStarted(sessionId, SOURCING_TASK_CASE);
+      try {
+        sourcing = await sourceHardware({
+          sessionId,
+          requestText,
+          library,
+          catalogueLines: library.slice(0, 80).map(catalogueLine),
+          gaps: output?.gaps ?? [],
+          needController: !output?.controller,
+        });
+      } catch (err) {
+        log.warn({ err }, 'Hardware sourcing failed; continuing with the library only');
+      }
+      emitSessionEvent.aiCallCompleted(sessionId, { taskCase: SOURCING_TASK_CASE, schemaPass: Boolean(sourcing) });
+      if (sourcing && sourcing.entities.length > 0) {
+        library = [...library, ...sourcing.entities.filter((e) => !library.some((l) => l.hardwareEntityId === e.hardwareEntityId))];
+        output = await resolve();
+      }
+      log.info(
+        { sourced: sourcing?.sourced.map((b) => `${b.hardwareEntityId}:${b.factsSource}`), failures: sourcing?.failures },
+        'Hardware sourcing finished'
+      );
+    }
+
+    if (!output) {
+      const notPrototype = Boolean(sourcing && !sourcing.isPrototypeRequest);
+      recordStep('resolving_modules', 'Resolving modules', 'warning', notPrototype ? 'Not a prototype request' : 'No boards available');
+      return await replyWithoutDesign(
+        notPrototype
+          ? `${sourcing?.understanding || 'That does not read as a prototype request.'}\n\nDescribe the device you want to prototype, e.g. "Pico W weather station with a BME280", and I will pick the modules and wire them.`
+          : 'I could not find boards for this yet: the hardware library has none that fit, and I could not source a suitable module from the vendor sites this time. Try naming the controller or modules you want (e.g. "Raspberry Pi Pico with a BME280"), or try again shortly.',
+        { prototypeLibraryEmpty: library.length === 0, ...(sourcing ? { sourcingFailures: sourcing.failures } : {}) }
+      );
+    }
 
     const prototypeGaps = output.gaps.map((g, i) => ({ gapId: `g${i + 1}`, ...g }));
     if (!output.isPrototypeRequest || !output.controller) {
@@ -161,13 +201,18 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     recordStep('resolving_modules', 'Resolving modules', 'completed', `${composition.modules.length + 1} module(s) selected`);
 
     // Step 3: library coverage.
-    recordStep('checking_library', 'Checking library coverage', 'running');
-    emitSessionEvent.stageUpdate(sessionId, { step: 3, label: 'Checking library coverage', progress: 50 });
+    emitSessionEvent.stageUpdate(sessionId, { step: 3, label: 'Checking library coverage', progress: 55 });
+    const sourcedCount = sourcing?.sourced.length ?? 0;
     recordStep(
       'checking_library',
       'Checking library coverage',
       prototypeGaps.length > 0 ? 'warning' : 'completed',
-      prototypeGaps.length > 0 ? `${prototypeGaps.length} need(s) not in the library: ${prototypeGaps.map((g) => g.need).join('; ')}` : 'Every need is covered'
+      [
+        sourcedCount > 0 ? `${sourcedCount} module(s) sourced from vendor sites (unverified, sent for review)` : null,
+        prototypeGaps.length > 0 ? `${prototypeGaps.length} need(s) still not covered: ${prototypeGaps.map((g) => g.need).join('; ')}` : 'Every need is covered',
+      ]
+        .filter(Boolean)
+        .join(' · ')
     );
 
     // Steps 4 + 5: pins, rules, geometry, pin list, library entries (one deterministic pass).
@@ -175,7 +220,9 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     emitSessionEvent.stageUpdate(sessionId, { step: 4, label: 'Assigning pins and checking compatibility', progress: 70 });
     const entities = new Map(library.map((e) => [e.hardwareEntityId, e]));
     const payload = assemblePrototype(composition, entities, {
-      allowProvisional: env.PROTOTYPE_ALLOW_PROVISIONAL,
+      // Unreviewed wiring (sourced or provisional boards) is drawn dashed and labelled, never hidden:
+      // the user asked to see the bench, and the dashed style + warnings say it is not verified.
+      allowProvisional: true,
       svgBasePath: `${env.API_PREFIX}/hardware/entities`,
       projectName: session.title ?? 'Prototype',
       understanding: output.understanding,
@@ -206,7 +253,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       appliedChanges: [revisionNotes ? revisionNotes.slice(0, 500) : 'Initial prototype assembled'],
       sessionStatus: 'DONE',
       buildChatMessage: (tag) => ({
-        content: summaryMessage(payload, tag, env.PROTOTYPE_ALLOW_PROVISIONAL),
+        content: summaryMessage(payload, tag, sourcing),
         metadata: {
           versionTag: tag,
           prototypeVersionTag: tag,
@@ -216,6 +263,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
           engineeringDecisions: decisionsFor(payload),
           suggestedRefinements: [],
           prototypeGaps: payload.gaps,
+          prototypeSourced: sourcing?.sourced ?? [],
           prototypeSummary: {
             modules: payload.instances.length,
             nets: payload.nets.length,
@@ -244,7 +292,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
 }
 
 /** Short, factual card text: what was placed, how it connects, and what is not in the library. */
-function summaryMessage(payload: PrototypeArchitecture, tag: string, devOverride: boolean): string {
+function summaryMessage(payload: PrototypeArchitecture, tag: string, sourcing: SourcingResult | null): string {
   const modules = payload.instances.filter((i) => !i.isController).map((i) => `${i.label} (${i.instanceId})`);
   const cables = payload.connections.filter((c) => c.kind === 'cable').length;
   const wires = payload.connections.length - cables;
@@ -260,11 +308,12 @@ function summaryMessage(payload: PrototypeArchitecture, tag: string, devOverride
     `- **Pin list**: ${summary.rows} contacts · ${summary.assigned + summary.proposed} connected · ${summary.blocking} blocking`,
     `- **Checks**: ${counts.PASS} pass · ${counts.WARNING} warning · ${counts.BLOCKER} blocker · ${counts.UNKNOWN} unknown`,
     payload.gaps.length > 0 ? `- **Not in library**: ${payload.gaps.map((g) => `${g.category} — ${g.need}`).join('; ')}` : null,
-    unreviewed
-      ? devOverride
-        ? '- ⚠️ Some boards are not reviewed yet: their wiring is shown dashed and must be checked against the board before use.'
-        : '- ⚠️ Some boards are awaiting wiring review: their connections are listed but not drawn.'
+    sourcing && sourcing.sourced.length > 0
+      ? `- **Sourced for this project** (not in the library yet, sent to admin review): ${sourcing.sourced
+          .map((b) => `${b.productName} (${b.factsSource === 'vendor_page' ? 'pinout read from the vendor page' : 'pinout from model knowledge, unverified'})`)
+          .join('; ')}`
       : null,
+    unreviewed ? '- ⚠️ Boards awaiting review are drawn with dashed wiring: check every connection against the board before powering up.' : null,
     payload.notes ? `\n${payload.notes}` : null,
   ]
     .filter((line) => line !== null)

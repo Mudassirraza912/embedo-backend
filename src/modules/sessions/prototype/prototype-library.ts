@@ -32,7 +32,7 @@ export function buildHardwareLibrary(
     if (!entity) return [];
     const { identity, electrical, interfaces, connectors, dependencies, compatibility_hints } = entity.record;
     const ecosystem = new Set(compatibility_hints.ecosystem_tags);
-    for (const c of connectors) if (isStemmaConnector(c)) ecosystem.add('STEMMA QT / Qwiic');
+    if (connectors.some(isStemmaConnector) && ![...ecosystem].some((t) => /stemma|qwiic/i.test(t))) ecosystem.add('STEMMA QT / Qwiic');
     return [
       {
         hardwareEntityId: id,
