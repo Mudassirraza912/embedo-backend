@@ -10,6 +10,7 @@ import { NonRetryablePipelineError, PipelineExecutionOptions, PipelineExecutionR
 import { catalogueLine, PrototypeResolverError, RESOLVER_TASK_CASE, resolvePrototype, retrieveCatalogue } from './prototype-resolver.js';
 import { SOURCING_TASK_CASE, sourceHardware, SourcingResult } from '../../hardware/discovery/hardware-sourcer.js';
 import { assemblePrototype } from './prototype-assembler.js';
+import { filterAppliedSuggestions, getAppliedChangeLineage } from '../pipeline/refinement-history.js';
 import { isPrototypeArchitecture, isPrototypeComposition, PrototypeArchitecture, PrototypeComposition } from './prototype.types.js';
 
 /**
@@ -257,6 +258,9 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     // Persist (atomic, serialized per session) and announce.
     emitSessionEvent.stageUpdate(sessionId, { step: 6, label: 'Saving the prototype version', progress: 100 });
     const changeSummary = revisionNotes ? revisionNotes.slice(0, 200) : 'Initial prototype assembled';
+    // Quick-refinement chips, minus anything this bench already received (same rule as Architect).
+    const appliedLineage = await getAppliedChangeLineage(sessionId);
+    const quickRefinements = filterAppliedSuggestions(output.suggestedRefinements, [...appliedLineage, ...(revisionNotes ? [revisionNotes] : [])]).slice(0, 5);
     const { versionTag } = await persistNewVersion({
       sessionId,
       designGraph: composition,
@@ -273,7 +277,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
           projectMeta: payload.projectMeta,
           controller: { name: payload.projectMeta.controller, partNumber: composition.controller?.hardwareEntityId ?? null, rationale: controllerRationale },
           engineeringDecisions: decisionsFor(payload),
-          suggestedRefinements: [],
+          suggestedRefinements: quickRefinements,
           prototypeGaps: payload.gaps,
           prototypeSourced: sourcing?.sourced ?? [],
           prototypeSummary: {
@@ -339,8 +343,7 @@ function decisionsFor(payload: PrototypeArchitecture): string[] {
     const to = payload.instances.find((i) => i.instanceId === c.to.instanceId)?.label ?? c.to.instanceId;
     out.push(`${from} → ${to} over a STEMMA QT / Qwiic cable`);
   }
-  for (const r of payload.compatibility.results.filter((x) => x.status === 'BLOCKER' || x.status === 'UNKNOWN')) {
-    out.push(`${r.status === 'BLOCKER' ? 'Blocker' : 'Unknown'}: ${r.message}`);
-  }
-  return out.slice(0, 6);
+  const blockers = payload.compatibility.counts.BLOCKER;
+  if (blockers > 0) out.push(`${blockers} blocker${blockers > 1 ? 's' : ''} to resolve — see Checks on the module diagram`);
+  return out.slice(0, 4);
 }

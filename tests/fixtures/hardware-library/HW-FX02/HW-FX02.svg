@@ -1,71 +1,101 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 348 352" width="348" height="352" data-hardware-entity-id="HW-FX02" data-embedo-svg="perimeter-v1">
-  <g id="deco-HW-FX02-board"><rect x="64" y="64" width="220" height="224" rx="10" fill="#0A3A40" stroke="#075F69" stroke-width="2"/></g>
-  <g id="deco-HW-FX02-title"><text x="174" y="172" fill="#EAF6F6" font-family="Inter, Arial, sans-serif" font-size="12" font-weight="600" text-anchor="middle">Adafruit QT Py RP2040</text>
-    <text x="174" y="188" fill="#9CD7D5" font-family="Inter, Arial, sans-serif" font-size="9" text-anchor="middle">RP2040 · Adafruit</text></g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 368 433" width="368" height="433" data-hardware-entity-id="HW-FX02" data-embedo-svg="perimeter-v1">
+  <title>Adafruit QT Py RP2040</title>
+  <defs><linearGradient id="grad-HW-FX02" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0D4950"/><stop offset="1" stop-color="#0A3A40"/></linearGradient></defs>
+  <g id="deco-HW-FX02-board">
+    <rect x="64" y="64" width="240" height="305" rx="12" fill="url(#grad-HW-FX02)" stroke="#13737C" stroke-width="1.5"/>
+    <rect x="68" y="68" width="232" height="297" rx="9" fill="none" stroke="#9CD7D5" stroke-opacity="0.08"/>
+    <circle cx="75" cy="75" r="4" fill="#04191C" stroke="#9CD7D5" stroke-opacity="0.35" stroke-width="1.2"/>
+    <circle cx="293" cy="75" r="4" fill="#04191C" stroke="#9CD7D5" stroke-opacity="0.35" stroke-width="1.2"/>
+    <circle cx="75" cy="358" r="4" fill="#04191C" stroke="#9CD7D5" stroke-opacity="0.35" stroke-width="1.2"/>
+    <circle cx="293" cy="358" r="4" fill="#04191C" stroke="#9CD7D5" stroke-opacity="0.35" stroke-width="1.2"/>
+  </g>
+  <g id="deco-HW-FX02-title">
+    <rect x="78" y="70" width="212" height="40" rx="7" fill="#082F34" fill-opacity="0.75"/>
+    <text x="184" y="88" fill="#EAF6F6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" text-anchor="middle">Adafruit QT Py RP2040</text>
+    <text x="184" y="102" fill="#7FB3B5" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="9.5" text-anchor="middle" letter-spacing="0.2">RP2040 · Adafruit</text>
+  </g>
   <g id="blk-HW-FX02-JP1" class="embedo-connector" data-connector-id="HW-FX02:JP1">
-    <rect x="64" y="103.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="64" y1="110" x2="44" y2="110" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP1-1" class="embedo-anchor" cx="44" cy="110" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:1" data-pin-id="HW-FX02:A0"/>
-    <text x="86" y="113" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start">A0</text>
-    <rect x="64" y="125.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="64" y1="132" x2="44" y2="132" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP1-2" class="embedo-anchor" cx="44" cy="132" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:2" data-pin-id="HW-FX02:A1"/>
-    <text x="86" y="135" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start">A1</text>
-    <rect x="64" y="147.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="64" y1="154" x2="44" y2="154" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP1-3" class="embedo-anchor" cx="44" cy="154" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:3" data-pin-id="HW-FX02:A2"/>
-    <text x="86" y="157" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start">A2</text>
-    <rect x="64" y="169.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="64" y1="176" x2="44" y2="176" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP1-4" class="embedo-anchor" cx="44" cy="176" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:4" data-pin-id="HW-FX02:A3"/>
-    <text x="86" y="179" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start">A3</text>
-    <rect x="64" y="191.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="64" y1="198" x2="44" y2="198" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP1-5" class="embedo-anchor" cx="44" cy="198" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:5" data-pin-id="HW-FX02:SDA"/>
-    <text x="86" y="201" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start">SDA</text>
-    <rect x="64" y="213.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="64" y1="220" x2="44" y2="220" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP1-6" class="embedo-anchor" cx="44" cy="220" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:6" data-pin-id="HW-FX02:SCL"/>
-    <text x="86" y="223" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start">SCL</text>
-    <rect x="64" y="235.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="64" y1="242" x2="44" y2="242" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP1-7" class="embedo-anchor" cx="44" cy="242" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:7" data-pin-id="HW-FX02:TX"/>
-    <text x="86" y="245" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="start">TX</text>
+    <rect x="65" y="127" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="73.5" cy="133" r="2.2" fill="#04191C"/>
+    <line x1="64" y1="133" x2="44" y2="133" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP1-1" class="embedo-anchor" cx="44" cy="133" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:1" data-pin-id="HW-FX02:A0"/>
+    <text x="88" y="136" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start">A0</text>
+    <rect x="65" y="149" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="73.5" cy="155" r="2.2" fill="#04191C"/>
+    <line x1="64" y1="155" x2="44" y2="155" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP1-2" class="embedo-anchor" cx="44" cy="155" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:2" data-pin-id="HW-FX02:A1"/>
+    <text x="88" y="158" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start">A1</text>
+    <rect x="65" y="171" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="73.5" cy="177" r="2.2" fill="#04191C"/>
+    <line x1="64" y1="177" x2="44" y2="177" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP1-3" class="embedo-anchor" cx="44" cy="177" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:3" data-pin-id="HW-FX02:A2"/>
+    <text x="88" y="180" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start">A2</text>
+    <rect x="65" y="193" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="73.5" cy="199" r="2.2" fill="#04191C"/>
+    <line x1="64" y1="199" x2="44" y2="199" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP1-4" class="embedo-anchor" cx="44" cy="199" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:4" data-pin-id="HW-FX02:A3"/>
+    <text x="88" y="202" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start">A3</text>
+    <rect x="65" y="215" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="73.5" cy="221" r="2.2" fill="#04191C"/>
+    <line x1="64" y1="221" x2="44" y2="221" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP1-5" class="embedo-anchor" cx="44" cy="221" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:5" data-pin-id="HW-FX02:SDA"/>
+    <text x="88" y="224" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start">SDA</text>
+    <rect x="65" y="237" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="73.5" cy="243" r="2.2" fill="#04191C"/>
+    <line x1="64" y1="243" x2="44" y2="243" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP1-6" class="embedo-anchor" cx="44" cy="243" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:6" data-pin-id="HW-FX02:SCL"/>
+    <text x="88" y="246" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start">SCL</text>
+    <rect x="65" y="259" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="73.5" cy="265" r="2.2" fill="#04191C"/>
+    <line x1="64" y1="265" x2="44" y2="265" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP1-7" class="embedo-anchor" cx="44" cy="265" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP1" data-contact-id="HW-FX02:JP1:7" data-pin-id="HW-FX02:TX"/>
+    <text x="88" y="268" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start">TX</text>
   </g>
   <g id="blk-HW-FX02-JP2" class="embedo-connector" data-connector-id="HW-FX02:JP2">
-    <rect x="266" y="103.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="284" y1="110" x2="304" y2="110" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP2-1" class="embedo-anchor" cx="304" cy="110" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:1" data-pin-id="HW-FX02:5V"/>
-    <text x="262" y="113" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="end">5V</text>
-    <rect x="266" y="125.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="284" y1="132" x2="304" y2="132" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP2-2" class="embedo-anchor" cx="304" cy="132" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:2" data-pin-id="HW-FX02:GND"/>
-    <text x="262" y="135" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="end">GND</text>
-    <rect x="266" y="147.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="284" y1="154" x2="304" y2="154" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP2-3" class="embedo-anchor" cx="304" cy="154" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:3" data-pin-id="HW-FX02:3V"/>
-    <text x="262" y="157" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="end">3V</text>
-    <rect x="266" y="169.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="284" y1="176" x2="304" y2="176" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP2-4" class="embedo-anchor" cx="304" cy="176" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:4" data-pin-id="HW-FX02:MO"/>
-    <text x="262" y="179" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="end">MO</text>
-    <rect x="266" y="191.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="284" y1="198" x2="304" y2="198" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP2-5" class="embedo-anchor" cx="304" cy="198" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:5" data-pin-id="HW-FX02:MI"/>
-    <text x="262" y="201" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="end">MI</text>
-    <rect x="266" y="213.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="284" y1="220" x2="304" y2="220" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP2-6" class="embedo-anchor" cx="304" cy="220" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:6" data-pin-id="HW-FX02:SCK"/>
-    <text x="262" y="223" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="end">SCK</text>
-    <rect x="266" y="235.5" width="18" height="13" rx="3" fill="#9CD7D5"/>
-    <line x1="284" y1="242" x2="304" y2="242" stroke="#9CD7D5" stroke-width="1.4"/>
-    <circle id="a-HW-FX02-JP2-7" class="embedo-anchor" cx="304" cy="242" r="3.6" fill="#9CD7D5" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:7" data-pin-id="HW-FX02:RX"/>
-    <text x="262" y="245" fill="#EAF6F6" font-family="monospace" font-size="8" text-anchor="end">RX</text>
+    <rect x="286" y="127" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="294.5" cy="133" r="2.2" fill="#04191C"/>
+    <line x1="304" y1="133" x2="324" y2="133" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP2-1" class="embedo-anchor" cx="324" cy="133" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:1" data-pin-id="HW-FX02:5V"/>
+    <text x="280" y="136" fill="#F5B84B" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="end">5V</text>
+    <rect x="286" y="149" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="294.5" cy="155" r="2.2" fill="#04191C"/>
+    <line x1="304" y1="155" x2="324" y2="155" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP2-2" class="embedo-anchor" cx="324" cy="155" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:2" data-pin-id="HW-FX02:GND"/>
+    <text x="280" y="158" fill="#8EA7AA" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="end">GND</text>
+    <rect x="286" y="171" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="294.5" cy="177" r="2.2" fill="#04191C"/>
+    <line x1="304" y1="177" x2="324" y2="177" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP2-3" class="embedo-anchor" cx="324" cy="177" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:3" data-pin-id="HW-FX02:3V"/>
+    <text x="280" y="180" fill="#F5B84B" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="end">3V</text>
+    <rect x="286" y="193" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="294.5" cy="199" r="2.2" fill="#04191C"/>
+    <line x1="304" y1="199" x2="324" y2="199" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP2-4" class="embedo-anchor" cx="324" cy="199" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:4" data-pin-id="HW-FX02:MO"/>
+    <text x="280" y="202" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="end">MO</text>
+    <rect x="286" y="215" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="294.5" cy="221" r="2.2" fill="#04191C"/>
+    <line x1="304" y1="221" x2="324" y2="221" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP2-5" class="embedo-anchor" cx="324" cy="221" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:5" data-pin-id="HW-FX02:MI"/>
+    <text x="280" y="224" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="end">MI</text>
+    <rect x="286" y="237" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="294.5" cy="243" r="2.2" fill="#04191C"/>
+    <line x1="304" y1="243" x2="324" y2="243" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP2-6" class="embedo-anchor" cx="324" cy="243" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:6" data-pin-id="HW-FX02:SCK"/>
+    <text x="280" y="246" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="end">SCK</text>
+    <rect x="286" y="259" width="17" height="12" rx="3" fill="#B9E3E1"/>
+    <circle cx="294.5" cy="265" r="2.2" fill="#04191C"/>
+    <line x1="304" y1="265" x2="324" y2="265" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-JP2-7" class="embedo-anchor" cx="324" cy="265" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX02:JP2" data-contact-id="HW-FX02:JP2:7" data-pin-id="HW-FX02:RX"/>
+    <text x="280" y="268" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="end">RX</text>
   </g>
   <g id="blk-HW-FX02-CONN1" class="embedo-connector" data-connector-id="HW-FX02:CONN1">
-    <rect x="148" y="274" width="52" height="14" rx="2" fill="#06262B" stroke="#20E6E0" stroke-width="1.5"/>
-    <line x1="174" y1="288" x2="174" y2="308" stroke="#20E6E0" stroke-width="2"/>
-    <circle id="a-HW-FX02-CONN1" class="embedo-anchor embedo-anchor-whole" cx="174" cy="308" r="5" fill="#20E6E0" data-connector-id="HW-FX02:CONN1"/>
-    <text x="174" y="268" fill="#20E6E0" font-family="monospace" font-size="8" text-anchor="middle">STEMMA QT</text>
+    <rect x="159" y="352" width="50" height="16" rx="3" fill="#04191C" stroke="#20E6E0" stroke-width="1.4"/>
+    <rect x="167" y="358" width="4" height="4" rx="1" fill="#20E6E0" fill-opacity="0.75"/>
+    <rect x="177" y="358" width="4" height="4" rx="1" fill="#20E6E0" fill-opacity="0.75"/>
+    <rect x="187" y="358" width="4" height="4" rx="1" fill="#20E6E0" fill-opacity="0.75"/>
+    <rect x="197" y="358" width="4" height="4" rx="1" fill="#20E6E0" fill-opacity="0.75"/>
+    <line x1="184" y1="369" x2="184" y2="389" stroke="#20E6E0" stroke-width="2" stroke-linecap="round"/>
+    <circle id="a-HW-FX02-CONN1" class="embedo-anchor embedo-anchor-whole" cx="184" cy="389" r="5" fill="#20E6E0" stroke="#04191C" stroke-width="1.5" data-connector-id="HW-FX02:CONN1"/>
+    <text x="184" y="345" fill="#20E6E0" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8" font-weight="600" letter-spacing="0.4" text-anchor="middle">STEMMA QT</text>
   </g>
 </svg>

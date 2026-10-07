@@ -327,11 +327,13 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
 
   // --- labels (staggered over three rows to avoid collisions) ---------------------------------------
   const labels: ModuleDiagram['labels'] = [];
-  [...leftLanes, ...rightLanes].forEach((lane, i) => {
+  [...leftLanes, ...rightLanes].forEach((lane) => {
     const span = laneSpans.get(lane.key);
     if (!span || !Number.isFinite(span.min)) return;
     const text = lane.netId ? (netById.get(lane.netId)?.name ?? lane.netId) : 'STEMMA QT';
-    labels.push({ text, x: r1(lane.x), y: r1(span.min - 10 - (i % 3) * 13), netId: lane.netId, color: lane.color });
+    // Labels run vertically up their lane from just above its top, so neighbouring lanes
+    // (22 px apart) can never overlap; `y` is the label's bottom end.
+    labels.push({ text, x: r1(lane.x), y: r1(span.min - 8), netId: lane.netId, color: lane.color });
   });
 
   // --- gap placeholders under the shorter column -------------------------------------------------
@@ -370,7 +372,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     ...gapBoxes.map((g) => g.y + g.height),
     ...wires.flatMap((w) => w.points.map((p) => p[1])),
   ];
-  const minY = Math.min(top, ...wires.flatMap((w) => w.points.map((p) => p[1])), ...labels.map((l) => l.y - 12));
+  const minY = Math.min(top, ...wires.flatMap((w) => w.points.map((p) => p[1])), ...labels.map((l) => l.y - (l.text.length * 6.2 + 18)));
   // Routes that climb over the controller can rise above the header; shift everything down if so.
   const shift = minY < PAD ? PAD - minY : 0;
   if (shift > 0) {
