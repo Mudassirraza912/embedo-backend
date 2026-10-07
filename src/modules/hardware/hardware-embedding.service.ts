@@ -26,7 +26,9 @@ export function buildEmbeddingSummary(record: HardwareRecord): string {
     })
     .join(', ');
   const ecosystem = new Set(compatibility_hints.ecosystem_tags);
-  for (const c of record.connectors) if (/stemma|qwiic/i.test(c.connector_type)) ecosystem.add('STEMMA QT / Qwiic');
+  if (record.connectors.some((c) => /stemma|qwiic/i.test(c.connector_type)) && ![...ecosystem].some((t) => /stemma|qwiic/i.test(t))) {
+    ecosystem.add('STEMMA QT / Qwiic');
+  }
   const supply =
     electrical.supply_voltage_min_v != null || electrical.supply_voltage_max_v != null
       ? `${electrical.supply_voltage_min_v ?? '?'}–${electrical.supply_voltage_max_v ?? '?'} V`

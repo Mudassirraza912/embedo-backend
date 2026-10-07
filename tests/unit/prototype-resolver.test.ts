@@ -78,6 +78,14 @@ describe('prototype resolver contract', () => {
     expect(retry.systemPrompt).toContain('HW-0000 is not in LIBRARY');
   });
 
+  it('reports a missing controller as a gap instead of failing when the catalogue has none', async () => {
+    jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(aiResult(JSON.stringify({ ...valid, controller: null })));
+    const peripheralsOnly = catalogue.filter((e) => !e.isController);
+    const { output } = await resolvePrototype({ requestText: 'relay + oled', history: [], catalogue: peripheralsOnly, current: null, sessionId: 's1' });
+    expect(output.modules).toEqual([]);
+    expect(output.gaps[0]).toMatchObject({ category: 'Processing', need: 'a controller board' });
+  });
+
   it('fails as a non-retryable resolver error after two invalid answers', async () => {
     jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(aiResult('{"modules": "nope"}'));
     jest.spyOn(aiRouterService, 'markSchemaResult').mockResolvedValue();

@@ -106,6 +106,15 @@ const envSchema = z
       .enum(['true', 'false'])
       .default('false')
       .transform((v) => v === 'true'),
+    // When the library has no suitable board, source one from a vendor product page: it is used
+    // privately (provisional, unverified) in the requesting project and queued for admin review.
+    PROTOTYPE_SOURCING_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+    // Comma-separated vendor hosts the sourcer may fetch (".adafruit.com" = domain and subdomains).
+    // Unset = the built-in maker/chip-vendor list in hardware/discovery/vendor-page.ts.
+    HARDWARE_ALLOWED_DOMAINS: optionalString,
   })
   .superRefine((cfg, ctx) => {
     const isProd = cfg.NODE_ENV === 'production';

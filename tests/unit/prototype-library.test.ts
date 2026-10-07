@@ -61,7 +61,8 @@ describe('hardware library upload validation', () => {
     expect(summary).toBe(buildEmbeddingSummary(bundle!.record));
     expect(summary).toContain('Main silicon: BME280');
     expect(summary).toContain('I2C target (0x77, 0x76)');
-    expect(summary).toContain('STEMMA QT / Qwiic');
+    expect(summary).toContain('Ecosystem: STEMMA QT, Qwiic');
+    expect(summary).not.toContain('STEMMA QT / Qwiic'); // no duplicate of an existing tag
     expect(summary).not.toMatch(/https?:\/\//);
   });
 

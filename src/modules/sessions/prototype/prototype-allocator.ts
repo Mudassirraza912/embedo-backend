@@ -152,7 +152,7 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
   // --- controller pin finders ------------------------------------------------------------------
   const freeSignalPin = (predicate: (pin: HardwarePin) => boolean): HardwarePin | null =>
     mcu.record.pins.find(
-      (pin) => !usedMcuSignalPins.has(pin.pin_id) && !isReservedForSignal(pin) && mcu.isWireable(pin.pin_id) && predicate(pin)
+      (pin) => !usedMcuSignalPins.has(pin.pin_id) && !isReservedForSignal(pin) && mcu.isHeaderWireable(pin.pin_id) && predicate(pin)
     ) ?? null;
 
   const hasFunction = (pin: HardwarePin, family: string, roles?: string[], instance?: number | null) =>
@@ -213,6 +213,13 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
         scl = bus.pins['scl']!;
         busName = bus.instance !== null ? `I2C${bus.instance}` : 'I2C';
       }
+    }
+    if (!sda || !scl) {
+      // Last resort: the board's silkscreened SDA/SCL pins (records without function tokens).
+      const named = (names: string[]) =>
+        names.flatMap((n) => mcu.pinsByName(n)).find((p) => !usedMcuSignalPins.has(p.pin_id) && mcu.isWireable(p.pin_id)) ?? null;
+      sda = named(['SDA', 'SDA0', 'SDA1']);
+      scl = named(['SCL', 'SCL0', 'SCL1']);
     }
 
     if (!sda || !scl) {
@@ -375,6 +382,12 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       }
     }
     if (!spiBus) {
+      const named = (names: string[]) => names.flatMap((n) => mcu.pinsByName(n)).find((p) => !usedMcuSignalPins.has(p.pin_id) && mcu.isWireable(p.pin_id)) ?? null;
+      const sck = named(['SCK', 'SCLK']);
+      const mosi = named(['MOSI', 'MO', 'COPI']);
+      if (sck && mosi) spiBus = { name: 'SPI', sck, mosi, miso: named(['MISO', 'MI', 'CIPO']), csHint: named(['CS', 'SS']) };
+    }
+    if (!spiBus) {
       results.push(
         result('required_host_interface', 'BLOCKER', `${mcu.label} has no free SPI bus.`, [mcu.instanceId, ...spiPeripherals.map((p) => p.instanceId)], [], 'Choose a controller with a free SPI bus.')
       );
@@ -408,6 +421,12 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       }
     }
     bus ??= pickBus('UART', { tx: ['TX'], rx: ['RX'] });
+    if (!bus) {
+      const named = (names: string[]) => names.flatMap((n) => mcu.pinsByName(n)).find((p) => !usedMcuSignalPins.has(p.pin_id) && mcu.isWireable(p.pin_id)) ?? null;
+      const tx = named(['TX', 'TXD', 'TX0']);
+      const rx = named(['RX', 'RXD', 'RX0']);
+      if (tx && rx) bus = { instance: null, pins: { tx, rx } };
+    }
     if (!bus) {
       results.push(
         result('required_host_interface', 'BLOCKER', `${mcu.label} has no free UART for ${board.label}.`, [mcu.instanceId, p.instanceId], [pTx.pin_id, pRx.pin_id], 'Use a controller with another UART, or move a module to I2C.')
@@ -510,6 +529,27 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     const board = boards.get(p.instanceId)!;
     if (poweredByCable.has(p.instanceId)) {
       peripheralRails.set(p.instanceId, poweredByCable.get(p.instanceId) ?? null);
+      continue;
+    }
+    // Power modules (chargers, regulators, battery boards) run on their own supply; feeding them
+    // from the controller's rail would be wrong. Their status signals (if linked) still need a
+    // common ground with the controller.
+    if (board.record.interfaces.host_requirement !== 'host_required') {
+      const ground = board.record.pins.find((pin) => (pin.direction === 'ground' || pin.signal_class === 'ground') && board.isWireable(pin.pin_id));
+      if (p.links.length > 0 && ground && mcuGround) {
+        nets.add('GND', 'ground', claim(mcu, mcuGround, false));
+        nets.add('GND', 'ground', claim(board, ground, false));
+        require(p.instanceId, ground);
+      }
+      results.push(
+        result(
+          'required_power_rail',
+          'WARNING',
+          `${board.label} has its own supply and is not powered from ${mcu.label}${p.links.length > 0 ? ' (only its signals and a common ground are wired)' : ''}. Connect its input and output as its documentation describes.`,
+          [p.instanceId]
+        )
+      );
+      peripheralRails.set(p.instanceId, null);
       continue;
     }
 
@@ -619,6 +659,27 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
         from: { instanceId: member.instanceId, anchorId: member.anchorId, contactId: member.contactId, connectorId: null },
         to: { instanceId: mcu.instanceId, anchorId: hub.anchorId!, contactId: hub.contactId, connectorId: null },
       });
+    }
+  }
+
+  // Jumpers that land on a STEMMA QT / Qwiic socket need a socket-to-header cable.
+  for (const board of [mcu, ...boards.values()]) {
+    const viaAdapter = nets
+      .list()
+      .flatMap((n) => n.members)
+      .filter((m) => m.instanceId === board.instanceId && !cabled.has(`${m.instanceId}|${m.pinId}`))
+      .filter((m) => board.contactsOf(m.pinId).some((c) => c.viaAdapter && c.contact.contact_id === m.contactId));
+    if (viaAdapter.length > 0) {
+      results.push(
+        result(
+          'connector_family_compatibility',
+          'WARNING',
+          `${board.label} ${viaAdapter.map((m) => m.pinName).join('/')} ${viaAdapter.length === 1 ? 'is' : 'are'} only on its STEMMA QT / Qwiic socket.`,
+          [board.instanceId],
+          viaAdapter.map((m) => m.pinId),
+          'Use a STEMMA QT / Qwiic to male-header jumper cable (e.g. Adafruit 4209 or SparkFun PRT-14425): black GND, red V+, blue SDA, yellow SCL.'
+        )
+      );
     }
   }
 
