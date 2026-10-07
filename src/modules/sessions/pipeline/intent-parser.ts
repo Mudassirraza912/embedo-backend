@@ -47,6 +47,7 @@ JSON Schema to return:
 }
 
 If a field is not stated by the user, use null (or an empty string for deviceType/purpose). Do not invent details.
+When conversation history contains an initial product brief and later answers to clarification questions, combine them into one intent. Treat the latest answer as a continuation of that brief, preserve earlier details that were not changed, and fill the fields the answer provides. Do not classify a hardware-related clarification answer as off-topic just because it is short.
 Output ONLY valid raw JSON. No markdown code blocks, no explanation text.`;
 
 /**
