@@ -34,13 +34,6 @@ describe('Operator surfaces are never public', () => {
     expect(res.status).toBe(401);
   });
 
-  it('requires admin authentication for uploaded JSON ingestion', async () => {
-    const res = await request(app)
-      .post('/api/v1/admin/components/ingest/json')
-      .send({ filename: 'parts.json', content: [{ partNumber: 'INA219' }] });
-    expect(res.status).toBe(401);
-  });
-
   it('rejects a non-admin user on admin ingestion routes with 403', async () => {
     jest.spyOn(prisma.user, 'findFirst').mockResolvedValue({ id: 'u1', email: 'u@x.io', role: 'user', suspendedAt: null } as never);
     jest.spyOn(redis, 'get').mockResolvedValue(null);
@@ -57,18 +50,6 @@ describe('Operator surfaces are never public', () => {
       .post('/api/v1/admin/components/ingest')
       .set('Authorization', `Bearer ${token}`)
       .send({ url: 'http://169.254.169.254/latest/meta-data' });
-    expect(res.status).toBe(400);
-    expect(res.body.error.code).toBe('VALIDATION_ERROR');
-  });
-
-  it('rejects non-JSON filenames before indexing', async () => {
-    jest.spyOn(prisma.user, 'findFirst').mockResolvedValue({ id: 'a1', email: 'a@x.io', role: 'admin', suspendedAt: null } as never);
-    jest.spyOn(redis, 'get').mockResolvedValue(null);
-    const token = jwt.sign({ userId: 'a1', email: 'a@x.io', role: 'admin' }, env.JWT_ACCESS_SECRET);
-    const res = await request(app)
-      .post('/api/v1/admin/components/ingest/json')
-      .set('Authorization', `Bearer ${token}`)
-      .send({ filename: 'parts.txt', content: { partNumber: 'INA219' } });
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('VALIDATION_ERROR');
   });

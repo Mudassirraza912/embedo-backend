@@ -11,13 +11,6 @@ const httpsUrl = z
 export const ingestUrlQuerySchema = z.object({ url: httpsUrl });
 export const ingestUrlBodySchema = z.object({ url: httpsUrl });
 
-export const ingestJsonBodySchema = z.object({
-  filename: z.string().trim().min(1).max(255).regex(/\.json$/i, 'Only .json files are accepted'),
-  content: z.unknown().refine((value) => value !== undefined, 'JSON content is required'),
-});
-
-export type IngestJsonBody = z.infer<typeof ingestJsonBodySchema>;
-
 export const ingestBatchSchema = z.object({
   vendor: z.string().trim().max(100).optional(),
   urls: z.array(httpsUrl).max(500).optional(),

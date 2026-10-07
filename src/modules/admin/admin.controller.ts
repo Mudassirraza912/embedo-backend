@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { z } from 'zod';
 import { datasheetIngestionService, IngestionProgress } from '../components/datasheet-ingestion.service.js';
 import { datasheetIngestQueue, getDatasheetIngestQueueEvents } from '../../jobs/datasheet-ingest.queue.js';
@@ -11,11 +10,10 @@ import { logger } from '../../config/logger.js';
 import { env } from '../../config/env.js';
 import { AppError } from '../../common/errors/AppError.js';
 import { userSuspensionKey } from '../../common/middlewares/auth.middleware.js';
-import { IngestBatchInput, IngestJsonBody, ListComponentsQuery, UpdatePlanBody, UpdateUserLimitsBody } from './admin.validation.js';
+import { IngestBatchInput, ListComponentsQuery, UpdatePlanBody, UpdateUserLimitsBody } from './admin.validation.js';
 import { limitsService, PLAN_NAMES, DEFAULT_LIMITS, LIMIT_BOUNDS, computeEffective, type PlanName } from '../limits/limits.service.js';
 import { IN_FLIGHT_STATUSES } from '../sessions/session-status.js';
 import { Prisma } from '@prisma/client';
-import { modelProviderService } from '../ai/model-provider.service.js';
 
 const manifestItemSchema = z.object({
   part_number: z.string().optional(),
@@ -136,43 +134,6 @@ export class AdminController {
     try {
       const result = await datasheetIngestionService.ingestFromUrl(url, { actorUserId: req.user?.id });
       res.status(200).json({ success: true, result });
-    } catch (err) {
-      next(err);
-    }
-  };
-
-  /** Indexes an uploaded JSON document into the knowledge RAG corpus. */
-  ingestJson = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-    try {
-      const { filename, content } = req.body as IngestJsonBody;
-      const serialized = JSON.stringify(content, null, 2);
-      if (!serialized || Buffer.byteLength(serialized, 'utf8') > 700_000) {
-        throw new AppError(413, 'BAD_REQUEST', 'JSON files must be smaller than 700 KB');
-      }
-
-      const chunks = datasheetIngestionService.chunkText(`${filename}\n\n${serialized}`);
-      if (!chunks.length) throw new AppError(400, 'VALIDATION_ERROR', 'The JSON file contains no indexable content');
-      if (chunks.length > 100) throw new AppError(413, 'BAD_REQUEST', 'This JSON file creates too many chunks; split it into smaller files');
-
-      const digest = crypto.createHash('sha256').update(serialized).digest('hex');
-      const sourceUrl = `upload://json/${digest}`;
-      const embedded = await modelProviderService.embedBatch(chunks);
-      if (embedded.embeddings.length !== chunks.length || embedded.embeddings.some((vector) => vector.length !== 1536)) {
-        throw new AppError(502, 'PROVIDER_UNAVAILABLE', 'Embedding generation failed; JSON ingestion was not saved');
-      }
-      await prisma.$transaction(async (tx) => {
-        await tx.knowledgeChunk.deleteMany({ where: { sourceUrl } });
-        for (let index = 0; index < chunks.length; index += 1) {
-          const vector = `[${embedded.embeddings[index].join(',')}]`;
-          await tx.$executeRaw`
-            INSERT INTO "knowledge_chunks" ("id", "source_type", "source_url", "title", "chunk_text", "chunk_metadata", "embedding")
-            VALUES (gen_random_uuid(), 'uploaded_json', ${sourceUrl}, ${filename}, ${chunks[index]}, ${JSON.stringify({ filename, digest, chunkIndex: index + 1, totalChunks: chunks.length })}::jsonb, ${vector}::vector)
-          `;
-        }
-      });
-
-      logger.info({ filename, chunks: chunks.length, actorUserId: req.user?.id }, 'Indexed uploaded JSON knowledge document');
-      res.status(200).json({ success: true, filename, chunksIngested: chunks.length, message: `Indexed ${chunks.length} JSON chunk(s).` });
     } catch (err) {
       next(err);
     }
