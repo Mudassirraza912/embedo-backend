@@ -54,15 +54,14 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
     expect(result.reply).toContain('embedded hardware');
   });
 
-  it('falls back to the fixed message only when the model omits a reply for off_topic', async () => {
+  it('routes an off-topic result without a reply to the contextual copilot', async () => {
     jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(
       routerResult(JSON.stringify({ mode: 'off_topic', projectTitle: '', isGibberish: false, reply: '' }))
     );
 
     const result = await routeMessage('asdf');
-    expect(result.mode).toBe('off_topic');
-    expect(result.reply.length).toBeGreaterThan(0);
-    expect(result.reply).toContain('embedded hardware');
+    expect(result.mode).toBe('discuss');
+    expect(result.reply).toBe('');
   });
 
   it('generate mode carries an empty reply and false isGibberish through untouched', async () => {
@@ -75,6 +74,20 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
     expect(result.projectTitle).toBe('ESP32 Weather Station');
     expect(result.isGibberish).toBe(false);
     expect(result.reply).toBe('');
+  });
+
+  it('routes an affirmative answer to an explicit architecture-generation offer to generate', async () => {
+    const spy = jest.spyOn(aiRouterService, 'executeTask');
+    const result = await routeMessage(
+      'yes please',
+      'session-1',
+      [{ role: 'assistant', content: 'Would you like to proceed with generating the full architecture (block diagram, power tree, protocol map, BOM)?' }],
+      { projectTitle: 'Water Motor Controller', originalBrief: 'Water motor controller' }
+    );
+
+    expect(result.mode).toBe('generate');
+    expect(result.projectTitle).toBe('Water Motor Controller');
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('retries once on unparseable JSON, still populating the new fields on success', async () => {
