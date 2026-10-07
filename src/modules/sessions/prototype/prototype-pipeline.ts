@@ -7,7 +7,7 @@ import { hardwareLibraryService } from '../../hardware/hardware-library.service.
 import { persistNewVersion } from '../version.service.js';
 import { GENERATION_HOLD_MESSAGE } from '../pipeline/sufficiency-gate.js';
 import { NonRetryablePipelineError, PipelineExecutionOptions, PipelineExecutionResult } from '../pipeline/orchestrator.js';
-import { PrototypeResolverError, RESOLVER_TASK_CASE, resolvePrototype, selectCatalogue } from './prototype-resolver.js';
+import { PrototypeResolverError, RESOLVER_TASK_CASE, resolvePrototype, retrieveCatalogue } from './prototype-resolver.js';
 import { assemblePrototype } from './prototype-assembler.js';
 import { isPrototypeArchitecture, isPrototypeComposition, PrototypeArchitecture, PrototypeComposition } from './prototype.types.js';
 
@@ -125,7 +125,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     const keepIds = currentComposition
       ? [currentComposition.controller?.hardwareEntityId, ...currentComposition.modules.map((m) => m.hardwareEntityId)].filter((id): id is string => Boolean(id))
       : [];
-    const catalogue = selectCatalogue(library, `${requestText}\n${turns.slice(-4).map((t) => t.content).join('\n')}`, keepIds);
+    const catalogue = await retrieveCatalogue(library, `${requestText}\n${turns.slice(-4).map((t) => t.content).join('\n')}`, keepIds);
 
     emitSessionEvent.aiCallStarted(sessionId, RESOLVER_TASK_CASE);
     const { output, latencyMs } = await resolvePrototype({

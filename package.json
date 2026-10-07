@@ -15,7 +15,7 @@
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "hw:import": "tsx src/scripts/hardware-import.ts",
+    "hw:upload": "tsx scripts/hardware/upload-library.ts",
     "hw:fixtures": "tsx scripts/hardware/build-fixtures.ts",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --forceExit",
     "test:unit": "node --experimental-vm-modules node_modules/jest/bin/jest.js tests/unit --forceExit",

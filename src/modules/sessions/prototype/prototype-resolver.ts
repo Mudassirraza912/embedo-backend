@@ -4,6 +4,7 @@ import { logger } from '../../../config/logger.js';
 import { stripJsonFences } from '../pipeline/json-utils.js';
 import { FUNCTIONAL_CATEGORIES } from '../../hardware/hardware.schema.js';
 import { LibraryEntity } from '../../hardware/hardware-library.service.js';
+import { hardwareEmbeddingService } from '../../hardware/hardware-embedding.service.js';
 import { LINK_INTERFACES, LinkInterface, PrototypeComposition } from './prototype.types.js';
 
 /** Route R: the Prototype resolver. Registered in model_routes; gpt-4o by default. */
@@ -158,6 +159,31 @@ export function selectCatalogue(entities: LibraryEntity[], requestText: string, 
     .slice(0, Math.max(CATALOGUE_LIMIT - controllers.length, 20))
     .map(({ e }) => e);
   return [...controllers, ...peripherals];
+}
+
+/**
+ * Retrieval for a large library (plan D4): controllers and the current design's boards are always
+ * kept; peripherals are shortlisted by pgvector similarity to the request. Boards without a vector
+ * (or no embedding provider) fall back to the keyword ranking, so nothing silently disappears.
+ */
+export async function retrieveCatalogue(entities: LibraryEntity[], requestText: string, keepIds: string[] = []): Promise<LibraryEntity[]> {
+  if (entities.length <= CATALOGUE_LIMIT) return entities;
+  const keep = new Set(keepIds);
+  const fixed = entities.filter((e) => e.isController || keep.has(e.hardwareEntityId));
+  const pool = entities.filter((e) => !e.isController && !keep.has(e.hardwareEntityId));
+  const budget = Math.max(CATALOGUE_LIMIT - fixed.length, 20);
+  const ranked = await hardwareEmbeddingService.rank(requestText, pool.map((e) => e.hardwareEntityId), budget);
+  if (!ranked) return selectCatalogue(entities, requestText, keepIds);
+
+  const byId = new Map(pool.map((e) => [e.hardwareEntityId, e]));
+  const chosen = ranked.map((id) => byId.get(id)).filter((e): e is LibraryEntity => Boolean(e));
+  if (chosen.length < budget) {
+    // Top up with keyword-ranked boards that have no vector yet.
+    const taken = new Set(chosen.map((e) => e.hardwareEntityId));
+    const extra = selectCatalogue(pool, requestText).filter((e) => !taken.has(e.hardwareEntityId));
+    chosen.push(...extra.slice(0, budget - chosen.length));
+  }
+  return [...fixed, ...chosen];
 }
 
 /** Semantic checks Zod cannot express: every id, interface and pin must exist in the catalogue. */

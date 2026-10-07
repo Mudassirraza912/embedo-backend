@@ -398,6 +398,14 @@ model HardwareEntity {
   /// silently overwrite changed ones (§4.3).
   contentHash           String    @map("content_hash") @db.VarChar(80)
   metadataJson          Json      @map("metadata_json")
+  /// Retrieval vector over a deterministic summary of the canonical facts (plan D4). Written with
+  /// raw SQL (Prisma cannot write vector columns); HNSW index in the migration.
+  embedding              Unsupported("vector(1536)")?
+  embeddingSourceSummary String?   @map("embedding_source_summary") @db.Text
+  embeddingModelVersion  String?   @map("embedding_model_version") @db.VarChar(80)
+  /// sha256(summary + model): re-embed only when this changes.
+  embeddingInputHash     String?   @map("embedding_input_hash") @db.VarChar(80)
+  embeddedAt             DateTime? @map("embedded_at") @db.Timestamp(6)
   createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
   updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
 
