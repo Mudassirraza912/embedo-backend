@@ -19,21 +19,46 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
   afterEach(() => jest.restoreAllMocks());
 
   it('distinguishes gibberish (unreadable) from off-topic-but-coherent, and carries the model\'s own reply through', async () => {
-    jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(
-      routerResult(
-        JSON.stringify({
-          mode: 'off_topic',
-          projectTitle: '',
-          isGibberish: true,
-          reply: "I couldn't quite read that — try describing an embedded product you'd like to build.",
-        })
+    const executeTask = jest.spyOn(aiRouterService, 'executeTask')
+      .mockResolvedValueOnce(
+        routerResult(JSON.stringify({ mode: 'off_topic', projectTitle: '', isGibberish: true, reply: '' }))
       )
-    );
+      .mockResolvedValueOnce(routerResult('Could you describe what you meant another way?'));
 
     const result = await routeMessage('asdkjhasjkldhakjslhdfjsa');
     expect(result.mode).toBe('off_topic');
     expect(result.isGibberish).toBe(true);
-    expect(result.reply).toBe("I couldn't quite read that — try describing an embedded product you'd like to build.");
+    expect(result.reply).toBe('Could you describe what you meant another way?');
+    expect(executeTask).toHaveBeenCalledTimes(2);
+    const replyCall = executeTask.mock.calls[1]?.[0];
+    expect(replyCall?.systemPrompt).toContain('Generate fresh wording');
+    expect(replyCall?.systemPrompt).toContain('avoid stock wording and near-duplicates');
+    expect(replyCall?.temperature).toBeGreaterThan(0.7);
+  });
+
+  it('never sends heuristic gibberish to generation and falls back to the AI copilot for its reply', async () => {
+    const executeTask = jest.spyOn(aiRouterService, 'executeTask')
+      .mockResolvedValueOnce(routerResult(JSON.stringify({ mode: 'generate', projectTitle: '', isGibberish: false, reply: '' })))
+      .mockResolvedValueOnce(routerResult('I could not make sense of that message; could you try phrasing it differently?'));
+
+    const result = await routeMessage('asdasdasdasd');
+
+    expect(executeTask).toHaveBeenCalledTimes(2);
+    expect(result.mode).toBe('off_topic');
+    expect(result.isGibberish).toBe(true);
+    expect(result.reply).toContain('try phrasing it differently');
+  });
+
+  it('passes prior replies to the AI so repeated unreadable turns can be worded differently', async () => {
+    const executeTask = jest.spyOn(aiRouterService, 'executeTask')
+      .mockResolvedValueOnce(routerResult(JSON.stringify({ mode: 'off_topic', projectTitle: '', isGibberish: true, reply: '' })))
+      .mockResolvedValueOnce(routerResult('That last note was hard to follow; want to give it another try?'));
+    const previousReply = 'Could you please repeat that in your own words?';
+
+    const result = await routeMessage('asdasd', 'session-1', [{ role: 'assistant', content: previousReply }]);
+
+    expect(result.reply).toBe('That last note was hard to follow; want to give it another try?');
+    expect(executeTask.mock.calls[1]?.[0].messages).toContainEqual({ role: 'assistant', content: previousReply });
   });
 
   it('off-topic-but-coherent (e.g. "how is the weather") is NOT flagged as gibberish', async () => {
@@ -59,7 +84,7 @@ describe('routeMessage (gibberish detection + dynamic reply)', () => {
       routerResult(JSON.stringify({ mode: 'off_topic', projectTitle: '', isGibberish: false, reply: '' }))
     );
 
-    const result = await routeMessage('asdf');
+    const result = await routeMessage('tell me a joke');
     expect(result.mode).toBe('discuss');
     expect(result.reply).toBe('');
   });

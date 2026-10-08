@@ -101,7 +101,7 @@ export function checkSufficiency(intent: StructuredIntent, rawInputText?: string
     isGibberishOrSpam(intent.deviceType)
   ) {
     missingFields.push('deviceType');
-    clarificationQuestions.push('What specific type of embedded device or product are you building?');
+    clarificationQuestions.push('What embedded device or product should this design describe?');
   }
 
   // 2. Subsystem Check: Must have at least one functional subsystem
@@ -110,9 +110,7 @@ export function checkSufficiency(intent: StructuredIntent, rawInputText?: string
   );
   if (!hasSubsystem && (!intent.purpose || intent.purpose.trim().length < 10 || isGibberishOrSpam(intent.purpose))) {
     missingFields.push('subsystems');
-    clarificationQuestions.push(
-      'What sensors, actuators, displays, or connectivity interfaces (e.g., BLE, Wi-Fi, LoRa, I2C, SPI) should be included?'
-    );
+    clarificationQuestions.push('Which functions or interfaces are essential for this product?');
   }
 
   // 3. Power Source Check — BLOCKING.
@@ -136,14 +134,10 @@ export function checkSufficiency(intent: StructuredIntent, rawInputText?: string
     missingFields.push('powerSource');
     if (isPortable) {
       suggestedDefaults['powerSource'] = '3.7V LiPo Battery with USB-C Charging (BQ25186 / TP4056)';
-      clarificationQuestions.push(
-        'How is this device powered? It reads as portable — should I assume a rechargeable 3.7V LiPo with USB-C charging, or do you need disposable cells (e.g. CR2032/AA)? Roughly how long should it run between charges?'
-      );
+      clarificationQuestions.push('How will this device be powered, and what runtime should it support?');
     } else {
       suggestedDefaults['powerSource'] = 'USB-C 5V Bus / 3.3V LDO';
-      clarificationQuestions.push(
-        'How is this device powered — USB-C 5V, a DC supply (e.g. 12V/24V), mains AC, or a battery? This determines the regulation and protection stage.'
-      );
+      clarificationQuestions.push('How will this device be powered?');
     }
   }
 

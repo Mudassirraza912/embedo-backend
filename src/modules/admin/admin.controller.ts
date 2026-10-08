@@ -16,6 +16,10 @@ import { limitsService, PLAN_NAMES, DEFAULT_LIMITS, LIMIT_BOUNDS, computeEffecti
 import { IN_FLIGHT_STATUSES } from '../sessions/session-status.js';
 import { Prisma } from '@prisma/client';
 import { modelProviderService } from '../ai/model-provider.service.js';
+import { chunkJsonKnowledge } from './json-knowledge-chunker.js';
+
+const MAX_JSON_INGEST_BYTES = 10 * 1024 * 1024;
+const JSON_INGEST_INSERT_BATCH_SIZE = 100;
 
 const manifestItemSchema = z.object({
   part_number: z.string().optional(),
@@ -145,29 +149,56 @@ export class AdminController {
   ingestJson = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { filename, content } = req.body as IngestJsonBody;
-      const serialized = JSON.stringify(content, null, 2);
-      if (!serialized || Buffer.byteLength(serialized, 'utf8') > 700_000) {
-        throw new AppError(413, 'BAD_REQUEST', 'JSON files must be smaller than 700 KB');
+      const serialized = JSON.stringify(content);
+      if (!serialized || Buffer.byteLength(serialized, 'utf8') > MAX_JSON_INGEST_BYTES) {
+        throw new AppError(413, 'BAD_REQUEST', 'JSON files must be 10 MB or smaller');
       }
 
-      const chunks = datasheetIngestionService.chunkText(`${filename}\n\n${serialized}`);
+      let chunks;
+      try {
+        chunks = chunkJsonKnowledge(filename, content);
+      } catch (err) {
+        if (err instanceof RangeError) {
+          throw new AppError(413, 'BAD_REQUEST', `${err.message}. Reduce or split that record; component records are not indexed partially.`);
+        }
+        throw err;
+      }
       if (!chunks.length) throw new AppError(400, 'VALIDATION_ERROR', 'The JSON file contains no indexable content');
-      if (chunks.length > 100) throw new AppError(413, 'BAD_REQUEST', 'This JSON file creates too many chunks; split it into smaller files');
 
       const digest = crypto.createHash('sha256').update(serialized).digest('hex');
       const sourceUrl = `upload://json/${digest}`;
-      const embedded = await modelProviderService.embedBatch(chunks);
+      const embedded = await modelProviderService.embedBatch(chunks.map((chunk) => chunk.text));
       if (embedded.embeddings.length !== chunks.length || embedded.embeddings.some((vector) => vector.length !== 1536)) {
         throw new AppError(502, 'PROVIDER_UNAVAILABLE', 'Embedding generation failed; JSON ingestion was not saved');
       }
       await prisma.$transaction(async (tx) => {
         await tx.knowledgeChunk.deleteMany({ where: { sourceUrl } });
-        for (let index = 0; index < chunks.length; index += 1) {
-          const vector = `[${embedded.embeddings[index].join(',')}]`;
-          await tx.$executeRaw`
+        for (let start = 0; start < chunks.length; start += JSON_INGEST_INSERT_BATCH_SIZE) {
+          const rows = chunks.slice(start, start + JSON_INGEST_INSERT_BATCH_SIZE).map((chunk, batchIndex) => {
+            const index = start + batchIndex;
+            const vector = `[${embedded.embeddings[index].join(',')}]`;
+            return Prisma.sql`(
+              gen_random_uuid(),
+              'uploaded_json',
+              ${sourceUrl},
+              ${filename},
+              ${chunk.text},
+              ${JSON.stringify({
+                filename,
+                digest,
+                chunkIndex: index + 1,
+                totalChunks: chunks.length,
+                firstRecord: chunk.firstRecord,
+                lastRecord: chunk.lastRecord,
+                recordCount: chunk.recordCount,
+              })}::jsonb,
+              ${vector}::vector
+            )`;
+          });
+          await tx.$executeRaw(Prisma.sql`
             INSERT INTO "knowledge_chunks" ("id", "source_type", "source_url", "title", "chunk_text", "chunk_metadata", "embedding")
-            VALUES (gen_random_uuid(), 'uploaded_json', ${sourceUrl}, ${filename}, ${chunks[index]}, ${JSON.stringify({ filename, digest, chunkIndex: index + 1, totalChunks: chunks.length })}::jsonb, ${vector}::vector)
-          `;
+            VALUES ${Prisma.join(rows)}
+          `);
         }
       });
 
@@ -305,8 +336,26 @@ export class AdminController {
         take: 20,
       });
 
+      const uploadedJsonGroups = await prisma.knowledgeChunk.groupBy({
+        by: ['sourceUrl', 'title'],
+        where: { sourceType: 'uploaded_json', sourceUrl: { not: null } },
+        _count: { _all: true },
+        _max: { createdAt: true },
+        orderBy: { _max: { createdAt: 'desc' } },
+      });
+
       res.status(200).json({
         manifest: manifestData,
+        uploadedJsonDocuments: uploadedJsonGroups.flatMap((group) =>
+          group.sourceUrl
+            ? [{
+                sourceUrl: group.sourceUrl,
+                filename: group.title ?? 'Uploaded JSON',
+                totalChunks: group._count._all,
+                lastIndexedAt: group._max.createdAt,
+              }]
+            : []
+        ),
         components: page.map((c) => ({
           id: c.id,
           partNumber: c.partNumber,

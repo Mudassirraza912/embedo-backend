@@ -61,9 +61,11 @@ describe('routeMessage — design-change follow-ups are never rejected as off-to
   it('does not override gibberish', async () => {
     jest
       .spyOn(aiRouterService, 'executeTask')
-      .mockResolvedValue(aiResult(JSON.stringify({ mode: 'off_topic', projectTitle: '', isGibberish: true, reply: "Couldn't read that." })));
+      .mockResolvedValueOnce(aiResult(JSON.stringify({ mode: 'off_topic', projectTitle: '', isGibberish: true, reply: '' })))
+      .mockResolvedValueOnce(aiResult('Could you try explaining that another way?'));
     const result = await routeMessage('add qwxzvbnmplk', 'session-1', history);
     expect(result.mode).toBe('off_topic');
+    expect(result.reply).toBe('Could you try explaining that another way?');
   });
 
   it('classifies at a low, stable temperature', async () => {
