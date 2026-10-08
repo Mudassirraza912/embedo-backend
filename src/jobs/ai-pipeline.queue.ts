@@ -4,7 +4,9 @@ import { prisma } from '../db/prisma.js';
 import { logger } from '../config/logger.js';
 import { emitSessionEvent } from '../modules/realtime/socket.js';
 import { AiRouterService } from '../modules/ai/ai-router.service.js';
-import { runGenerationPipeline, RetryablePipelineError } from '../modules/sessions/pipeline/orchestrator.js';
+import { RetryablePipelineError } from '../modules/sessions/pipeline/orchestrator.js';
+import { runSessionPipeline } from '../modules/sessions/pipeline/dispatch.js';
+import { SessionType, sessionTypeOf } from '../modules/sessions/session-type.js';
 
 export const AI_PIPELINE_QUEUE_NAME = 'ai-pipeline';
 
@@ -12,6 +14,8 @@ export interface AiPipelineJobData {
   sessionId: string;
   forceGenerate?: boolean;
   iterationNotes?: string;
+  /** For logs and the queue dashboard only: the pipeline dispatches on the session's stored type. */
+  type?: SessionType;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -38,9 +42,10 @@ const markSessionFailed = async (sessionId: string, reason: string, retryable: b
     // architecture is actually FAILED.
     const existing = await prisma.designSession.findUnique({
       where: { id: sessionId },
-      select: { architecture: true },
+      select: { architecture: true, applicationContext: true },
     });
     const hasArchitecture = Boolean(existing?.architecture);
+    const isPrototype = sessionTypeOf(existing?.applicationContext) === 'prototype';
     const arch = existing?.architecture;
     const versionTag =
       arch && typeof arch === 'object' && !Array.isArray(arch) && typeof arch['versionTag'] === 'string' ? arch['versionTag'] : null;
@@ -50,9 +55,13 @@ const markSessionFailed = async (sessionId: string, reason: string, retryable: b
       ? `I couldn't apply that change this time — your current design${
           versionTag ? ` (${versionTag})` : ''
         } is unchanged. ${retryable ? 'Please try sending it again.' : 'Try rephrasing the change or asking for it in smaller steps.'}`
-      : retryable
-        ? "I couldn't complete this architecture on this attempt. Please send your request again — or add a detail or two (e.g. the main controller or power source) to help me pin it down."
-        : 'Architecture generation could not be completed for this request. Please refine your description and try again.';
+      : isPrototype
+        ? retryable
+          ? "I couldn't assemble this prototype on this attempt. Please send your request again — naming the controller board you want helps."
+          : 'I couldn’t assemble a prototype from the hardware library for this request. Try naming the boards or sensors you want, or simplify the request.'
+        : retryable
+          ? "I couldn't complete this architecture on this attempt. Please send your request again — or add a detail or two (e.g. the main controller or power source) to help me pin it down."
+          : 'Architecture generation could not be completed for this request. Please refine your description and try again.';
 
     await prisma.chatMessage.create({
       data: {
@@ -72,9 +81,12 @@ export const createAiPipelineWorker = () => {
   const worker = new Worker<AiPipelineJobData>(
     AI_PIPELINE_QUEUE_NAME,
     async (job: Job<AiPipelineJobData>) => {
-      logger.info({ jobId: job.id, sessionId: job.data.sessionId, attempt: job.attemptsMade + 1 }, 'Processing AI Pipeline Job');
+      logger.info(
+        { jobId: job.id, sessionId: job.data.sessionId, type: job.data.type ?? 'architect', attempt: job.attemptsMade + 1 },
+        'Processing AI Pipeline Job'
+      );
       try {
-        return await runGenerationPipeline(job.data.sessionId, {
+        return await runSessionPipeline(job.data.sessionId, {
           forceGenerate: job.data.forceGenerate,
           iterationNotes: job.data.iterationNotes,
         });
@@ -94,8 +106,9 @@ export const createAiPipelineWorker = () => {
     {
       connection: redis,
       concurrency: 5,
-      // A single pipeline run should never exceed this; stalled jobs are re-queued.
-      lockDuration: 120_000,
+      // A single pipeline run should never exceed this; stalled jobs are re-queued. Prototype runs
+      // that source hardware (vendor page fetch + extraction per module) need more than Architect.
+      lockDuration: 300_000,
     }
   );
 

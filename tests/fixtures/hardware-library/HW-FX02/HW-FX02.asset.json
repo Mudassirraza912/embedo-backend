@@ -1,0 +1,29 @@
+{
+  "hardware_entity_id": "HW-FX02",
+  "file_name": "HW-FX02.svg",
+  "storage_path": "/modules/HW-FX02.svg",
+  "build_status": "complete",
+  "validation_status": "passed",
+  "anchor_ids": [
+    "a-HW-FX02-JP1-1",
+    "a-HW-FX02-JP1-2",
+    "a-HW-FX02-JP1-3",
+    "a-HW-FX02-JP1-4",
+    "a-HW-FX02-JP1-5",
+    "a-HW-FX02-JP1-6",
+    "a-HW-FX02-JP1-7",
+    "a-HW-FX02-JP2-1",
+    "a-HW-FX02-JP2-2",
+    "a-HW-FX02-JP2-3",
+    "a-HW-FX02-JP2-4",
+    "a-HW-FX02-JP2-5",
+    "a-HW-FX02-JP2-6",
+    "a-HW-FX02-JP2-7",
+    "a-HW-FX02-CONN1"
+  ],
+  "generation_source_hash": "sha256:97e37e7725d6aaad262e61ce3dec60addf7dec7fc49ab6bbe95803c452ad32a7",
+  "generated_at": null,
+  "approved_by": null,
+  "approved_at": null,
+  "artwork_original": true
+}

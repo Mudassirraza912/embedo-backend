@@ -1,0 +1,23 @@
+{
+  "hardware_entity_id": "HW-FX04",
+  "file_name": "HW-FX04.svg",
+  "storage_path": "/modules/HW-FX04.svg",
+  "build_status": "complete",
+  "validation_status": "passed",
+  "anchor_ids": [
+    "a-HW-FX04-JP1-1",
+    "a-HW-FX04-JP1-2",
+    "a-HW-FX04-JP1-3",
+    "a-HW-FX04-JP1-4",
+    "a-HW-FX04-JP1-5",
+    "a-HW-FX04-JP1-6",
+    "a-HW-FX04-JP1-7",
+    "a-HW-FX04-JP1-8",
+    "a-HW-FX04-JP1-9"
+  ],
+  "generation_source_hash": "sha256:7c93777b6bf8c1244cad3bb57423777b77fbc35cbef25f21e7b091d24177b48c",
+  "generated_at": null,
+  "approved_by": null,
+  "approved_at": null,
+  "artwork_original": true
+}

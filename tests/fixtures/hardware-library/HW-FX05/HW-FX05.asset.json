@@ -1,0 +1,22 @@
+{
+  "hardware_entity_id": "HW-FX05",
+  "file_name": "HW-FX05.svg",
+  "storage_path": "/modules/HW-FX05.svg",
+  "build_status": "complete",
+  "validation_status": "passed",
+  "anchor_ids": [
+    "a-HW-FX05-JP1-1",
+    "a-HW-FX05-JP1-2",
+    "a-HW-FX05-JP1-3",
+    "a-HW-FX05-JP1-4",
+    "a-HW-FX05-JP1-5",
+    "a-HW-FX05-JP1-6",
+    "a-HW-FX05-JP1-7",
+    "a-HW-FX05-JP1-8"
+  ],
+  "generation_source_hash": "sha256:65b684356d91664097c34cf18d1d14e80824fff20a3a648db10398cae995445e",
+  "generated_at": null,
+  "approved_by": null,
+  "approved_at": null,
+  "artwork_original": true
+}

@@ -92,6 +92,29 @@ const envSchema = z
       .enum(['true', 'false'])
       .default('true')
       .transform((v) => v === 'true'),
+
+    // Prototype mode (type=prototype on the chat endpoints). When false, prototype requests are
+    // refused with a clear 403 and existing prototype sessions are not re-run.
+    PROTOTYPE_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+    // Truth-file gate: production searches only confirmed library records. Dev/test environments
+    // set this to also use provisional records that already have artwork (visual_ready / wiring_ready),
+    // which is every seed board until reviewers confirm them. Never enable in production.
+    PROTOTYPE_ALLOW_PROVISIONAL: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    // When the library has no suitable board, source one from a vendor product page: it is used
+    // privately (provisional, unverified) in the requesting project and queued for admin review.
+    PROTOTYPE_SOURCING_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+    // Comma-separated vendor hosts the sourcer may fetch (".adafruit.com" = domain and subdomains).
+    // Unset = the built-in maker/chip-vendor list in hardware/discovery/vendor-page.ts.
+    HARDWARE_ALLOWED_DOMAINS: optionalString,
   })
   .superRefine((cfg, ctx) => {
     const isProd = cfg.NODE_ENV === 'production';

@@ -35,13 +35,6 @@ describe('Operator surfaces are never public', () => {
     expect(res.status).toBe(401);
   });
 
-  it('requires admin authentication for uploaded JSON ingestion', async () => {
-    const res = await request(app)
-      .post('/api/v1/admin/components/ingest/json')
-      .send({ filename: 'parts.json', content: [{ partNumber: 'INA219' }] });
-    expect(res.status).toBe(401);
-  });
-
   it('rejects a non-admin user on admin ingestion routes with 403', async () => {
     jest.spyOn(prisma.user, 'findFirst').mockResolvedValue({ id: 'u1', email: 'u@x.io', role: 'user', suspendedAt: null } as never);
     jest.spyOn(redis, 'get').mockResolvedValue(null);

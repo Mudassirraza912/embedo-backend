@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 445 268" width="445" height="268" data-hardware-entity-id="HW-FX05" data-embedo-svg="perimeter-v1">
+  <title>Adafruit MicroSD card breakout board+</title>
+  <defs><linearGradient id="grad-HW-FX05" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0D4950"/><stop offset="1" stop-color="#0A3A40"/></linearGradient></defs>
+  <g id="deco-HW-FX05-board">
+    <rect x="64" y="64" width="317" height="140" rx="12" fill="url(#grad-HW-FX05)" stroke="#13737C" stroke-width="1.5"/>
+    <rect x="68" y="68" width="309" height="132" rx="9" fill="none" stroke="#9CD7D5" stroke-opacity="0.08"/>
+    <circle cx="75" cy="75" r="4" fill="#04191C" stroke="#9CD7D5" stroke-opacity="0.35" stroke-width="1.2"/>
+    <circle cx="370" cy="75" r="4" fill="#04191C" stroke="#9CD7D5" stroke-opacity="0.35" stroke-width="1.2"/>
+    <circle cx="75" cy="193" r="4" fill="#04191C" stroke="#9CD7D5" stroke-opacity="0.35" stroke-width="1.2"/>
+    <circle cx="370" cy="193" r="4" fill="#04191C" stroke="#9CD7D5" stroke-opacity="0.35" stroke-width="1.2"/>
+  </g>
+  <g id="deco-HW-FX05-title">
+    <rect x="78" y="70" width="289" height="40" rx="7" fill="#082F34" fill-opacity="0.75"/>
+    <text x="222.5" y="88" fill="#EAF6F6" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="13" font-weight="600" text-anchor="middle">Adafruit MicroSD card breakout board+</text>
+    <text x="222.5" y="102" fill="#7FB3B5" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="9.5" text-anchor="middle" letter-spacing="0.2">microSD socket · Adafruit</text>
+  </g>
+  <g id="blk-HW-FX05-JP1" class="embedo-connector" data-connector-id="HW-FX05:JP1">
+    <rect x="139.5" y="186" width="12" height="17" rx="3" fill="#B9E3E1"/>
+    <circle cx="145.5" cy="194.5" r="2.2" fill="#04191C"/>
+    <line x1="145.5" y1="204" x2="145.5" y2="224" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX05-JP1-1" class="embedo-anchor" cx="145.5" cy="224" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX05:JP1" data-contact-id="HW-FX05:JP1:1" data-pin-id="HW-FX05:5V"/>
+    <text x="145.5" y="180" fill="#F5B84B" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start" transform="rotate(-90 145.5 180)" dominant-baseline="middle">5V</text>
+    <rect x="161.5" y="186" width="12" height="17" rx="3" fill="#B9E3E1"/>
+    <circle cx="167.5" cy="194.5" r="2.2" fill="#04191C"/>
+    <line x1="167.5" y1="204" x2="167.5" y2="224" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX05-JP1-2" class="embedo-anchor" cx="167.5" cy="224" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX05:JP1" data-contact-id="HW-FX05:JP1:2" data-pin-id="HW-FX05:3v"/>
+    <text x="167.5" y="180" fill="#F5B84B" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start" transform="rotate(-90 167.5 180)" dominant-baseline="middle">3v</text>
+    <rect x="183.5" y="186" width="12" height="17" rx="3" fill="#B9E3E1"/>
+    <circle cx="189.5" cy="194.5" r="2.2" fill="#04191C"/>
+    <line x1="189.5" y1="204" x2="189.5" y2="224" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX05-JP1-3" class="embedo-anchor" cx="189.5" cy="224" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX05:JP1" data-contact-id="HW-FX05:JP1:3" data-pin-id="HW-FX05:GND"/>
+    <text x="189.5" y="180" fill="#8EA7AA" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start" transform="rotate(-90 189.5 180)" dominant-baseline="middle">GND</text>
+    <rect x="205.5" y="186" width="12" height="17" rx="3" fill="#B9E3E1"/>
+    <circle cx="211.5" cy="194.5" r="2.2" fill="#04191C"/>
+    <line x1="211.5" y1="204" x2="211.5" y2="224" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX05-JP1-4" class="embedo-anchor" cx="211.5" cy="224" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX05:JP1" data-contact-id="HW-FX05:JP1:4" data-pin-id="HW-FX05:CLK"/>
+    <text x="211.5" y="180" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start" transform="rotate(-90 211.5 180)" dominant-baseline="middle">CLK</text>
+    <rect x="227.5" y="186" width="12" height="17" rx="3" fill="#B9E3E1"/>
+    <circle cx="233.5" cy="194.5" r="2.2" fill="#04191C"/>
+    <line x1="233.5" y1="204" x2="233.5" y2="224" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX05-JP1-5" class="embedo-anchor" cx="233.5" cy="224" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX05:JP1" data-contact-id="HW-FX05:JP1:5" data-pin-id="HW-FX05:DO"/>
+    <text x="233.5" y="180" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start" transform="rotate(-90 233.5 180)" dominant-baseline="middle">DO</text>
+    <rect x="249.5" y="186" width="12" height="17" rx="3" fill="#B9E3E1"/>
+    <circle cx="255.5" cy="194.5" r="2.2" fill="#04191C"/>
+    <line x1="255.5" y1="204" x2="255.5" y2="224" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX05-JP1-6" class="embedo-anchor" cx="255.5" cy="224" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX05:JP1" data-contact-id="HW-FX05:JP1:6" data-pin-id="HW-FX05:DI"/>
+    <text x="255.5" y="180" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start" transform="rotate(-90 255.5 180)" dominant-baseline="middle">DI</text>
+    <rect x="271.5" y="186" width="12" height="17" rx="3" fill="#B9E3E1"/>
+    <circle cx="277.5" cy="194.5" r="2.2" fill="#04191C"/>
+    <line x1="277.5" y1="204" x2="277.5" y2="224" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX05-JP1-7" class="embedo-anchor" cx="277.5" cy="224" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX05:JP1" data-contact-id="HW-FX05:JP1:7" data-pin-id="HW-FX05:CS"/>
+    <text x="277.5" y="180" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start" transform="rotate(-90 277.5 180)" dominant-baseline="middle">CS</text>
+    <rect x="293.5" y="186" width="12" height="17" rx="3" fill="#B9E3E1"/>
+    <circle cx="299.5" cy="194.5" r="2.2" fill="#04191C"/>
+    <line x1="299.5" y1="204" x2="299.5" y2="224" stroke="#9CD7D5" stroke-width="1.4" stroke-linecap="round"/>
+    <circle id="a-HW-FX05-JP1-8" class="embedo-anchor" cx="299.5" cy="224" r="3.6" fill="#9CD7D5" stroke="#04191C" stroke-width="1.2" data-connector-id="HW-FX05:JP1" data-contact-id="HW-FX05:JP1:8" data-pin-id="HW-FX05:CD"/>
+    <text x="299.5" y="180" fill="#CFE9E8" font-family="JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" font-weight="500" text-anchor="start" transform="rotate(-90 299.5 180)" dominant-baseline="middle">CD</text>
+  </g>
+</svg>

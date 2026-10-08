@@ -68,7 +68,15 @@ Includes endpoints for Authentication, Multi-turn Discuss-First Hardware Copilot
           },
           applicationContext: {
             type: 'string',
+            maxLength: 100,
             example: 'industrial_iot',
+          },
+          type: {
+            type: 'string',
+            enum: ['architect', 'prototype'],
+            default: 'architect',
+            description:
+              'architect: custom hardware architecture (block diagram, power tree, protocol map, BOM). prototype: a bench build from existing hardware-library modules — the session architecture is a kind="prototype" payload with moduleDiagram, pinList and hardwareLibrary. Stored as applicationContext ("rapid_prototyping" for prototype).',
           },
         },
       },
@@ -86,6 +94,12 @@ Includes endpoints for Authentication, Multi-turn Discuss-First Hardware Copilot
                 content: { type: 'string', example: 'Please add a tamper detection input and replace relay outputs with SSRs.' },
               },
             },
+          },
+          type: {
+            type: 'string',
+            enum: ['architect', 'prototype'],
+            description:
+              "Optional. Omitted = keep the session's type. A session with no design yet switches to the given type; one with a design returns 409 SESSION_TYPE_MISMATCH.",
           },
         },
       },
