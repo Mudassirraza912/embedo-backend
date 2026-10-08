@@ -166,6 +166,17 @@ export class SessionsController {
     }
   };
 
+  getSourcing = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const { version, refresh } = req.query as unknown as { version?: string; refresh: boolean };
+      const result = await sessionsService.getSourcing(id as string, { version, refresh }, req.user?.id, req.anonSessionToken);
+      res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  };
+
   getVersions = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { id } = req.params;

@@ -50,6 +50,14 @@ export const exportDownloadQuerySchema = z.object({
   format: exportFormatSchema,
 });
 
+export const sourcingQuerySchema = z.object({
+  version: z.string().min(1).max(30).optional(),
+  refresh: z
+    .enum(['0', '1', 'true', 'false'])
+    .optional()
+    .transform((v) => v === '1' || v === 'true'),
+});
+
 export const outcomeSchema = z.object({
   fabricated: z.boolean().optional(),
   workedFirstTime: z.boolean().optional(),

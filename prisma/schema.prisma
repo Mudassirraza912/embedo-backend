@@ -490,3 +490,44 @@ model SvgAsset {
 
   @@map("svg_assets")
 }
+
+/// Store listing for a library board (plan §22 commerce addendum, ERD 4 `vendor_listings`): one row
+/// per product-page URL, holding the latest price and stock read from the page. Keyed by URL so
+/// every board and project that links the same page shares one cached check.
+model VendorListing {
+  listingId        String    @id @default(dbgenerated("gen_random_uuid()")) @map("listing_id") @db.Uuid
+  url              String    @unique @db.Text
+  storeHost        String    @map("store_host") @db.VarChar(255)
+  hardwareEntityId String?   @map("hardware_entity_id") @db.VarChar(64)
+  storeSku         String?   @map("store_sku") @db.VarChar(100)
+  productName      String?   @map("product_name") @db.VarChar(300)
+  /// ok = price read from the page; not_listed = page has no machine-readable price; error = fetch failed
+  status           String    @db.VarChar(20)
+  price            Decimal?  @db.Decimal(12, 2)
+  currency         String?   @db.VarChar(3)
+  stockState       String?   @map("stock_state") @db.VarChar(20)
+  parseMethod      String?   @map("parse_method") @db.VarChar(20)
+  lastError        String?   @map("last_error") @db.VarChar(300)
+  checkedAt        DateTime  @map("checked_at") @db.Timestamp(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+
+  observations ListingObservation[]
+
+  @@index([hardwareEntityId], map: "vendor_listings_entity_idx")
+  @@map("vendor_listings")
+}
+
+/// Price and stock history for a listing (ERD 4 `listing_observations`): one row per successful check.
+model ListingObservation {
+  observationId String   @id @default(dbgenerated("gen_random_uuid()")) @map("observation_id") @db.Uuid
+  listingId     String   @map("listing_id") @db.Uuid
+  price         Decimal  @db.Decimal(12, 2)
+  currency      String   @db.VarChar(3)
+  stockState    String   @map("stock_state") @db.VarChar(20)
+  observedAt    DateTime @default(now()) @map("observed_at") @db.Timestamp(6)
+
+  listing VendorListing @relation(fields: [listingId], references: [listingId], onDelete: Cascade)
+
+  @@index([listingId, observedAt], map: "listing_observations_listing_idx")
+  @@map("listing_observations")
+}
