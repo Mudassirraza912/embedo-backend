@@ -4,12 +4,12 @@ import { emitSessionEvent } from '../../realtime/socket.js';
 import { parseHardwareIntent, IntentExtractionError } from './intent-parser.js';
 import { checkSufficiency, GENERATION_HOLD_MESSAGE, isGibberishOrSpam } from './sufficiency-gate.js';
 import { getGroundingContext } from './rag-grounder.js';
-import { buildCanonicalDesignGraph, DesignGraphSchemaError, generateFreshSuggestions } from './design-graph-builder.js';
+import { buildCanonicalDesignGraph, DesignGraphSchemaError, generateFreshSuggestions, summarizeVersionChange } from './design-graph-builder.js';
 import { validateAndRepairDesignGraph } from './validator.js';
 import { projectArchitecture } from './diagram-projector.js';
 import { CanonicalDesignGraph, ProjectedArchitecture, StructuredIntent, structuredIntentSchema } from './types.js';
 import { persistNewVersion } from '../version.service.js';
-import { getAppliedChangeLineage, filterAppliedSuggestions, compactGraphForRevision } from './refinement-history.js';
+import { getAppliedChangeLineage, filterAppliedSuggestions, compactGraphForRevision, describeGraphChanges } from './refinement-history.js';
 import { recoverConversationContext } from './conversation-context.js';
 
 // A reworded clarification must still be about the missing field; otherwise the gate's own
@@ -149,11 +149,23 @@ export async function runGenerationPipeline(
       const metadata = (message.metadata ?? {}) as { versionTag?: unknown };
       return message.role === 'assistant' && typeof metadata.versionTag === 'string' ? index : lastIndex;
     }, -1);
-    const pendingRevisionMessages = latestIterationNotes && lastVersionCardIndex >= 0
-      ? session.chatMessages
-          .slice(lastVersionCardIndex + 1)
-          .filter((message) => message.role === 'user' && message.content.trim())
-          .map((message) => message.content.trim())
+    // Requests since the last version that are still waiting to be applied. A message the copilot
+    // already answered as conversation, off-topic or gibberish was not a design request — passing
+    // it on made Sol "apply" chit-chat and surfaced it as the version label ("what the hell sing me
+    // a song…"). A message followed by a clarification question (or by nothing yet) is kept.
+    const sinceLastVersion = lastVersionCardIndex >= 0 ? session.chatMessages.slice(lastVersionCardIndex + 1) : [];
+    const answeredConversationally = (index: number): boolean => {
+      const reply = sinceLastVersion.slice(index + 1).find((m) => m.role === 'user' || m.role === 'assistant');
+      if (!reply || reply.role !== 'assistant') return false;
+      const meta = (reply.metadata ?? {}) as { mode?: unknown; isOffTopic?: unknown; isGibberish?: unknown; clarificationQuestions?: unknown };
+      if (Array.isArray(meta.clarificationQuestions) && meta.clarificationQuestions.length > 0) return false;
+      return meta.mode === 'discuss' || meta.isOffTopic === true || meta.isGibberish === true || reply.metadata == null;
+    };
+    const pendingRevisionMessages = latestIterationNotes
+      ? sinceLastVersion
+          .map((message, index) => ({ message, index }))
+          .filter(({ message, index }) => message.role === 'user' && message.content.trim() && !answeredConversationally(index))
+          .map(({ message }) => message.content.trim())
       : [];
     const revisionNotes = pendingRevisionMessages.length > 0
       ? [...new Set(pendingRevisionMessages)].join('\n')
@@ -388,7 +400,7 @@ export async function runGenerationPipeline(
     ).filter((s): s is string => typeof s === 'string');
 
     emitSessionEvent.aiCallStarted(sessionId, 'A');
-    const { graph: rawGraph } = await buildCanonicalDesignGraph(
+    let { graph: rawGraph } = await buildCanonicalDesignGraph(
       structuredIntent,
       grounding,
       sessionId,
@@ -396,6 +408,20 @@ export async function runGenerationPipeline(
       revision,
       previousSuggestions
     );
+    // Sol sometimes returns the baseline unchanged while its engineeringDecisions claim a change
+    // ("Replaced LDO with buck regulator" on a design that already had one). Retry once, telling
+    // it so; if that is unchanged too, the user is asked for a concrete change further below.
+    if (revision && baselineGraph && describeGraphChanges(baselineGraph, rawGraph).length === 0) {
+      log.warn({ request: revisionNotes }, 'Refinement returned the baseline unchanged; retrying once');
+      ({ graph: rawGraph } = await buildCanonicalDesignGraph(
+        structuredIntent,
+        grounding,
+        sessionId,
+        `${revisionNotes}\n\nYOUR PREVIOUS ANSWER RETURNED THE BASELINE UNCHANGED — that is not acceptable. Make at least one real change to nodes, part numbers, power rails or connections that fulfils this request. Do not describe a change in engineeringDecisions that is not in the graph, and do not "add" something the baseline already has.`,
+        revision,
+        previousSuggestions
+      ));
+    }
     emitSessionEvent.aiCallCompleted(sessionId, { taskCase: 'A', schemaPass: true });
     recordStep('checking_library', 'Checking library coverage', 'completed', `Controller: ${rawGraph.controller.partNumber}`);
 
@@ -463,12 +489,32 @@ export async function runGenerationPipeline(
     // Step 7: Persistence (atomic, serialized per session) & real-time streaming
     emitSessionEvent.stageUpdate(sessionId, { step: 7, label: 'Finalizing system architecture & Bill of Materials', progress: 100 });
 
-    const changeSummary = revisionNotes
-      ? revisionNotes.slice(0, 200)
+    // What this revision actually changed. A revision that changes nothing is not saved as a new
+    // version (seen live: "change the power section for better output" produced a v1.1 identical
+    // to v1.0 except the caption) — the copilot asks for a concrete change instead.
+    const graphChanges = revision && baselineGraph ? describeGraphChanges(baselineGraph, finalizedGraph) : [];
+    if (revision && baselineGraph && graphChanges.length === 0) {
+      const examples = (baselineGraph.suggestedRefinements ?? []).slice(0, 2).map((s) => `"${s}"`).join(' or ');
+      const reply = `I couldn't turn "${(revisionNotes ?? '').slice(0, 120)}" into a concrete hardware change, so the design is unchanged and no new version was created. Tell me specifically what to change${
+        examples ? ` — for example ${examples}` : ' — e.g. a part to swap, a rail to add, or a feature to include'
+      }.`;
+      await prisma.$transaction([
+        prisma.designSession.update({ where: { id: sessionId }, data: { status: 'DONE' } }),
+        prisma.chatMessage.create({ data: { sessionId, role: 'assistant', content: reply, metadata: { mode: 'discuss', noDesignChange: true } } }),
+      ]);
+      log.info({ request: revisionNotes }, 'Refinement produced no design change; no version created');
+      emitSessionEvent.clarificationNeeded(sessionId, [reply]);
+      return { status: 'clarification_needed', questions: [reply] };
+    }
+
+    // The first version (including one generated after answering a clarification such as "5V") is
+    // the initial architecture; only a revision of an existing design gets a change label.
+    const isRevision = Boolean(revisionNotes && revision);
+    const changeSummary = isRevision
+      ? await summarizeVersionChange(graphChanges, revisionNotes ?? '', sessionId)
       : 'Initial architecture generated';
-    const appliedChanges: string[] = revisionNotes
-      ? [revisionNotes.slice(0, 500)]
-      : ['Initial architecture generated'];
+    // The request (not the label) is kept as lineage: Sol is told these must stay applied.
+    const appliedChanges: string[] = isRevision ? [(revisionNotes ?? '').slice(0, 500)] : ['Initial architecture generated'];
 
     const { versionTag } = await persistNewVersion({
       sessionId,
@@ -486,6 +532,9 @@ export async function runGenerationPipeline(
           projectMeta: projectedArchitecture.projectMeta,
           controller: finalizedGraph.controller,
           engineeringDecisions: finalizedGraph.engineeringDecisions ?? [],
+          // For a refinement, the card leads with what changed rather than re-listing part choices.
+          changesApplied: graphChanges.slice(0, 6),
+          changeSummary,
           suggestedRefinements: finalizedGraph.suggestedRefinements ?? [],
           validationPass: validation.isValid,
           validationIssues: validation.issues,

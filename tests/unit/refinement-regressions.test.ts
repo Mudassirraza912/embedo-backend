@@ -3,7 +3,7 @@ import { aiRouterService } from '../../src/modules/ai/ai-router.service.js';
 import { routeMessage } from '../../src/modules/sessions/conversation-router.service.js';
 import { buildCanonicalDesignGraph, DesignGraphSchemaError } from '../../src/modules/sessions/pipeline/design-graph-builder.js';
 import { validateAndRepairDesignGraph } from '../../src/modules/sessions/pipeline/validator.js';
-import { getAppliedChangeLineage, filterAppliedSuggestions, isSameChange } from '../../src/modules/sessions/pipeline/refinement-history.js';
+import { getAppliedChangeLineage, filterAppliedSuggestions, isSameChange, describeGraphChanges } from '../../src/modules/sessions/pipeline/refinement-history.js';
 import type { CanonicalDesignGraph, StructuredIntent } from '../../src/modules/sessions/pipeline/types.js';
 import type { GroundingContext } from '../../src/modules/sessions/pipeline/rag-grounder.js';
 
@@ -253,5 +253,39 @@ describe('buildCanonicalDesignGraph — chips already shown are not offered agai
     expect(prompt).toContain('ALREADY shown');
     expect(prompt).toContain('- Add battery backup');
     expect(prompt).toContain('- Include ESD protection');
+  });
+});
+
+describe('describeGraphChanges — version label source', () => {
+  const base = (): CanonicalDesignGraph => ({
+    projectMeta: { name: 'Smart Asset Tracker', tagline: 'GNSS + LTE-M', controller: 'ESP32-S3-MINI-1' },
+    controller: { partNumber: 'ESP32-S3-MINI-1', manufacturer: 'Espressif', rationale: '' },
+    nodes: [
+      { id: 'mcu', label: 'Microcontroller', sublabel: 'ESP32-S3-MINI-1', category: 'control', partNumber: 'ESP32-S3-MINI-1' },
+      { id: 'reg', label: 'Buck Regulator', sublabel: '3.3V Output', category: 'power', partNumber: 'TPS62840' },
+    ] as CanonicalDesignGraph['nodes'],
+    edges: [{ from: 'reg', to: 'mcu', type: 'power', label: '3.3V' }] as CanonicalDesignGraph['edges'],
+    powerRails: [{ name: '3V3', voltageV: 3.3, source: 'reg', consumers: ['mcu'] }] as CanonicalDesignGraph['powerRails'],
+    bom: [{ partNumber: 'ESP32-S3-MINI-1', manufacturer: 'Espressif', category: 'control', qty: 1 }, { partNumber: 'TPS62840', manufacturer: 'TI', category: 'power', qty: 1 }] as CanonicalDesignGraph['bom'],
+  });
+
+  it('reports nothing when only the caption/tagline changed (the "empty v1.1" case)', () => {
+    const after = base();
+    after.projectMeta = { ...after.projectMeta, name: 'Smart Tracker' };
+    expect(describeGraphChanges(base(), after)).toEqual([]);
+  });
+
+  it('describes a part swap and an added node instead of echoing chat', () => {
+    const after = base();
+    after.nodes[1] = { ...after.nodes[1], partNumber: 'TPS63020' };
+    after.nodes.push({ id: 'ls', label: 'Load Switch', sublabel: 'Sensor rail gating', category: 'power', partNumber: 'TPS22917' } as CanonicalDesignGraph['nodes'][number]);
+    after.bom.push({ partNumber: 'TPS22917', manufacturer: 'TI', category: 'power', qty: 1 } as CanonicalDesignGraph['bom'][number]);
+    expect(describeGraphChanges(base(), after)).toEqual(['Replaced Buck Regulator: TPS62840 → TPS63020', 'Added Load Switch (TPS22917)']);
+  });
+
+  it('reports rail voltage changes', () => {
+    const after = base();
+    after.powerRails[0] = { ...after.powerRails[0], voltageV: 3.0 };
+    expect(describeGraphChanges(base(), after)).toEqual(['Changed 3V3 rail: 3.3V → 3V']);
   });
 });
