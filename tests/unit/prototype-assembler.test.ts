@@ -3,6 +3,7 @@ import { assemblePrototype, AssembleOptions } from '../../src/modules/sessions/p
 import { renderPrototypeSvg } from '../../src/modules/sessions/prototype/prototype-svg-exporter.js';
 import { PrototypeComposition } from '../../src/modules/sessions/prototype/prototype.types.js';
 import { LibraryEntity } from '../../src/modules/hardware/hardware-library.service.js';
+import { renderBenchArt } from '../../src/modules/hardware/bench-art.js';
 import { FIXTURE_IDS, loadFixtureEntity } from './prototype-fixtures.js';
 
 describe('prototype payload: module diagram, pin list and hardware library', () => {
@@ -34,7 +35,9 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
     const p = assemblePrototype(composition, entities, options);
     expect(p.kind).toBe('prototype');
     expect(p.instances.map((i) => i.instanceId)).toEqual(['mcu', 'bme1', 'gps1', 'sd1']);
-    expect(p.instances[0]!.svg?.url).toBe('/api/v1/hardware/entities/HW-FX01/svg');
+    // The diagram draws bench art rendered from the record; the library entry keeps the library asset.
+    expect(p.instances[0]!.svg?.url).toBe('/api/v1/hardware/entities/HW-FX01/bench.svg?controller=1');
+    expect(p.hardwareLibrary.entries[0]!.svg?.url).toBe('/api/v1/hardware/entities/HW-FX01/svg');
     expect(p.moduleDiagram.modules).toHaveLength(4);
     expect(p.moduleDiagram.gapBoxes).toHaveLength(1);
     expect(p.hardwareLibrary.entries.map((e) => e.hardwareEntityId)).toEqual(['HW-FX01', 'HW-FX03', 'HW-FX04', 'HW-FX05']);
@@ -61,13 +64,14 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
   it('starts and ends every wire exactly on a module anchor, with orthogonal segments', () => {
     const p = assemblePrototype(composition, entities, options);
     const placed = new Map(p.moduleDiagram.modules.map((m) => [m.instanceId, m]));
-    const entityOf = (instanceId: string) => entities.get(p.instances.find((i) => i.instanceId === instanceId)!.hardwareEntityId)!;
+    const instanceOf = (instanceId: string) => p.instances.find((i) => i.instanceId === instanceId)!;
+    const artOf = (instanceId: string) => renderBenchArt(entities.get(instanceOf(instanceId).hardwareEntityId)!.record, instanceOf(instanceId).isController);
     expect(p.moduleDiagram.wires.length).toBe(p.connections.length);
     for (const wire of p.moduleDiagram.wires) {
       const connection = p.connections.find((c) => c.id === wire.connectionId)!;
       const at = (end: typeof connection.from) => {
         const box = placed.get(end.instanceId)!;
-        const anchor = entityOf(end.instanceId).svg!.parsed.anchors.get(end.anchorId)!;
+        const anchor = artOf(end.instanceId).anchors.get(end.anchorId)!;
         return [Math.round((box.x + anchor.x) * 10) / 10, Math.round((box.y + anchor.y) * 10) / 10];
       };
       const ends = [wire.points[0], wire.points[wire.points.length - 1]];
@@ -85,6 +89,36 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
       }
       expect(wire.dashed).toBe(true); // provisional boards: shown, not asserted
     }
+  });
+
+  it('lays nets out as labelled backbone tracks that every board taps', () => {
+    const p = assemblePrototype(composition, entities, options);
+    const d = p.moduleDiagram;
+    expect(d.layoutVersion).toBe(2);
+    const wiredNets = new Set(p.connections.filter((c) => c.kind === 'wire').flatMap((c) => c.netIds));
+    expect(new Set(d.buses!.map((b) => b.netId))).toEqual(wiredNets);
+    // Power first, then ground; one distinct y per track.
+    expect(d.buses![0]!.netClass).toBe('power');
+    expect(new Set(d.buses!.map((b) => b.y)).size).toBe(d.buses!.length);
+    const gnd = d.buses!.find((b) => b.label === 'GND')!;
+    expect(gnd.taps.map((t) => t.instanceId).sort()).toEqual(['bme1', 'gps1', 'mcu', 'sd1']);
+    expect(gnd.shared).toBe(true);
+    for (const b of d.buses!) {
+      for (const t of b.taps) {
+        expect(t.points[t.points.length - 1]).toEqual([t.x, b.y]);
+        expect(t.x).toBeGreaterThanOrEqual(b.x1);
+        expect(t.x).toBeLessThanOrEqual(b.x2);
+      }
+    }
+    // No two boards overlap.
+    const boxes = d.modules.map((m) => m.content!);
+    for (let i = 0; i < boxes.length; i++)
+      for (let j = i + 1; j < boxes.length; j++) {
+        const [a, b] = [boxes[i]!, boxes[j]!];
+        expect(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y).toBe(true);
+      }
+    expect(d.legendCard?.rows.length).toBeGreaterThan(0);
+    expect(d.header.title).toBe('Prototype Mode');
   });
 
   it('hides unreviewed wiring outside the dev override, and is deterministic', () => {
@@ -129,11 +163,13 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
       entities,
       options
     );
-    const artwork = new Map([...entities.values()].map((e) => [e.hardwareEntityId, e.svg!.markup]));
+    const artwork = new Map(p.instances.map((i) => [i.instanceId, renderBenchArt(entities.get(i.hardwareEntityId)!.record, i.isController).svg]));
     const svg = renderPrototypeSvg(p, artwork);
     expect(svg.startsWith('<svg')).toBe(true);
     expect(svg).toContain('id="bme1-a-HW-FX03-JP1-1"');
     expect(svg).toContain('id="bme2-a-HW-FX03-JP1-1"');
+    expect(svg).toContain('Prototype Mode');
+    expect(svg).toContain('>GND</text>');
     expect(svg).not.toMatch(/<script/i);
   });
 });

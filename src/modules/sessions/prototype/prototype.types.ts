@@ -101,6 +101,8 @@ export interface DiagramModule {
   label: string;
   /** e.g. "PROVISIONAL", "AWAITING WIRING REVIEW", "NO ARTWORK" — null when nothing to flag. */
   badge: string | null;
+  /** The board itself inside the artwork (artwork minus its empty margin). Layout v2+. */
+  content?: { x: number; y: number; width: number; height: number };
 }
 
 export interface DiagramWire {
@@ -113,18 +115,61 @@ export interface DiagramWire {
   /** Dashed = not asserted (awaiting review, or a rule is unresolved). */
   dashed: boolean;
   points: Point[];
+  /** The backbone track this connection runs along. Layout v2+. */
+  busId?: string;
+}
+
+/** One horizontal backbone track (a net, or one STEMMA QT cable) with its pill label. Layout v2+. */
+export interface DiagramBus {
+  busId: string;
+  netId: string | null;
+  kind: 'net' | 'cable';
+  netClass: NetClass | 'cable';
+  label: string;
+  color: string;
+  y: number;
+  x1: number;
+  x2: number;
+  labelX: number;
+  labelWidth: number;
+  /** Every connection on the track is unverified. */
+  dashed: boolean;
+  /** More than two boards tap it. */
+  shared: boolean;
+  /** One per board anchor on the track: the leg from the anchor down/up to the junction at (x, y). */
+  taps: Array<{ x: number; instanceId: string; anchorId: string; points: Point[]; dashed: boolean; /** Anchor is a pad (light it in the net colour). */ pad?: boolean }>;
 }
 
 export interface ModuleDiagram {
+  /** Absent on v1 payloads (lane layout, vertical labels); 2 = bus backbone. */
+  layoutVersion?: number;
   width: number;
   height: number;
   modules: DiagramModule[];
   wires: DiagramWire[];
+  buses?: DiagramBus[];
   junctions: Array<{ x: number; y: number; netId: string | null; color: string }>;
   labels: Array<{ text: string; x: number; y: number; netId: string | null; color: string }>;
   gapBoxes: Array<{ gapId: string; x: number; y: number; width: number; height: number; title: string; subtitle: string }>;
   legend: Array<{ netClass: NetClass | 'cable'; label: string; color: string }>;
-  header: { title: string; summary: string };
+  legendCard?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    title: string;
+    caption: string;
+    rows: Array<{ label: string; color: string; detail: string; dashed: boolean; netId: string | null }>;
+    /** Explain dashed lines (some wiring is proposed, not verified). */
+    dashedNote: boolean;
+  } | null;
+  header: {
+    title: string;
+    summary: string;
+    subtitle?: string;
+    project?: string | null;
+    box?: { x: number; y: number; width: number; height: number };
+  };
 }
 
 export interface PinListRow {

@@ -1,5 +1,6 @@
 import { SvgAnchor } from '../../hardware/hardware-svg.js';
 import {
+  DiagramBus,
   DiagramModule,
   DiagramWire,
   ModuleDiagram,
@@ -11,29 +12,44 @@ import {
 } from './prototype.types.js';
 
 /**
- * Deterministic bench layout (plan D5 step 6), ported from the harness compose():
- * the controller sits in the centre column, each module goes to the left or right column depending
- * on which controller edge its links attach to, and each side gets its own channel of vertical bus
- * lanes. Wires leave the module anchor, run to their lane, then to the controller anchor — all
- * orthogonal. Output is absolute geometry the frontend draws directly over the library SVGs.
+ * Deterministic bench layout (plan D5 step 6), drawn as a bus backbone:
+ *
+ *   ┌ header ───────────────────────────────────────────────┐
+ *   [ board ]   [ controller ]   [ board ]        <- top row: boards sit on the backbone
+ *  (3V3)━━━━━━━━━━━━●━━━━━━━━━━━━━━●━━━━━━━━━━●   <- one labelled track per net (and per cable)
+ *  (GND)━━━━━━●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●
+ *   [ board ]   [ gap ]                [ legend ] <- bottom row: boards hang under it
+ *
+ * Every connection leaves its board anchor, drops straight onto its track (or steps into the
+ * channel beside the board first when the pin faces sideways), runs along the track and climbs to
+ * the other anchor. Channels get one lane per net, ordered so escapes from one board never cross.
+ * Output is absolute geometry the frontend and the SVG exporter draw directly over the library art.
  */
 
-export const NET_COLORS: Record<NetClass | 'cable', string> = {
-  power: '#F5B84B',
-  ground: '#6E8B8F',
-  i2c: '#20E6E0',
-  spi: '#9CD7D5',
-  uart: '#019893',
-  gpio: '#7FB3B5',
-  analog: '#B48EF5',
-  pwm: '#F58E6E',
-  cable: '#20E6E0',
+export const LAYOUT_VERSION = 2;
+
+/** Per-class shades: tracks of one class (e.g. SDA / SCL) get neighbouring but distinct colours. */
+export const NET_SHADES: Record<NetClass | 'cable', string[]> = {
+  power: ['#F5B84B', '#FF8F5A', '#FFD27A'],
+  ground: ['#8EA7AA', '#6E8B8F'],
+  i2c: ['#20E6E0', '#9AF3EF'],
+  spi: ['#7AA7FF', '#A88BFA', '#5ED3F3', '#C9B6FF'],
+  uart: ['#4ADE80', '#B5E655'],
+  gpio: ['#F472B6', '#FB7185', '#E879F9', '#FDA4AF'],
+  analog: ['#B48EF5', '#D3B8FF'],
+  pwm: ['#F58E6E', '#FFB199'],
+  cable: ['#20E6E0'],
 };
+export const NET_COLORS: Record<NetClass | 'cable', string> = Object.fromEntries(
+  Object.entries(NET_SHADES).map(([k, v]) => [k, v[0]!])
+) as Record<NetClass | 'cable', string>;
+
+const CLASS_ORDER: Array<NetClass | 'cable'> = ['power', 'ground', 'i2c', 'spi', 'uart', 'gpio', 'analog', 'pwm', 'cable'];
 
 const LEGEND_LABELS: Record<NetClass | 'cable', string> = {
   power: 'Power',
   ground: 'Ground',
-  i2c: 'I2C',
+  i2c: 'I²C',
   spi: 'SPI',
   uart: 'UART',
   gpio: 'GPIO',
@@ -42,15 +58,20 @@ const LEGEND_LABELS: Record<NetClass | 'cable', string> = {
   cable: 'STEMMA QT / Qwiic cable',
 };
 
-const PAD = 46;
-const HEADER = 34;
-const GAP_Y = 54;
-const LANE_PITCH = 22;
-const LANE_MARGIN = 40;
-const CONTROLLER_MARGIN = 60;
-const ESCAPE = 14;
+const PAD = 40;
+const HEADER = { x: 24, y: 20, height: 68 };
+const CONTENT_TOP = HEADER.y + HEADER.height + 44;
+const TRACK_PITCH = 34;
+const ROW_GAP = 46; // board pins to the nearest track
+const LANE_PITCH = 16;
+const LANE_MARGIN = 24; // board edge to its first channel lane
+const MIN_GAP = 64; // between neighbouring boards
+const ESCAPE = 18;
+const ESCAPE_STEP = 9;
+const PILL = { height: 26, charW: 8.8, padX: 16, gap: 16 };
 const PLACEHOLDER = { width: 220, height: 120 };
-const GAP_BOX = { width: 220, height: 64, spacing: 16 };
+const GAP_CARD = { width: 236, height: 78 };
+const LEGEND_ROW = 26;
 
 export interface LayoutInstance {
   instanceId: string;
@@ -59,6 +80,10 @@ export interface LayoutInstance {
   width: number | null;
   height: number | null;
   anchors: Map<string, SvgAnchor>;
+  /** Empty margin of the artwork around the board; derived from the anchors when absent. */
+  inset?: number;
+  /** Board edge of each anchor; derived from anchor positions when absent. */
+  edges?: Map<string, Edge>;
   badge: string | null;
 }
 
@@ -69,17 +94,11 @@ export interface LayoutInput {
   gaps: PrototypeGap[];
   /** Draw `proposed` connections dashed (dev override). Off: only `drawn` connections get a wire. */
   drawProposed: boolean;
+  projectName?: string;
 }
 
-type Side = 'left' | 'right';
 type Edge = 'left' | 'right' | 'top' | 'bottom';
-
-interface Box {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+type Row = 'top' | 'bottom';
 
 const r1 = (n: number) => Math.round(n * 10) / 10;
 
@@ -110,296 +129,516 @@ function dedupe(points: Point[]): Point[] {
   });
 }
 
+/** Human description of a track for the legend card. */
+function describe(netClass: NetClass | 'cable', name: string, shared: boolean): string {
+  const n = name.toUpperCase();
+  const suffix = shared ? ' (shared)' : '';
+  if (netClass === 'power') {
+    const volts = /(\d+)V(\d+)?/.exec(n);
+    return `${volts ? `${volts[1]}${volts[2] ? `.${volts[2]}` : ''} V` : name} power${suffix}`;
+  }
+  if (netClass === 'ground') return `Ground${suffix}`;
+  if (netClass === 'cable') return 'STEMMA QT / Qwiic cable';
+  const role = (
+    [
+      [/SDA/, 'I²C data'],
+      [/SCL/, 'I²C clock'],
+      [/SCK|SCLK/, 'SPI clock'],
+      [/MOSI|COPI|SDO/, 'SPI data out'],
+      [/MISO|CIPO|SDI/, 'SPI data in'],
+      [/CS|SS/, 'SPI chip select'],
+      [/TX/, 'UART transmit'],
+      [/RX/, 'UART receive'],
+    ] as Array<[RegExp, string]>
+  ).find(([re]) => re.test(n))?.[1];
+  return `${role ?? `${LEGEND_LABELS[netClass]} signal`}${suffix}`;
+}
+
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface Endpoint {
+  instanceId: string;
+  anchorId: string;
+  trackId: string;
+}
+
+interface LaneRequest {
+  gap: number;
+  /** 'L' = the lane serves the board left of the gap, 'R' = the board right of it. */
+  portion: 'L' | 'R';
+  trackId: string;
+  sortKey: number;
+}
+
 export function layoutPrototype(input: LayoutInput): ModuleDiagram {
   const controller = input.instances.find((i) => i.isController) ?? null;
   const peripherals = input.instances.filter((i) => i !== controller);
-  const sizeOf = (i: LayoutInstance) => ({ width: i.width ?? PLACEHOLDER.width, height: i.height ?? PLACEHOLDER.height });
   const visible = input.connections.filter((c) => c.state === 'drawn' || (c.state === 'proposed' && input.drawProposed));
   const netById = new Map(input.nets.map((n) => [n.netId, n]));
+  const instById = new Map(input.instances.map((i) => [i.instanceId, i]));
+  const artSize = (i: LayoutInstance) => ({ width: i.width ?? PLACEHOLDER.width, height: i.height ?? PLACEHOLDER.height });
 
-  // --- sides: majority of the controller anchors each module connects to --------------------------
-  const ctrlSize = controller ? sizeOf(controller) : PLACEHOLDER;
-  const sideVotes = new Map<string, { left: number; right: number; ys: number[] }>();
-  const hostOf = new Map<string, string>(); // chained cable: module -> module it hangs off
+  // Library artwork carries a margin around the board; anchors sit LEAD px outside the outline.
+  // The "content box" (artwork minus empty margin) is what boards are spaced by.
+  const insetOf = new Map<string, number>();
+  for (const inst of input.instances) {
+    const { width, height } = artSize(inst);
+    const d = [...inst.anchors.values()].map((a) => Math.min(a.x, a.y, width - a.x, height - a.y));
+    insetOf.set(inst.instanceId, inst.inset ?? (d.length > 0 ? Math.max(0, Math.min(64, ...d)) : 0));
+  }
+  const contentSize = (i: LayoutInstance) => {
+    const { width, height } = artSize(i);
+    const inset = insetOf.get(i.instanceId)!;
+    return { width: width - 2 * inset, height: height - 2 * inset };
+  };
+  const anchorEdge = (inst: LayoutInstance, anchorId: string): Edge | null => {
+    const a = inst.anchors.get(anchorId);
+    if (!a) return null;
+    const known = inst.edges?.get(anchorId);
+    if (known) return known;
+    const { width, height } = artSize(inst);
+    return edgeOf(a, width, height);
+  };
+
+  // --- tracks: one per net with a visible wire, one per visible cable ------------------------------
+  interface Track {
+    id: string;
+    netId: string | null;
+    kind: 'net' | 'cable';
+    netClass: NetClass | 'cable';
+    label: string;
+    color: string;
+    y: number;
+    connectionIds: string[];
+    allDashed: boolean;
+  }
+  const tracks = new Map<string, Track>();
+  const trackOfConnection = new Map<string, string>();
+  for (const c of visible) {
+    const id = c.kind === 'cable' ? `cable:${c.id}` : `net:${c.netIds[0] ?? c.id}`;
+    trackOfConnection.set(c.id, id);
+    const existing = tracks.get(id);
+    const dashed = c.state !== 'drawn';
+    if (existing) {
+      existing.connectionIds.push(c.id);
+      existing.allDashed = existing.allDashed && dashed;
+      continue;
+    }
+    const net = c.kind === 'wire' ? netById.get(c.netIds[0] ?? '') : undefined;
+    tracks.set(id, {
+      id,
+      netId: c.kind === 'cable' ? null : (c.netIds[0] ?? null),
+      kind: c.kind === 'cable' ? 'cable' : 'net',
+      netClass: c.kind === 'cable' ? 'cable' : (net?.class ?? 'gpio'),
+      label: c.kind === 'cable' ? 'STEMMA QT' : (net?.name ?? c.netIds[0] ?? c.id),
+      color: '',
+      y: 0,
+      connectionIds: [c.id],
+      allDashed: dashed,
+    });
+  }
+  const orderedTracks = [...tracks.values()].sort(
+    (a, b) =>
+      CLASS_ORDER.indexOf(a.netClass) - CLASS_ORDER.indexOf(b.netClass) ||
+      a.label.localeCompare(b.label, 'en', { numeric: true }) ||
+      a.id.localeCompare(b.id)
+  );
+  const shadeIndex = new Map<string, number>();
+  for (const t of orderedTracks) {
+    const k = shadeIndex.get(t.netClass) ?? 0;
+    const shades = NET_SHADES[t.netClass];
+    t.color = shades[k % shades.length]!;
+    shadeIndex.set(t.netClass, k + 1);
+  }
+
+  // Endpoints per instance (an anchor on one track is one tap, however many connections share it).
+  const endpointsOf = new Map<string, Endpoint[]>();
+  const addEndpoint = (e: Endpoint) => {
+    const list = endpointsOf.get(e.instanceId) ?? [];
+    if (!list.some((x) => x.anchorId === e.anchorId && x.trackId === e.trackId)) list.push(e);
+    endpointsOf.set(e.instanceId, list);
+  };
+  for (const c of visible) {
+    const trackId = trackOfConnection.get(c.id)!;
+    addEndpoint({ instanceId: c.from.instanceId, anchorId: c.from.anchorId, trackId });
+    addEndpoint({ instanceId: c.to.instanceId, anchorId: c.to.anchorId, trackId });
+  }
+
+  // --- rows: boards whose pins face up hang under the backbone, everything else sits on it ---------
+  const rowOf = new Map<string, Row>();
+  if (controller) rowOf.set(controller.instanceId, 'top');
+  const sideVote = new Map<string, number>(); // < 0: left of the controller, > 0: right
+  const hostOf = new Map<string, string>();
   for (const c of input.connections) {
-    const ends = [c.from, c.to];
-    const ctrlEnd = controller ? ends.find((e) => e.instanceId === controller.instanceId) : undefined;
-    const other = ends.find((e) => e !== ctrlEnd)!;
+    if (!controller) break;
+    const ctrlEnd = [c.from, c.to].find((e) => e.instanceId === controller.instanceId);
     if (!ctrlEnd) {
       hostOf.set(c.to.instanceId, c.from.instanceId);
       continue;
     }
-    const anchor = controller!.anchors.get(ctrlEnd.anchorId);
-    if (!anchor) continue;
-    const vote = sideVotes.get(other.instanceId) ?? { left: 0, right: 0, ys: [] };
-    if (anchor.x < ctrlSize.width / 2) vote.left += 1;
-    else vote.right += 1;
-    vote.ys.push(anchor.y);
-    sideVotes.set(other.instanceId, vote);
+    const other = ctrlEnd === c.from ? c.to : c.from;
+    const a = controller.anchors.get(ctrlEnd.anchorId);
+    if (!a) continue;
+    const half = artSize(controller).width / 2;
+    sideVote.set(other.instanceId, (sideVote.get(other.instanceId) ?? 0) + (a.x < half ? -1 : 1));
   }
-
-  const sideOf = new Map<string, Side>();
-  const orderKey = new Map<string, number>();
-  const heights = { left: 0, right: 0 };
-  const resolveSide = (id: string, depth = 0): Side => {
-    const known = sideOf.get(id);
-    if (known) return known;
-    const vote = sideVotes.get(id);
-    let side: Side;
-    if (vote && vote.left !== vote.right) side = vote.left > vote.right ? 'left' : 'right';
-    else if (hostOf.has(id) && depth < 16) side = resolveSide(hostOf.get(id)!, depth + 1);
-    else side = heights.left <= heights.right ? 'left' : 'right';
-    sideOf.set(id, side);
-    return side;
+  const voteOf = (id: string, depth = 0): number => {
+    const v = sideVote.get(id) ?? 0;
+    if (v !== 0 || depth > 16 || !hostOf.has(id)) return v;
+    return voteOf(hostOf.get(id)!, depth + 1);
   };
+  const unplaced: LayoutInstance[] = [];
   for (const p of peripherals) {
-    const side = resolveSide(p.instanceId);
-    heights[side] += sizeOf(p).height + GAP_Y;
-    const vote = sideVotes.get(p.instanceId);
-    const host = hostOf.get(p.instanceId);
-    orderKey.set(
-      p.instanceId,
-      vote && vote.ys.length > 0
-        ? vote.ys.reduce((a, b) => a + b, 0) / vote.ys.length
-        : host
-          ? (orderKey.get(host) ?? ctrlSize.height) + 0.5
-          : ctrlSize.height
-    );
-  }
-  const column = (side: Side) =>
-    peripherals
-      .filter((p) => sideOf.get(p.instanceId) === side)
-      .sort((a, b) => (orderKey.get(a.instanceId) ?? 0) - (orderKey.get(b.instanceId) ?? 0) || a.instanceId.localeCompare(b.instanceId));
-  const columns = { left: column('left'), right: column('right') };
-
-  // --- lanes: one per (side, net) for wires, one per cable ---------------------------------------
-  interface Lane {
-    key: string;
-    side: Side;
-    netId: string | null;
-    color: string;
-    sortY: number;
-    x: number;
-  }
-  const lanes = new Map<string, Lane>();
-  const laneOf = new Map<string, string>();
-  const peripheralEnd = (c: PrototypeConnection) => (controller && c.from.instanceId === controller.instanceId ? c.to : c.from);
-  for (const c of visible) {
-    const end = peripheralEnd(c);
-    const side = sideOf.get(end.instanceId) ?? 'left';
-    const key = c.kind === 'cable' ? `${side}|cable|${c.id}` : `${side}|net|${c.netIds[0]}`;
-    laneOf.set(c.id, key);
-    const ctrlEnd = c.from === end ? c.to : c.from;
-    const ctrlAnchorY = controller?.anchors.get(ctrlEnd.anchorId)?.y ?? 0;
-    const existing = lanes.get(key);
-    if (existing) {
-      existing.sortY = Math.min(existing.sortY, ctrlAnchorY);
-    } else {
-      const netClass = c.kind === 'cable' ? 'cable' : (netById.get(c.netIds[0] ?? '')?.class ?? 'gpio');
-      lanes.set(key, { key, side, netId: c.kind === 'cable' ? null : (c.netIds[0] ?? null), color: NET_COLORS[netClass], sortY: ctrlAnchorY, x: 0 });
+    const eps = endpointsOf.get(p.instanceId) ?? [];
+    if (eps.length === 0) {
+      unplaced.push(p);
+      continue;
     }
+    const up = eps.filter((e) => anchorEdge(p, e.anchorId) === 'top').length;
+    rowOf.set(p.instanceId, up > eps.length - up ? 'bottom' : 'top');
   }
-  const sideLanes = (side: Side) => [...lanes.values()].filter((l) => l.side === side).sort((a, b) => a.sortY - b.sortY || a.key.localeCompare(b.key));
-  const leftLanes = sideLanes('left');
-  const rightLanes = sideLanes('right');
+  const rowWidth = (row: Row) =>
+    input.instances.filter((i) => rowOf.get(i.instanceId) === row).reduce((n, i) => n + contentSize(i).width + MIN_GAP, 0);
+  for (const p of unplaced) rowOf.set(p.instanceId, rowWidth('top') <= rowWidth('bottom') + 240 ? 'top' : 'bottom');
 
-  // --- horizontal placement ------------------------------------------------------------------------
-  const leftColW = Math.max(0, ...columns.left.map((p) => sizeOf(p).width));
-  const leftLaneStart = PAD + leftColW + LANE_MARGIN;
-  const mcuX = columns.left.length > 0 ? leftLaneStart + Math.max(leftLanes.length - 1, 0) * LANE_PITCH + CONTROLLER_MARGIN : PAD;
-  const rightLaneStart = mcuX + ctrlSize.width + CONTROLLER_MARGIN;
-  const rightColX = rightLaneStart + Math.max(rightLanes.length - 1, 0) * LANE_PITCH + LANE_MARGIN;
-  // Left lanes: index 0 nearest the modules; right lanes: index 0 nearest the controller.
-  leftLanes.forEach((lane, i) => (lane.x = leftLaneStart + i * LANE_PITCH));
-  rightLanes.forEach((lane, i) => (lane.x = rightLaneStart + i * LANE_PITCH));
-
-  const top = PAD + HEADER;
-  const boxes = new Map<string, Box>();
-  if (controller) boxes.set(controller.instanceId, { x: mcuX, y: top, ...ctrlSize });
-  const stack = (list: LayoutInstance[], side: Side) => {
-    let y = top;
-    for (const p of list) {
-      const size = sizeOf(p);
-      // Left column is right-aligned so every module faces its lanes at the same x.
-      const x = side === 'left' ? PAD + (leftColW - size.width) : rightColX;
-      boxes.set(p.instanceId, { x, y, ...size });
-      y += size.height + GAP_Y;
-    }
-    return y - GAP_Y;
+  const rowList = (row: Row): LayoutInstance[] => {
+    const members = peripherals.filter((p) => rowOf.get(p.instanceId) === row);
+    const left = members.filter((p) => voteOf(p.instanceId) < 0);
+    const right = members.filter((p) => voteOf(p.instanceId) > 0);
+    const neutral = members.filter((p) => voteOf(p.instanceId) === 0);
+    // Neutral boards balance the two sides of the controller.
+    for (const p of neutral) (left.length <= right.length ? left : right).push(p);
+    const sorted = (list: LayoutInstance[]) => list; // composition order is already meaningful
+    if (row === 'top' && controller) return [...sorted(left), controller, ...sorted(right)];
+    return [...sorted(left), ...sorted(right)];
   };
-  const leftBottom = stack(columns.left, 'left');
-  const rightBottom = stack(columns.right, 'right');
+  const rows: Record<Row, LayoutInstance[]> = { top: rowList('top'), bottom: rowList('bottom') };
 
-  // --- wires -----------------------------------------------------------------------------------------
-  const wires: DiagramWire[] = [];
-  const junctions: ModuleDiagram['junctions'] = [];
-  const laneSpans = new Map<string, { min: number; max: number; count: number }>();
+  // --- channel lanes: which gap and which side of it each sideways escape uses ---------------------
+  const laneRequests: Record<Row, LaneRequest[]> = { top: [], bottom: [] };
+  /** Around-the-board escapes (pins facing away from the backbone): depth per anchor. */
+  const aroundDepth = new Map<string, number>();
+  const epKey = (instanceId: string, anchorId: string, trackId: string) => `${instanceId}|${anchorId}|${trackId}`;
+  for (const row of ['top', 'bottom'] as Row[]) {
+    rows[row].forEach((inst, index) => {
+      const { width } = artSize(inst);
+      const eps = endpointsOf.get(inst.instanceId) ?? [];
+      const away: Edge = row === 'top' ? 'top' : 'bottom';
+      const around: Array<{ ep: Endpoint; gap: number; portion: 'L' | 'R'; dist: number }> = [];
+      for (const ep of eps) {
+        const a = inst.anchors.get(ep.anchorId);
+        const edge = anchorEdge(inst, ep.anchorId);
+        if (!a || !edge) continue;
+        if (edge === 'left' || edge === 'right') {
+          laneRequests[row].push({
+            gap: edge === 'left' ? index : index + 1,
+            portion: edge === 'left' ? 'R' : 'L',
+            trackId: ep.trackId,
+            // Top row: higher pins take outer lanes. Bottom row: lower pins do.
+            sortKey: row === 'top' ? a.y : -a.y,
+          });
+        } else if (edge === away) {
+          const toLeft = a.x < width / 2;
+          around.push({ ep, gap: toLeft ? index : index + 1, portion: toLeft ? 'R' : 'L', dist: toLeft ? a.x : width - a.x });
+        }
+      }
+      // Nearest-to-the-gap escapes stay lowest; farther ones climb over them and take outer lanes.
+      for (const side of ['L', 'R'] as const) {
+        around
+          .filter((r) => r.portion === side)
+          .sort((p, q) => p.dist - q.dist)
+          .forEach((r, depth) => {
+            aroundDepth.set(epKey(r.ep.instanceId, r.ep.anchorId, r.ep.trackId), depth);
+            laneRequests[row].push({ gap: r.gap, portion: r.portion, trackId: r.ep.trackId, sortKey: -1e6 - depth });
+          });
+      }
+    });
+  }
+  /** lanes[row][gap] = { L: trackIds outer→inner, R: trackIds outer→inner } */
+  const lanesOf = (row: Row) => {
+    const out: Array<{ L: string[]; R: string[] }> = Array.from({ length: rows[row].length + 1 }, () => ({ L: [], R: [] }));
+    const best = new Map<string, LaneRequest>();
+    for (const r of laneRequests[row]) {
+      const k = `${r.gap}|${r.portion}|${r.trackId}`;
+      const cur = best.get(k);
+      if (!cur || r.sortKey < cur.sortKey) best.set(k, r);
+    }
+    for (const r of [...best.values()].sort((a, b) => a.sortKey - b.sortKey || a.trackId.localeCompare(b.trackId))) {
+      out[r.gap]![r.portion].push(r.trackId);
+    }
+    return out;
+  };
+  const lanes = { top: lanesOf('top'), bottom: lanesOf('bottom') };
+
+  // --- horizontal placement --------------------------------------------------------------------------
+  const pillW = Math.max(0, ...orderedTracks.map((t) => t.label.length * PILL.charW + 2 * PILL.padX));
+  const trackStart = PAD + pillW;
+  const boxes = new Map<string, Box>(); // content boxes
+  const laneX = new Map<string, number>(); // `${row}|${gap}|${portion}|${trackId}` -> x
+  const gapWidth = (g: { L: string[]; R: string[] }, edgeGap: boolean) => {
+    const n = g.L.length + g.R.length;
+    if (n === 0) return edgeGap ? PILL.gap + 20 : MIN_GAP;
+    return Math.max(edgeGap ? 0 : MIN_GAP, 2 * LANE_MARGIN + (n - 1) * LANE_PITCH + (g.L.length > 0 && g.R.length > 0 ? LANE_PITCH : 0));
+  };
+  const placeRow = (row: Row): number => {
+    let x = trackStart;
+    const list = rows[row];
+    list.forEach((inst, i) => {
+      const g = lanes[row][i]!;
+      const w = gapWidth(g, i === 0);
+      g.L.forEach((t, k) => laneX.set(`${row}|${i}|L|${t}`, x + LANE_MARGIN + (g.L.length - 1 - k) * LANE_PITCH));
+      g.R.forEach((t, k) => laneX.set(`${row}|${i}|R|${t}`, x + w - LANE_MARGIN - (g.R.length - 1 - k) * LANE_PITCH));
+      x += w;
+      const size = contentSize(inst);
+      boxes.set(inst.instanceId, { x, y: 0, ...size });
+      x += size.width;
+    });
+    const last = lanes[row][list.length]!;
+    if (list.length > 0 && last.L.length > 0) {
+      last.L.forEach((t, k) => laneX.set(`${row}|${list.length}|L|${t}`, x + LANE_MARGIN + (last.L.length - 1 - k) * LANE_PITCH));
+      x += 2 * LANE_MARGIN + (last.L.length - 1) * LANE_PITCH;
+    }
+    return x;
+  };
+  const topRight = placeRow('top');
+  const bottomBoardsRight = placeRow('bottom');
+
+  // --- vertical placement: top row bottom-aligned on the backbone, bottom row hangs under it --------
+  const topRowH = Math.max(0, ...rows.top.map((i) => contentSize(i).height));
+  for (const inst of rows.top) {
+    const b = boxes.get(inst.instanceId)!;
+    b.y = CONTENT_TOP + topRowH - b.height;
+  }
+  const firstTrackY = CONTENT_TOP + topRowH + (rows.top.length > 0 ? ROW_GAP : 0);
+  orderedTracks.forEach((t, k) => (t.y = firstTrackY + k * TRACK_PITCH));
+  const lastTrackY = orderedTracks.length > 0 ? firstTrackY + (orderedTracks.length - 1) * TRACK_PITCH : firstTrackY - ROW_GAP;
+  const bottomRowY = lastTrackY + ROW_GAP;
+  for (const inst of rows.bottom) boxes.get(inst.instanceId)!.y = bottomRowY;
+
+  // --- legs: anchor -> track tap ---------------------------------------------------------------------
+  const rowIndex = (inst: LayoutInstance) => rows[rowOf.get(inst.instanceId)!].indexOf(inst);
   const absAnchor = (instanceId: string, anchorId: string) => {
-    const inst = input.instances.find((i) => i.instanceId === instanceId);
+    const inst = instById.get(instanceId);
     const box = boxes.get(instanceId);
     const a = inst?.anchors.get(anchorId);
     if (!inst || !box || !a) return null;
-    return { x: box.x + a.x, y: box.y + a.y, edge: edgeOf(a, box.width, box.height), box };
+    const inset = insetOf.get(instanceId)!;
+    return { x: box.x - inset + a.x, y: box.y - inset + a.y, edge: anchorEdge(inst, anchorId)!, box, inst };
   };
-
-  type Anchored = NonNullable<ReturnType<typeof absAnchor>>;
-
-  /** From a module anchor to its lane, entering on a horizontal that clears the module body. */
-  const moduleLeg = (P: Anchored, lane: Lane, stagger: number): { points: Point[]; entryY: number } => {
-    const toward = lane.side === 'left' ? 'right' : 'left';
-    const points: Point[] = [[P.x, P.y]];
-    let entryY = P.y;
-    if (P.edge === toward) {
-      // Faces the lanes: straight across.
-    } else if (P.edge === 'top' || P.edge === 'bottom') {
-      entryY = P.edge === 'top' ? P.box.y - ESCAPE - stagger : P.box.y + P.box.height + ESCAPE + stagger;
-      points.push([P.x, entryY]);
-    } else {
-      // Faces away from the lanes: step out, then go around below the module.
-      const outX = P.edge === 'left' ? P.box.x - ESCAPE : P.box.x + P.box.width + ESCAPE;
-      entryY = P.box.y + P.box.height + ESCAPE + stagger;
-      points.push([outX, P.y], [outX, entryY]);
+  const legCache = new Map<string, Point[] | null>();
+  const legOf = (instanceId: string, anchorId: string, trackId: string): Point[] | null => {
+    const key = epKey(instanceId, anchorId, trackId);
+    if (legCache.has(key)) return legCache.get(key)!;
+    const P = absAnchor(instanceId, anchorId);
+    const track = tracks.get(trackId)!;
+    let leg: Point[] | null = null;
+    if (P) {
+      const row = rowOf.get(instanceId)!;
+      const index = rowIndex(P.inst);
+      const T = track.y;
+      const toward: Edge = row === 'top' ? 'bottom' : 'top';
+      const lane = (gap: number, portion: 'L' | 'R') => laneX.get(`${row}|${gap}|${portion}|${trackId}`);
+      if (P.edge === toward) {
+        leg = [[P.x, P.y], [P.x, T]];
+      } else if (P.edge === 'left' || P.edge === 'right') {
+        const L = P.edge === 'left' ? lane(index, 'R') : lane(index + 1, 'L');
+        if (L !== undefined) leg = [[P.x, P.y], [L, P.y], [L, T]];
+      } else {
+        const toLeft = P.x - P.box.x < P.box.width / 2;
+        const L = toLeft ? lane(index, 'R') : lane(index + 1, 'L');
+        const depth = aroundDepth.get(key) ?? 0;
+        const y = row === 'top' ? P.box.y - ESCAPE - depth * ESCAPE_STEP : P.box.y + P.box.height + ESCAPE + depth * ESCAPE_STEP;
+        if (L !== undefined) leg = [[P.x, P.y], [P.x, y], [L, y], [L, T]];
+      }
     }
-    points.push([lane.x, entryY]);
-    return { points, entryY };
+    leg = leg ? dedupe(leg) : null;
+    legCache.set(key, leg);
+    return leg;
   };
 
-  /** From the lane to a controller anchor, going over the controller when the anchor faces away. */
-  const controllerLeg = (C: Anchored, lane: Lane, stagger: number): Point[] => {
-    const facing = lane.side === 'left' ? 'left' : 'right';
-    const points: Point[] = [];
-    if (C.edge === facing) {
-      points.push([lane.x, C.y]);
-    } else if (C.edge === 'top' || C.edge === 'bottom') {
-      const y = C.edge === 'top' ? C.box.y - ESCAPE - stagger : C.box.y + C.box.height + ESCAPE + stagger;
-      points.push([lane.x, y], [C.x, y]);
-    } else {
-      const y = C.box.y - ESCAPE - stagger;
-      const farX = C.edge === 'right' ? C.box.x + C.box.width + ESCAPE : C.box.x - ESCAPE;
-      points.push([lane.x, y], [farX, y], [farX, C.y]);
+  // --- wires (one polyline per connection) and buses (one per track) -------------------------------
+  const wires: DiagramWire[] = [];
+  const busTaps = new Map<string, DiagramBus['taps']>();
+  for (const c of visible) {
+    const trackId = trackOfConnection.get(c.id)!;
+    const track = tracks.get(trackId)!;
+    const a = legOf(c.from.instanceId, c.from.anchorId, trackId);
+    const b = legOf(c.to.instanceId, c.to.anchorId, trackId);
+    if (!a || !b) continue;
+    const dashed = c.state !== 'drawn';
+    for (const [end, leg] of [
+      [c.from, a],
+      [c.to, b],
+    ] as const) {
+      const taps = busTaps.get(trackId) ?? [];
+      const existing = taps.find((t) => t.instanceId === end.instanceId && t.anchorId === end.anchorId);
+      if (existing) existing.dashed = existing.dashed && dashed;
+      else {
+        const whole = instById.get(end.instanceId)?.anchors.get(end.anchorId)?.whole ?? false;
+        taps.push({ x: leg[leg.length - 1]![0], instanceId: end.instanceId, anchorId: end.anchorId, points: leg, dashed, pad: !whole });
+      }
+      busTaps.set(trackId, taps);
     }
-    points.push([C.x, C.y]);
-    return points;
-  };
-
-  visible.forEach((c, index) => {
-    const lane = lanes.get(laneOf.get(c.id)!)!;
-    const pEnd = peripheralEnd(c);
-    const otherEnd = pEnd === c.from ? c.to : c.from;
-    const P = absAnchor(pEnd.instanceId, pEnd.anchorId);
-    const Q = absAnchor(otherEnd.instanceId, otherEnd.anchorId);
-    if (!P || !Q) return;
-    const stagger = (index % 4) * 4;
-
-    const first = moduleLeg(P, lane, stagger);
-    const entryY = first.entryY;
-    const reachesController = Boolean(controller && otherEnd.instanceId === controller.instanceId);
-    // A daisy-chained cable joins two modules in the same column: both ends are module legs.
-    const second = reachesController ? controllerLeg(Q, lane, stagger) : [...moduleLeg(Q, lane, stagger).points].reverse();
-    const points = dedupe([...first.points, ...second]);
-    const net = c.kind === 'wire' ? netById.get(c.netIds[0] ?? '') : undefined;
-    const netClass = c.kind === 'cable' ? 'cable' : (net?.class ?? 'gpio');
     wires.push({
       connectionId: c.id,
       kind: c.kind,
       netIds: c.netIds,
-      netClass,
-      color: NET_COLORS[netClass],
-      strokeWidth: c.kind === 'cable' ? 5 : netClass === 'power' || netClass === 'ground' ? 2.6 : 2,
-      dashed: c.state !== 'drawn',
-      points,
+      netClass: track.netClass,
+      color: track.color,
+      strokeWidth: c.kind === 'cable' ? 5 : track.netClass === 'power' || track.netClass === 'ground' ? 2.6 : 2.2,
+      dashed,
+      points: dedupe([...a, ...[...b].reverse()]),
+      busId: trackId,
     });
+  }
+  const buses: DiagramBus[] = orderedTracks
+    .filter((t) => (busTaps.get(t.id) ?? []).length > 0)
+    .map((t) => {
+      const taps = busTaps.get(t.id)!.sort((p, q) => p.x - q.x);
+      return {
+        busId: t.id,
+        netId: t.netId,
+        kind: t.kind,
+        netClass: t.netClass,
+        label: t.label,
+        color: t.color,
+        y: r1(t.y),
+        x1: r1(trackStart),
+        x2: r1(Math.max(...taps.map((p) => p.x))),
+        labelX: PAD,
+        labelWidth: r1(pillW),
+        dashed: t.allDashed,
+        shared: taps.length > 2,
+        taps,
+      };
+    });
+  const junctions: ModuleDiagram['junctions'] = buses.flatMap((b) => b.taps.map((t) => ({ x: r1(t.x), y: b.y, netId: b.netId, color: b.color })));
 
-    const laneYs = points.filter((p) => p[0] === r1(lane.x)).map((p) => p[1]);
-    const span = laneSpans.get(lane.key) ?? { min: Infinity, max: -Infinity, count: 0 };
-    for (const y of laneYs) {
-      span.min = Math.min(span.min, y);
-      span.max = Math.max(span.max, y);
-    }
-    span.count += 1;
-    laneSpans.set(lane.key, span);
-    if (c.kind === 'wire') junctions.push({ x: r1(lane.x), y: r1(entryY), netId: lane.netId, color: lane.color });
-  });
-
-  // A junction dot only means something where wires actually share a lane.
-  const sharedLanes = new Set([...laneSpans.entries()].filter(([, s]) => s.count > 1).map(([k]) => k));
-  const sharedJunctions = junctions.filter((j) => [...lanes.values()].some((l) => sharedLanes.has(l.key) && r1(l.x) === j.x && l.netId === j.netId));
-
-  // --- labels (staggered over three rows to avoid collisions) ---------------------------------------
-  const labels: ModuleDiagram['labels'] = [];
-  [...leftLanes, ...rightLanes].forEach((lane) => {
-    const span = laneSpans.get(lane.key);
-    if (!span || !Number.isFinite(span.min)) return;
-    const text = lane.netId ? (netById.get(lane.netId)?.name ?? lane.netId) : 'STEMMA QT';
-    // Labels run vertically up their lane from just above its top, so neighbouring lanes
-    // (22 px apart) can never overlap; `y` is the label's bottom end.
-    labels.push({ text, x: r1(lane.x), y: r1(span.min - 8), netId: lane.netId, color: lane.color });
-  });
-
-  // --- gap placeholders under the shorter column -------------------------------------------------
-  const ctrlBottom = controller ? top + ctrlSize.height : top;
-  const gapUnderLeft = columns.left.length <= columns.right.length;
-  let gapY = Math.max(gapUnderLeft ? leftBottom : rightBottom, columns.left.length + columns.right.length === 0 ? ctrlBottom : top) + GAP_Y;
-  const gapX = gapUnderLeft ? (columns.left.length > 0 ? PAD + leftColW - GAP_BOX.width : PAD) : rightColX;
+  // --- bottom row extras: needs with no module, then the legend card -------------------------------
+  let cursor = Math.max(bottomBoardsRight, trackStart) + (rows.bottom.length > 0 ? MIN_GAP : PILL.gap + 20);
   const gapBoxes = input.gaps.map((g) => {
     const box = {
       gapId: g.gapId,
-      x: r1(Math.max(PAD, gapX)),
-      y: r1(gapY),
-      width: GAP_BOX.width,
-      height: GAP_BOX.height,
+      x: r1(cursor),
+      y: r1(bottomRowY),
+      width: GAP_CARD.width,
+      height: GAP_CARD.height,
       title: g.category.toUpperCase(),
       subtitle: `${g.need} — no module in library`,
     };
-    gapY += GAP_BOX.height + GAP_BOX.spacing;
+    cursor += GAP_CARD.width + 24;
     return box;
   });
+
+  const perTrack = buses.length <= 8;
+  const legendRows: NonNullable<ModuleDiagram['legendCard']>['rows'] = perTrack
+    ? buses.map((b) => ({ label: b.label, color: b.color, detail: describe(b.netClass, b.label, b.shared), dashed: b.dashed, netId: b.netId }))
+    : CLASS_ORDER.filter((cls) => buses.some((b) => b.netClass === cls)).map((cls) => {
+        const of = buses.filter((b) => b.netClass === cls);
+        const names = of.filter((b) => b.kind === 'net').map((b) => b.label);
+        return {
+          label: LEGEND_LABELS[cls],
+          color: of[0]!.color,
+          detail: cls === 'cable' ? `${of.length} cable${of.length === 1 ? '' : 's'}` : names.join(', '),
+          dashed: of.every((b) => b.dashed),
+          netId: null,
+        };
+      });
+  const legendW =
+    legendRows.length > 0
+      ? Math.max(
+          330,
+          76 + Math.max(...legendRows.map((r) => Math.min(r.label.length, 16) * 7.4)) + 34 + Math.max(...legendRows.map((r) => Math.min(r.detail.length, 44) * 6.9)) + 24
+        )
+      : 0;
+  const anyDashed = legendRows.some((r) => r.dashed);
+  const legendH = legendRows.length > 0 ? 54 + legendRows.length * LEGEND_ROW + (anyDashed ? 26 : 4) : 0;
+
+  // --- shift down if around-the-board escapes rose above the content top ----------------------------
+  const allPoints = wires.flatMap((w) => w.points);
+  const minY = Math.min(CONTENT_TOP, ...allPoints.map((p) => p[1]));
+  const shift = minY < CONTENT_TOP - 16 ? CONTENT_TOP - 16 - minY : 0;
+  if (shift > 0) {
+    const sh = (p: Point): Point => [p[0], r1(p[1] + shift)];
+    for (const b of boxes.values()) b.y += shift;
+    for (const w of wires) w.points = w.points.map(sh);
+    for (const b of buses) {
+      b.y = r1(b.y + shift);
+      for (const t of b.taps) t.points = t.points.map(sh);
+    }
+    for (const j of junctions) j.y = r1(j.y + shift);
+    for (const g of gapBoxes) g.y = r1(g.y + shift);
+  }
 
   // --- canvas ---------------------------------------------------------------------------------------
   const modules: DiagramModule[] = input.instances
     .filter((i) => boxes.has(i.instanceId))
     .map((i) => {
       const b = boxes.get(i.instanceId)!;
-      return { instanceId: i.instanceId, x: r1(b.x), y: r1(b.y), width: b.width, height: b.height, label: i.label, badge: i.badge };
+      const inset = insetOf.get(i.instanceId)!;
+      const art = artSize(i);
+      return {
+        instanceId: i.instanceId,
+        x: r1(b.x - inset),
+        y: r1(b.y - inset),
+        width: art.width,
+        height: art.height,
+        label: i.label,
+        badge: i.badge,
+        content: { x: r1(b.x), y: r1(b.y), width: r1(b.width), height: r1(b.height) },
+      };
     });
-  const allX = [
-    ...modules.map((m) => m.x + m.width),
-    ...gapBoxes.map((g) => g.x + g.width),
-    ...wires.flatMap((w) => w.points.map((p) => p[0])),
-  ];
-  const allY = [
-    ...modules.map((m) => m.y + m.height),
+  const bottomY = bottomRowY + shift;
+  const contentRight = Math.max(
+    topRight,
+    bottomBoardsRight,
+    cursor - 24,
+    ...buses.map((b) => b.x2 + 24),
+    ...allPoints.map((p) => p[0])
+  );
+  const legendX = Math.max(cursor, contentRight - legendW);
+  const legendCard =
+    legendRows.length > 0
+      ? { x: r1(legendX), y: r1(bottomY), width: r1(legendW), height: r1(legendH), title: 'Legend', caption: perTrack ? 'Nets & buses' : 'Net classes', rows: legendRows, dashedNote: anyDashed }
+      : null;
+  const bottomExtent = Math.max(
+    bottomY + (rows.bottom.length > 0 ? Math.max(...rows.bottom.map((i) => contentSize(i).height)) : 0),
     ...gapBoxes.map((g) => g.y + g.height),
-    ...wires.flatMap((w) => w.points.map((p) => p[1])),
-  ];
-  const minY = Math.min(top, ...wires.flatMap((w) => w.points.map((p) => p[1])), ...labels.map((l) => l.y - (l.text.length * 6.2 + 18)));
-  // Routes that climb over the controller can rise above the header; shift everything down if so.
-  const shift = minY < PAD ? PAD - minY : 0;
-  if (shift > 0) {
-    for (const m of modules) m.y = r1(m.y + shift);
-    for (const g of gapBoxes) g.y = r1(g.y + shift);
-    for (const w of wires) w.points = w.points.map(([x, y]) => [x, r1(y + shift)] as Point);
-    for (const j of sharedJunctions) j.y = r1(j.y + shift);
-    for (const l of labels) l.y = r1(l.y + shift);
-  }
+    legendCard ? legendCard.y + legendCard.height : 0,
+    ...allPoints.map((p) => p[1]),
+    ...modules.map((m) => m.content!.y + m.content!.height),
+    lastTrackY + shift
+  );
+  const width = r1(Math.max(contentRight, legendCard ? legendCard.x + legendCard.width : 0, PAD + 720) + PAD);
+  const height = r1(bottomExtent + PAD);
 
   const classes = new Set(wires.map((w) => w.netClass));
-  const legend = (Object.keys(LEGEND_LABELS) as Array<NetClass | 'cable'>)
-    .filter((c) => classes.has(c))
-    .map((netClass) => ({ netClass, label: LEGEND_LABELS[netClass], color: NET_COLORS[netClass] }));
+  const legend = CLASS_ORDER.filter((c) => classes.has(c)).map((netClass) => ({ netClass, label: LEGEND_LABELS[netClass], color: NET_COLORS[netClass] }));
+  const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
   return {
-    width: r1(Math.max(...allX, mcuX + ctrlSize.width) + PAD),
-    height: r1(Math.max(...allY, top + ctrlSize.height) + PAD + shift),
+    layoutVersion: LAYOUT_VERSION,
+    width,
+    height,
     modules,
     wires,
-    junctions: sharedJunctions,
-    labels,
+    buses,
+    junctions,
+    labels: [],
     gapBoxes,
     legend,
+    legendCard,
     header: {
-      title: 'Prototype Kit',
-      summary: `${input.instances.length} module${input.instances.length === 1 ? '' : 's'} · ${input.nets.length} net${input.nets.length === 1 ? '' : 's'} · ${input.gaps.length} gap${input.gaps.length === 1 ? '' : 's'}`,
+      title: 'Prototype Mode',
+      subtitle: 'Design · Connect · Prototype',
+      project: input.projectName ?? null,
+      summary: `${count(input.instances.length, 'module')} · ${count(input.nets.length, 'net')} · ${count(input.gaps.length, 'gap')}`,
+      box: { x: HEADER.x, y: HEADER.y, width: r1(width - 2 * HEADER.x), height: HEADER.height },
     },
   };
 }
