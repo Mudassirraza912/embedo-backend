@@ -61,3 +61,7 @@ export type ProposalListQuery = z.infer<typeof proposalListQuerySchema>;
 export type ProposalApproveInput = z.infer<typeof proposalApproveSchema>;
 export type HardwareListQuery = z.infer<typeof hardwareListQuerySchema>;
 export type HardwareGovernanceInput = z.infer<typeof hardwareGovernanceSchema>;
+
+export const hardwareBenchQuerySchema = z.object({
+  controller: z.enum(['0', '1']).optional(),
+});
