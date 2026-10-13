@@ -5,9 +5,9 @@ import { DiagramBus, ModuleDiagram, Point, PrototypeArchitecture } from './proto
  * geometry the frontend draws; each board's library artwork is nested at its placement with its
  * element ids prefixed per instance, so two copies of one board never collide.
  *
- * Layout v2 payloads (bus backbone) get the full presentation: header card, glowing tracks with
- * pill labels, junction dots, badge pills, need cards and a legend card. v1 payloads (stored
- * before the backbone layout) keep the plain lane drawing they were laid out for.
+ * Header card, glowing tracks with pill labels, boards (bench art), legs with lit pads and
+ * junction dots, badge pills, need cards and a legend card. Payloads saved in the old diagram
+ * format are redrawn before they get here (diagram-upgrade.ts).
  */
 
 const CANVAS = '#04191C';
@@ -200,7 +200,6 @@ function renderBadge(m: ModuleDiagram['modules'][number]): string[] {
 
 export function renderPrototypeSvg(payload: PrototypeArchitecture, artwork: Map<string, string>): string {
   const d = payload.moduleDiagram;
-  const v2 = Array.isArray(d.buses);
   const parts: string[] = [];
   parts.push(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${d.width}" height="${d.height}" viewBox="0 0 ${d.width} ${d.height}" font-family="${SANS}">`,
@@ -215,64 +214,27 @@ export function renderPrototypeSvg(payload: PrototypeArchitecture, artwork: Map<
     `<rect width="100%" height="100%" fill="${CANVAS}"/><rect width="100%" height="100%" fill="url(#dots)"/><rect width="100%" height="100%" fill="url(#vignette)"/>`
   );
 
-  if (v2) {
-    parts.push(...renderHeader(d));
-    for (const b of d.buses ?? []) parts.push(...renderTrack(b));
-  } else {
-    parts.push(
-      `<text x="24" y="28" fill="${TEXT}" font-size="14" font-weight="600">${esc(d.header.title)}</text>`,
-      `<text x="${d.width - 24}" y="28" fill="${MUTED}" font-size="12" text-anchor="end">${esc(d.header.summary)}</text>`
-    );
-    for (const wire of d.wires) {
-      const dash = wire.dashed ? ' stroke-dasharray="6 4"' : '';
-      if (wire.kind === 'cable') {
-        parts.push(
-          `<polyline points="${pts(wire.points)}" fill="none" stroke="${wire.color}" stroke-width="${wire.strokeWidth}" stroke-linejoin="round" opacity="0.35"${dash}/>`,
-          `<polyline points="${pts(wire.points)}" fill="none" stroke="${wire.color}" stroke-width="1.6" stroke-linejoin="round"${dash}/>`
-        );
-      } else {
-        parts.push(`<polyline points="${pts(wire.points)}" fill="none" stroke="${wire.color}" stroke-width="${wire.strokeWidth}" stroke-linejoin="round"${dash}/>`);
-      }
-    }
-    for (const j of d.junctions) parts.push(`<circle cx="${j.x}" cy="${j.y}" r="3.2" fill="${j.color}"/>`);
-  }
+  parts.push(...renderHeader(d));
+  for (const b of d.buses ?? []) parts.push(...renderTrack(b));
 
   for (const m of d.modules) {
-    const instance = payload.instances.find((i) => i.instanceId === m.instanceId);
-    const markup = instance ? (artwork.get(instance.instanceId) ?? artwork.get(instance.hardwareEntityId)) : undefined;
+    const markup = artwork.get(m.instanceId);
     if (markup) {
-      parts.push(v2 ? `<g filter="url(#lift)">${nestArtwork(markup, m.instanceId, m.x, m.y, m.width, m.height)}</g>` : nestArtwork(markup, m.instanceId, m.x, m.y, m.width, m.height));
+      parts.push(`<g filter="url(#lift)">${nestArtwork(markup, m.instanceId, m.x, m.y, m.width, m.height)}</g>`);
     } else {
       const c = m.content ?? { x: m.x, y: m.y, width: m.width, height: m.height };
       parts.push(
-        `<rect x="${c.x}" y="${c.y}" width="${c.width}" height="${c.height}" rx="12" fill="#0A3A40" stroke="#13737C"/>`,
-        `<text x="${c.x + c.width / 2}" y="${c.y + c.height / 2}" fill="${TEXT}" font-size="12" font-weight="600" text-anchor="middle">${esc(m.label)}</text>`
+        `<rect x="${c.x}" y="${c.y}" width="${c.width}" height="${c.height}" rx="14" fill="#0E4A50" stroke="#2BB8B6" stroke-opacity="0.6"/>`,
+        `<text x="${c.x + c.width / 2}" y="${c.y + c.height / 2}" fill="${TEXT}" font-size="14" font-weight="700" text-anchor="middle">${esc(m.label)}</text>`
       );
     }
-    if (v2) parts.push(...renderBadge(m));
-    else if (m.badge) {
-      parts.push(
-        `<rect x="${m.x - 3}" y="${m.y - 3}" width="${m.width + 6}" height="${m.height + 6}" rx="9" fill="none" stroke="${WARN}" stroke-dasharray="6 4"/>`,
-        `<text x="${m.x}" y="${m.y - 8}" fill="${WARN}" font-size="9" font-weight="600">${esc(m.badge)}</text>`
-      );
-    }
+    parts.push(...renderBadge(m));
   }
 
-  if (v2) {
-    for (const b of d.buses ?? []) parts.push(...renderTaps(b));
-    for (const b of d.buses ?? []) parts.push(...renderPill(b));
-    for (const g of d.gapBoxes) parts.push(...renderGap(g));
-    if (d.legendCard) parts.push(...renderLegend(d.legendCard));
-  } else {
-    for (const l of d.labels) parts.push(`<text x="${l.x}" y="${l.y}" fill="${l.color}" font-size="9" font-family="monospace" text-anchor="middle">${esc(l.text)}</text>`);
-    for (const g of d.gapBoxes) {
-      parts.push(
-        `<rect x="${g.x}" y="${g.y}" width="${g.width}" height="${g.height}" rx="7" fill="none" stroke="${MUTED}" stroke-dasharray="6 4"/>`,
-        `<text x="${g.x + 12}" y="${g.y + 24}" fill="${MUTED}" font-size="11" font-weight="600">${esc(g.title)}</text>`,
-        `<text x="${g.x + 12}" y="${g.y + 42}" fill="${MUTED}" font-size="9">${esc(g.subtitle.slice(0, 48))}</text>`
-      );
-    }
-  }
+  for (const b of d.buses ?? []) parts.push(...renderTaps(b));
+  for (const b of d.buses ?? []) parts.push(...renderPill(b));
+  for (const g of d.gapBoxes) parts.push(...renderGap(g));
+  if (d.legendCard) parts.push(...renderLegend(d.legendCard));
   parts.push('</svg>');
   return parts.join('\n');
 }

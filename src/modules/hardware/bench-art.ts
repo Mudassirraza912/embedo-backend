@@ -87,7 +87,7 @@ const FEATURE_SIZE: Record<BenchKind, [number, number]> = {
   mcu: [150, 116],
   display: [176, 88],
   relay: [150, 84],
-  gps: [96, 96],
+  gps: [146, 96],
   storage: [140, 84],
   sensor: [110, 76],
   chip: [104, 76],
@@ -169,13 +169,19 @@ export function renderBenchArt(record: HardwareRecord, isController = false): Be
   const sideStart = usbTop + topZone + TITLE_H + 10;
   const sideSpan = Math.max(span('left', vPitch), span('right', vPitch));
   const titleW = Math.min(tw(title, 17), 420);
+  // Room for every supporting IC the record lists, beside the centrepiece (see centrepiece()).
+  const extraCount = kind === 'mcu' ? 0 : extrasOf(record).length;
+  const extraRows = Math.max(1, Math.floor((Math.max(fh + 20, sideSpan) - 8) / EXTRA_ROW));
+  const extrasW = extraCount > 0 ? 36 + EXTRA_COL * Math.ceil(extraCount / extraRows) : 0;
+  const heroBaseW = kind === 'sensor' || kind === 'chip' ? 150 : fw;
   let bw = Math.max(
     250,
     titleW + 2 * (HOLE_IN + 22),
     tw(subtitle, 11.5, true) + 2 * (HOLE_IN + 22),
     span('top', hPitch('top')) + 60,
     span('bottom', hPitch('bottom')) + 60,
-    leftZ + fw + rightZ + 20
+    leftZ + fw + rightZ + 20,
+    leftZ + heroBaseW + extrasW + rightZ + 24
   );
   bw = Math.round(bw);
   const featureH = fh + 20;
@@ -238,7 +244,8 @@ export function renderBenchArt(record: HardwareRecord, isController = false): Be
   const cx = r1((fx0 + fx1) / 2);
   const cy = r1((fy0 + fy1) / 2);
   out.push(`<g id="${g('feature')}">`);
-  out.push(...feature(kind, cx, cy, Math.min(fw, fx1 - fx0 - 12), Math.min(fh, fy1 - fy0 - 8), record, g));
+  if (kind === 'mcu') out.push(...feature(kind, cx, cy, Math.min(fw, fx1 - fx0 - 12), Math.min(fh, fy1 - fy0 - 8), record, g));
+  else out.push(...centrepiece(kind, { x: fx0 + 10, y: fy0 + 2, w: fx1 - fx0 - 20, h: fy1 - fy0 - 8 }, [fw, fh], record, g));
   out.push(`</g>`);
 
   if (usbEdge) {
@@ -369,8 +376,8 @@ function feature(kind: BenchKind, cx: number, cy: number, w: number, h: number, 
       break;
     }
     case 'gps': {
-      const s = Math.min(w, h);
-      const px = cx - s / 2;
+      const s = Math.min(w - 44, h);
+      const px = x;
       const py = cy - s / 2;
       out.push(`<rect x="${px}" y="${py}" width="${s}" height="${s}" rx="8" fill="${C.inner}" stroke="${C.silk}" stroke-opacity="0.6" stroke-width="1.5"/>`);
       out.push(`<rect x="${px + 12}" y="${py + 12}" width="${s - 24}" height="${s - 24}" rx="5" fill="#C9A86A" fill-opacity="0.9" stroke="#E8CD92" stroke-opacity="0.8"/>`);
@@ -394,6 +401,145 @@ function feature(kind: BenchKind, cx: number, cy: number, w: number, h: number, 
     }
     default:
       out.push(...chip(cx, cy, Math.min(w, 120), Math.min(h, 70), silicon, true));
+  }
+  return out;
+}
+
+/** A board's supporting parts, straight from the record's secondary_ics (never invented). */
+interface Extra {
+  part: string;
+  role: string;
+  shape: 'soic' | 'sot' | 'coin';
+}
+function extrasOf(record: HardwareRecord): Extra[] {
+  return (record.identity.secondary_ics ?? [])
+    .filter((t) => typeof t === 'string' && t.trim())
+    .slice(0, 3)
+    .map((raw) => {
+      const paren = /\(([^)]*)\)/.exec(raw)?.[1] ?? '';
+      const bare = stripParen(raw);
+      const first = bare.split(/\s+/)[0] ?? bare;
+      const isPart = /[A-Za-z]/.test(first) && /\d/.test(first) && first.length >= 4;
+      const part = isPart ? first : bare;
+      const role = (paren || (isPart ? bare.slice(first.length).trim() : '')).replace(/^[-–—,:\s]+/, '');
+      const text = raw.toLowerCase();
+      const shape: Extra['shape'] = /battery|coin cell|cr\d{4}/.test(text) ? 'coin' : /ldo|regulator|fet|mosfet|transistor|diode/.test(text) ? 'sot' : 'soic';
+      return { part, role, shape };
+    });
+}
+
+const EXTRA_ROW = 54;
+const EXTRA_COL = 128;
+
+/** Draws one supporting part centred at (cx, cy) with its part number + role underneath. */
+function extra(e: Extra, cx: number, cy: number): string[] {
+  const out: string[] = [];
+  if (e.shape === 'coin') {
+    out.push(
+      `<circle cx="${cx}" cy="${cy - 6}" r="15" fill="#0B3237" stroke="${C.silk}" stroke-opacity="0.6" stroke-width="1.4"/>`,
+      `<circle cx="${cx}" cy="${cy - 6}" r="10" fill="none" stroke="${C.silk}" stroke-opacity="0.3"/>`,
+      `<text x="${cx}" y="${cy - 2.5}" fill="${C.sub}" font-family="${MONO}" font-size="9" font-weight="700" text-anchor="middle">+</text>`
+    );
+  } else {
+    const [w, h] = e.shape === 'sot' ? [24, 14] : [42, 20];
+    const x = cx - w / 2;
+    const y = cy - 6 - h / 2;
+    const leads: string[] = [];
+    const n = e.shape === 'sot' ? 3 : 4;
+    for (let k = 0; k < n; k++) {
+      const lx = r1(x + ((k + 0.5) * w) / n);
+      leads.push(`M${lx} ${r1(y - 3)}v3`);
+      if (e.shape !== 'sot' || k === 1) leads.push(`M${lx} ${r1(y + h)}v3`);
+    }
+    out.push(
+      `<path d="${leads.join('')}" stroke="${C.silk}" stroke-opacity="0.55" stroke-width="2"/>`,
+      `<rect x="${r1(x)}" y="${r1(y)}" width="${w}" height="${h}" rx="3" fill="#062428" stroke="${C.edge}" stroke-opacity="0.6"/>`,
+      `<circle cx="${r1(x + 5)}" cy="${r1(y + 5)}" r="1.6" fill="${C.silk}" fill-opacity="0.5"/>`
+    );
+  }
+  out.push(`<text x="${cx}" y="${cy + 22}" fill="${C.text}" fill-opacity="0.9" font-family="${MONO}" font-size="10" font-weight="700" text-anchor="middle">${esc(fit(e.part, EXTRA_COL - 8, 10, true))}</text>`);
+  if (e.role) out.push(`<text x="${cx}" y="${cy + 34}" fill="${C.sub}" fill-opacity="0.8" font-family="${MONO}" font-size="8.5" text-anchor="middle">${esc(fit(e.role, EXTRA_COL - 6, 8.5, true))}</text>`);
+  return out;
+}
+
+/** A tiny 0603 passive, as found beside any IC. */
+const passive = (x: number, y: number) =>
+  `<rect x="${x}" y="${y}" width="5" height="10" rx="1" fill="#2A5E62"/><rect x="${x}" y="${y}" width="5" height="2.6" fill="${C.silk}" fill-opacity="0.7"/><rect x="${x}" y="${r1(y + 7.4)}" width="5" height="2.6" fill="${C.silk}" fill-opacity="0.7"/>`;
+
+/**
+ * The middle of a non-controller board: the hero (feature visual, or the main IC scaled to the
+ * space) plus the board's own supporting ICs in a column, linked by traces, so the board reads
+ * as populated instead of a lone chip in empty space.
+ */
+function centrepiece(
+  kind: BenchKind,
+  R: { x: number; y: number; w: number; h: number },
+  base: [number, number],
+  record: HardwareRecord,
+  g: (s: string) => string
+): string[] {
+  const out: string[] = [];
+  const silicon = stripParen(record.identity.main_silicon ?? '') || 'IC';
+  const extras = extrasOf(record);
+  const scaled = kind === 'sensor' || kind === 'chip';
+  // Hero size: scaled ICs grow with the space; feature visuals keep their natural size.
+  const s = Math.round(Math.max(44, Math.min(R.h - 34, 104, R.w * 0.45)));
+  const bodyW = kind === 'chip' ? Math.round(s * 1.35) : s;
+  const heroW = scaled ? Math.max(bodyW + 44, Math.min(tw(silicon, 13, true) + 16, R.w)) : Math.min(base[0], R.w);
+  const heroH = scaled ? s + 26 : Math.min(base[1], R.h);
+  // Supporting parts fill a grid beside the hero: as many rows as fit, then more columns.
+  const rows = Math.max(1, Math.floor(R.h / EXTRA_ROW));
+  const maxCols = Math.max(0, Math.floor((R.w - heroW - 36) / EXTRA_COL));
+  const shown = extras.slice(0, rows * maxCols);
+  const cols = shown.length > 0 ? Math.ceil(shown.length / rows) : 0;
+  const perCol = cols > 0 ? Math.ceil(shown.length / cols) : 0;
+  const groupW = heroW + (cols > 0 ? 36 + cols * EXTRA_COL : 0);
+  const gx = R.x + (R.w - groupW) / 2;
+  const hcx = r1(gx + heroW / 2);
+  const hcy = r1(R.y + R.h / 2);
+
+  // Traces first, so parts sit on top of them.
+  if (shown.length > 0) {
+    const fromX = scaled ? hcx + bodyW / 2 + 4 : gx + heroW + 2;
+    const at = (i: number) => {
+      const col = Math.floor(i / perCol);
+      const inCol = Math.min(perCol, shown.length - col * perCol);
+      const row = i - col * perCol;
+      return { x: r1(gx + heroW + 36 + col * EXTRA_COL + EXTRA_COL / 2), y: r1(hcy - ((inCol - 1) * EXTRA_ROW) / 2 + row * EXTRA_ROW) };
+    };
+    shown.forEach((_, i) => {
+      const p = at(i);
+      const ey = r1(p.y - 6);
+      const sy = r1(hcy - (scaled ? 13 : 0) + (i - (shown.length - 1) / 2) * 10);
+      const mx = r1(fromX + 12 + (i % perCol) * 6);
+      // Parts in later columns are reached along the row below the first column's part.
+      const lane = Math.floor(i / perCol) > 0 ? r1(ey + 48) : ey;
+      const d = lane === ey ? `M${r1(fromX)} ${sy}H${mx}V${ey}H${r1(p.x - 26)}` : `M${r1(fromX)} ${sy}H${mx}V${lane}H${r1(p.x - 30)}V${ey}H${r1(p.x - 26)}`;
+      out.push(
+        `<path d="${d}" fill="none" stroke="${C.silk}" stroke-opacity="0.22" stroke-width="1.6" stroke-linejoin="round"/>`,
+        `<circle cx="${mx}" cy="${lane}" r="2.2" fill="none" stroke="${C.silk}" stroke-opacity="0.35"/>`
+      );
+    });
+    shown.forEach((e, i) => {
+      const p = at(i);
+      out.push(...extra(e, p.x, p.y));
+    });
+  }
+
+  if (scaled) {
+    const cyc = r1(hcy - 13);
+    out.push(...chip(hcx, cyc, bodyW, s, kind === 'chip' ? silicon : '', true));
+    if (kind === 'sensor') {
+      // Sensing element window: a port on the package.
+      out.push(
+        `<circle cx="${hcx}" cy="${cyc}" r="${r1(s * 0.16)}" fill="${C.dark}" stroke="${C.silk}" stroke-opacity="0.55" stroke-width="1.4"/>`,
+        `<circle cx="${hcx}" cy="${cyc}" r="${r1(s * 0.07)}" fill="${C.cyan}" fill-opacity="0.35"/>`
+      );
+      out.push(`<text x="${hcx}" y="${r1(cyc + s / 2 + 22)}" fill="${C.text}" font-family="${MONO}" font-size="13" font-weight="700" text-anchor="middle">${esc(fit(silicon, Math.max(heroW, R.w * 0.5), 13, true))}</text>`);
+    }
+    if (s >= 56) out.push(passive(r1(hcx - bodyW / 2 - 18), r1(cyc - s / 2 + 4)), passive(r1(hcx - bodyW / 2 - 18), r1(cyc + s / 2 - 14)));
+  } else {
+    out.push(...feature(kind, hcx, hcy, heroW, heroH, record, g));
   }
   return out;
 }

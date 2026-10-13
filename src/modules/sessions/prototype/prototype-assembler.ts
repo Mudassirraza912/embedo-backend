@@ -34,12 +34,22 @@ export interface AssembleOptions {
 
 const isWiringReady = (entity: LibraryEntity) => entity.reviewStatus === 'confirmed' && entity.assetReadiness === 'wiring_ready';
 
-function badgeFor(entity: LibraryEntity): string | null {
+export function badgeFor(entity: LibraryEntity): string | null {
   if (!entity.svg) return 'NO ARTWORK';
   if (entity.scope === 'private_project') return 'PRIVATE · PROVISIONAL';
   if (entity.reviewStatus !== 'confirmed') return 'PROVISIONAL';
   if (entity.assetReadiness !== 'wiring_ready') return 'AWAITING WIRING REVIEW';
   return null;
+}
+
+/** Where the frontend loads a board's bench art from (hash = cache key). */
+export function benchSvgRef(art: BenchArt, hardwareEntityId: string, isController: boolean, svgBasePath: string): PrototypeSvgRef {
+  return {
+    url: `${svgBasePath}/${encodeURIComponent(hardwareEntityId)}/bench.svg${isController ? '?controller=1' : ''}`,
+    hash: art.hash,
+    width: art.width,
+    height: art.height,
+  };
 }
 
 export function assemblePrototype(
@@ -64,15 +74,8 @@ export function assemblePrototype(
     if (!benchCache.has(key)) benchCache.set(key, renderBenchArt(entity.record, isController));
     return benchCache.get(key)!;
   };
-  const benchRef = (entity: LibraryEntity, isController: boolean): PrototypeSvgRef => {
-    const art = benchOf(entity, isController);
-    return {
-      url: `${options.svgBasePath}/${encodeURIComponent(entity.hardwareEntityId)}/bench.svg${isController ? '?controller=1' : ''}`,
-      hash: art.hash,
-      width: art.width,
-      height: art.height,
-    };
-  };
+  const benchRef = (entity: LibraryEntity, isController: boolean): PrototypeSvgRef =>
+    benchSvgRef(benchOf(entity, isController), entity.hardwareEntityId, isController, options.svgBasePath);
 
   const toInstance = (instanceId: string, entity: LibraryEntity, role: string | null, isController: boolean): PrototypeInstance => ({
     instanceId,
