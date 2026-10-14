@@ -8,6 +8,9 @@ import { PrototypeArchitecture } from './prototype.types.js';
 
 type Bench = Pick<PrototypeArchitecture, 'instances' | 'nets' | 'compatibility'>;
 
+/** The state names users see (Fail / Unverified / Warning / Pass), so replies use the same words. */
+const STATUS_WORD = { BLOCKER: 'Fail', UNKNOWN: 'Unverified', WARNING: 'Warning', PASS: 'Pass' } as const;
+
 const pinKey = (m: { instanceId: string; pinName: string }) => `${m.instanceId}.${m.pinName}`;
 
 /** One line per net: "3V3 (power): regulator1.VOUT, mcu.VIN, gps1.VIN". */
@@ -21,7 +24,7 @@ export function describeBench(bench: Bench, maxIssues = 8): string {
   const issues = bench.compatibility.results
     .filter((r) => r.status !== 'PASS')
     .slice(0, maxIssues)
-    .map((r) => `${r.status}: ${r.message}`);
+    .map((r) => `${STATUS_WORD[r.status]}: ${r.message}`);
   return [
     'Boards:',
     ...boards.map((b) => `- ${b}`),

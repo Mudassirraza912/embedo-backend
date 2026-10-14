@@ -155,6 +155,8 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
   const preferredConnectors = new Map<string, Set<string>>();
   const cabled = new Set<string>(); // `${instanceId}|${pinId}` reached through a cable, no jumper needed
   const poweredByCable = new Map<string, number | null>();
+  /** The module pin a STEMMA QT cable's power contact lands on, and the board at the other end. */
+  const cablePowerPin = new Map<string, { pin: HardwarePin; from: string }>();
   const linked = new Map<string, Set<LinkInterface>>(peripherals.map((p) => [p.instanceId, new Set()]));
   const requiredPins = new Map<string, Set<string>>(peripherals.map((p) => [p.instanceId, new Set()]));
 
@@ -367,6 +369,10 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
           chain.push(p.instanceId);
           linked.get(p.instanceId)!.add('I2C');
           const power = inPort.connector.contacts.map((c) => board.pinsById.get(c.pin_id)).filter((pin) => pin && (pin.direction === 'power_in' || pin.direction === 'ground'));
+          const cablePower = inPort.connector.contacts
+            .map((c) => board.pinsById.get(c.pin_id))
+            .find((pin) => pin && (pin.direction === 'power_in' || pin.direction === 'power_out'));
+          if (cablePower) cablePowerPin.set(p.instanceId, { pin: cablePower, from: hostBoard.label });
           require(p.instanceId, ...power);
           results.push(
             result(
@@ -728,7 +734,44 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     const board = boards.get(p.instanceId)!;
     if (supplyIds.has(p.instanceId)) continue;
     if (poweredByCable.has(p.instanceId)) {
-      peripheralRails.set(p.instanceId, poweredByCable.get(p.instanceId) ?? null);
+      const volts = poweredByCable.get(p.instanceId) ?? null;
+      peripheralRails.set(p.instanceId, volts);
+      // The cable carries its host's rail: check it against what the module accepts (this used to
+      // be skipped, so a cabled module's supply was never checked at all).
+      const cp = cablePowerPin.get(p.instanceId);
+      const range = cp ? inputRange(board, cp.pin) : null;
+      if (!cp || volts === null || !range) {
+        results.push(
+          result(
+            'required_power_rail',
+            'UNKNOWN',
+            `${board.label} is powered over its STEMMA QT / Qwiic cable, but its record does not say what supply it accepts, so the voltage cannot be checked.`,
+            [p.instanceId],
+            cp ? [cp.pin.pin_id] : []
+          )
+        );
+      } else if (!fitsRange(volts, range)) {
+        results.push(
+          result(
+            'required_power_rail',
+            'BLOCKER',
+            `${board.label} gets ${Number(volts.toFixed(2))} V over its STEMMA QT / Qwiic cable from ${cp.from}, but accepts ${rangeText(range)}.`,
+            [p.instanceId],
+            [cp.pin.pin_id],
+            'Power it from a compatible supply instead of the cable.'
+          )
+        );
+      } else {
+        results.push(
+          result(
+            'required_power_rail',
+            'PASS',
+            `${board.label} powered over its STEMMA QT / Qwiic cable from ${cp.from} (${Number(volts.toFixed(2))} V; accepts ${rangeText(range)}).`,
+            [p.instanceId],
+            [cp.pin.pin_id]
+          )
+        );
+      }
       continue;
     }
     // Other self-powered boards (no rated output in the record) keep their own supply: feeding

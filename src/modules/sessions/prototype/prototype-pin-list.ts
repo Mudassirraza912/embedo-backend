@@ -150,9 +150,8 @@ export function buildPinList(input: PinListInput): PinList {
           else if (rules.some((r) => r.status === 'UNKNOWN')) status = 'unknown';
           else if (rules.some((r) => r.status === 'WARNING')) status = 'warning';
           else if (state === 'blocked') status = 'conflict';
-          else if (state === 'proposed' || state === undefined) status = 'proposed';
+          // Library review status is internal: a connected pin with no failing check is assigned.
           else status = 'assigned';
-          if (status === 'proposed') note = 'awaiting wiring review';
           const firstRule = rules[0];
           if (firstRule) note = firstRule.suggestedFix ? `${firstRule.message} ${firstRule.suggestedFix}` : firstRule.message;
         } else {

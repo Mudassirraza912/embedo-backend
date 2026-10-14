@@ -8,9 +8,15 @@ import { sessionsService } from '../../src/modules/sessions/sessions.service.js'
 import { AppError } from '../../src/common/errors/AppError.js';
 import { aiRouterService } from '../../src/modules/ai/ai-router.service.js';
 import { routeMessage } from '../../src/modules/sessions/conversation-router.service.js';
+import { LibraryEntity } from '../../src/modules/hardware/hardware-library.service.js';
 import { describeBench, diffBenches } from '../../src/modules/sessions/prototype/prototype-diff.js';
 import { stripPowerLinks, ResolverOutput } from '../../src/modules/sessions/prototype/prototype-resolver.js';
 import { renderBenchArt } from '../../src/modules/hardware/bench-art.js';
+import { crossingsOf } from '../../src/modules/sessions/prototype/prototype-svg-exporter.js';
+import { assemblePrototype } from '../../src/modules/sessions/prototype/prototype-assembler.js';
+import { countResults } from '../../src/modules/sessions/prototype/prototype-checks.js';
+import { scrubReviewState } from '../../src/modules/sessions/prototype/diagram-upgrade.js';
+import { PrototypeArchitecture, PrototypeComposition } from '../../src/modules/sessions/prototype/prototype.types.js';
 import { FIXTURE_IDS, loadFixtureEntity } from './prototype-fixtures.js';
 
 /**
@@ -203,5 +209,78 @@ describe('resolver: power is never a signal link', () => {
     } as unknown as ResolverOutput;
     expect(stripPowerLinks(output, new Map([[bme.hardwareEntityId, bme]]))).toBe(1);
     expect(output.modules[0]!.links).toEqual([{ interface: 'I2C' }]);
+  });
+});
+
+describe('checks summary: counts come from check records, review status never shows', () => {
+  const options = { svgBasePath: '/api/v1/hardware/entities', projectName: 'Weather', understanding: '', notes: '' };
+  const build = async (controller: string, modules: PrototypeComposition['modules'], overrides: Record<string, Partial<LibraryEntity>> = {}) => {
+    const ids = [controller, ...modules.map((m) => m.hardwareEntityId)];
+    const entities = new Map<string, LibraryEntity>();
+    for (const id of ids) entities.set(id, await loadFixtureEntity(id, overrides[id] ?? {}));
+    return assemblePrototype({ kind: 'prototype_composition', controller: { instanceId: 'mcu', hardwareEntityId: controller }, modules, gaps: [] }, entities, options);
+  };
+
+  it('counts reconcile with the check records, and every linked module gets a host and an evidence result', async () => {
+    const p = await build(FIXTURE_IDS.pico, [{ instanceId: 'bme1', hardwareEntityId: FIXTURE_IDS.bme280, role: 'env', links: [{ interface: 'I2C' }] }]);
+    expect(p.compatibility.counts).toEqual(countResults(p.compatibility.results));
+    const of = (rule: string, id: string) => p.compatibility.results.filter((r) => r.ruleType === rule && r.instanceIds.includes(id));
+    expect(of('required_host_interface', 'bme1')).toEqual([expect.objectContaining({ status: 'PASS' })]);
+    expect(of('signal_direction_conflict', 'bme1')).toEqual([expect.objectContaining({ status: 'PASS' })]);
+    // Fixture facts are "inferred": evidence is Unverified, never Pass.
+    expect(of('record_evidence', 'mcu')).toEqual([expect.objectContaining({ status: 'UNKNOWN' })]);
+    expect(of('record_evidence', 'bme1')).toEqual([expect.objectContaining({ status: 'UNKNOWN' })]);
+  });
+
+  it('evidence from the vendor page passes', async () => {
+    const p = await build(FIXTURE_IDS.pico, [{ instanceId: 'bme1', hardwareEntityId: FIXTURE_IDS.bme280, role: 'env', links: [{ interface: 'I2C' }] }], {
+      [FIXTURE_IDS.bme280]: { verificationMethod: 'vendor_live' },
+    });
+    const evidence = p.compatibility.results.find((r) => r.ruleType === 'record_evidence' && r.instanceIds.includes('bme1'))!;
+    expect(evidence.status).toBe('PASS');
+    expect(evidence.message).toContain('product page');
+  });
+
+  it('checks the supply of a module powered over its STEMMA QT cable (it used to be skipped)', async () => {
+    const p = await build(FIXTURE_IDS.qtPy, [{ instanceId: 'bme1', hardwareEntityId: FIXTURE_IDS.bme280, role: 'env', links: [{ interface: 'I2C' }] }]);
+    const cable = p.connections.find((c) => c.kind === 'cable');
+    expect(cable).toBeDefined();
+    const rail = p.compatibility.results.filter((r) => r.ruleType === 'required_power_rail' && r.instanceIds.includes('bme1'));
+    expect(rail).toHaveLength(1);
+    expect(['PASS', 'BLOCKER', 'UNKNOWN']).toContain(rail[0]!.status);
+    expect(rail[0]!.message).toContain('STEMMA QT');
+  });
+
+  it('scrubs review status from a payload stored before 2026-10-14', async () => {
+    const p = await build(FIXTURE_IDS.pico, [{ instanceId: 'bme1', hardwareEntityId: FIXTURE_IDS.bme280, role: 'env', links: [{ interface: 'I2C' }] }]);
+    const old = JSON.parse(JSON.stringify(p)) as PrototypeArchitecture;
+    old.connections = old.connections.map((c) => ({ ...c, state: 'proposed' }));
+    old.moduleDiagram.modules[0]!.badge = 'PRIVATE · PROVISIONAL';
+    old.moduleDiagram.wires = old.moduleDiagram.wires.map((w) => ({ ...w, dashed: true }));
+    old.moduleDiagram.legendCard!.dashedNote = true;
+    const row = old.pinList.rows.find((r) => r.status === 'assigned')!;
+    row.status = 'proposed';
+    row.note = 'awaiting wiring review';
+    old.pinList.summary = { ...old.pinList.summary, assigned: old.pinList.summary.assigned - 1, proposed: 1 };
+
+    const clean = scrubReviewState(old);
+    expect(clean.connections.every((c) => c.state === 'drawn')).toBe(true);
+    expect(clean.moduleDiagram.modules.every((m) => m.badge === null)).toBe(true);
+    expect(clean.moduleDiagram.wires.every((w) => !w.dashed)).toBe(true);
+    expect(clean.moduleDiagram.legendCard!.dashedNote).toBe(false);
+    expect(clean.pinList.rows.some((r) => r.status === 'proposed' || r.note === 'awaiting wiring review')).toBe(false);
+    expect(clean.pinList.summary).toEqual(p.pinList.summary);
+  });
+});
+
+describe('diagram: crossings are drawn as bridges, never as junctions', () => {
+  it('finds a leg crossing a track it does not join, and ignores its own junction', () => {
+    const bus = (busId: string, y: number, taps: Array<{ x: number; points: Array<[number, number]> }>) =>
+      ({ busId, netId: busId, kind: 'net', netClass: 'i2c', label: busId, color: '#fff', y, x1: 0, x2: 500, labelX: 0, labelWidth: 40, dashed: false, shared: false,
+         taps: taps.map((t) => ({ ...t, instanceId: 'a', anchorId: 'x', dashed: false })) }) as never;
+    // SDA at y=100, SCL at y=120. A pad at y=40 drops to SCL (y=120): it crosses SDA at y=100.
+    const sda = bus('SDA', 100, [{ x: 50, points: [[50, 40], [50, 100]] }]);
+    const scl = bus('SCL', 120, [{ x: 80, points: [[80, 40], [80, 120]] }]);
+    expect(crossingsOf([sda, scl])).toEqual([{ x: 80, y: 100 }]);
   });
 });

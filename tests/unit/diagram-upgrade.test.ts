@@ -25,7 +25,7 @@ describe('old-format prototype diagrams are redrawn when served', () => {
         gaps: [],
       },
       entities,
-      { allowProvisional: true, svgBasePath: '/api/v1/hardware/entities', projectName: 'Logger', understanding: '', notes: '' }
+      { svgBasePath: '/api/v1/hardware/entities', projectName: 'Logger', understanding: '', notes: '' }
     );
     // What a payload saved before the bus layout looks like: no buses, library-art URLs, lane labels.
     const { buses: _b, legendCard: _l, layoutVersion: _v, ...oldDiagram } = current.moduleDiagram;

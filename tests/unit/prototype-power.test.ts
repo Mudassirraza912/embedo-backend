@@ -237,7 +237,6 @@ describe('prototype power chain (bench supplies wired from their records)', () =
     };
     const entities = new Map(Object.values(b).map((e) => [e.hardwareEntityId, e]));
     const payload = assemblePrototype(composition, entities, {
-      allowProvisional: true,
       svgBasePath: '/api/v1/hardware/entities',
       projectName: 'Asset tracker',
       understanding: '',

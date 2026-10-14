@@ -24,7 +24,6 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
     gaps: [{ category: 'Display/UI', need: 'show readings', suggestion: 'SSD1306 OLED (I2C)' }],
   };
   const options: AssembleOptions = {
-    allowProvisional: true,
     svgBasePath: '/api/v1/hardware/entities',
     projectName: 'GPS Weather Logger',
     understanding: 'Pico logs BME280 and GPS readings to microSD',
@@ -51,12 +50,12 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
       .reduce((a, b) => a + b, 0);
     expect(p.pinList.rows).toHaveLength(contacts);
     expect(p.pinList.summary.rows).toBe(contacts);
-    // Provisional fixtures: connected rows are proposed (awaiting review), never asserted as assigned.
-    expect(p.pinList.summary.assigned).toBe(0);
-    expect(p.pinList.summary.proposed).toBeGreaterThan(0);
+    // Review status is internal: connected rows of provisional fixtures are plain "assigned".
+    expect(p.pinList.summary.assigned).toBeGreaterThan(0);
+    expect(p.pinList.summary.proposed).toBe(0);
     expect(p.pinList.summary.blocking).toBe(0);
     const sda = p.pinList.rows.find((r) => r.instanceId === 'bme1' && r.pin === 'SDI' && r.contact === 'JP1:6')!;
-    expect(sda).toMatchObject({ boardPin: 'GP4', net: 'I2C0_SDA', function: 'I2C SDA', status: 'proposed' });
+    expect(sda).toMatchObject({ boardPin: 'GP4', net: 'I2C0_SDA', function: 'I2C SDA', status: 'assigned' });
     // A BME280 wired over I2C does not need its SPI-only CS pin.
     expect(p.pinList.rows.find((r) => r.instanceId === 'bme1' && r.pin === 'CS')!.status).toBe('optional');
   });
@@ -87,7 +86,7 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
         expect(x).toBeLessThanOrEqual(p.moduleDiagram.width);
         expect(y).toBeLessThanOrEqual(p.moduleDiagram.height);
       }
-      expect(wire.dashed).toBe(true); // provisional boards: shown, not asserted
+      expect(wire.dashed).toBe(false); // review status never changes the drawing
     }
   });
 
@@ -121,21 +120,18 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
     expect(d.header.title).toBe('Prototype Mode');
   });
 
-  it('hides unreviewed wiring outside the dev override, and is deterministic', () => {
-    const production = assemblePrototype(composition, entities, { ...options, allowProvisional: false });
-    expect(production.moduleDiagram.wires).toHaveLength(0);
-    expect(production.connections.every((c) => c.state === 'proposed')).toBe(true);
-    expect(assemblePrototype(composition, entities, options).stateHash).toBe(assemblePrototype(composition, entities, options).stateHash);
-  });
-
-  it('draws reviewed, wiring-ready boards solid', () => {
+  it('never shows library review status: reviewed and unreviewed boards draw the same, and it is deterministic', () => {
     const reviewed = new Map(
       [...entities].map(([id, e]) => [id, { ...e, reviewStatus: 'confirmed', assetReadiness: 'wiring_ready' as const }])
     );
-    const p = assemblePrototype(composition, reviewed, { ...options, allowProvisional: false });
-    expect(p.connections.every((c) => c.state === 'drawn')).toBe(true);
-    expect(p.moduleDiagram.wires.every((w) => !w.dashed)).toBe(true);
-    expect(p.pinList.summary.assigned).toBeGreaterThan(0);
+    const unreviewed = assemblePrototype(composition, entities, options);
+    const p = assemblePrototype(composition, reviewed, options);
+    expect(unreviewed.connections.map((c) => c.state)).toEqual(p.connections.map((c) => c.state));
+    expect(unreviewed.connections.every((c) => c.state === 'drawn')).toBe(true);
+    expect(unreviewed.moduleDiagram.wires.every((w) => !w.dashed)).toBe(true);
+    expect(unreviewed.moduleDiagram.modules.every((m) => m.badge === null)).toBe(true);
+    expect(unreviewed.moduleDiagram.legendCard?.dashedNote).toBe(false);
+    expect(assemblePrototype(composition, entities, options).stateHash).toBe(assemblePrototype(composition, entities, options).stateHash);
   });
 
   it('marks an I2C address clash as a conflict on the pin rows and blocks those links', () => {
