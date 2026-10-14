@@ -114,6 +114,8 @@ export interface DiagramWire {
   strokeWidth: number;
   /** Dashed = not asserted (awaiting review, or a rule is unresolved). */
   dashed: boolean;
+  /** A check BLOCKS this connection: drawn so the canvas matches the graph, styled "do not wire". */
+  blocked?: boolean;
   points: Point[];
   /** The backbone track this connection runs along. Layout v2+. */
   busId?: string;
@@ -134,10 +136,12 @@ export interface DiagramBus {
   labelWidth: number;
   /** Every connection on the track is unverified. */
   dashed: boolean;
+  /** Every connection on the track is blocked by a check. */
+  blocked?: boolean;
   /** More than two boards tap it. */
   shared: boolean;
   /** One per board anchor on the track: the leg from the anchor down/up to the junction at (x, y). */
-  taps: Array<{ x: number; instanceId: string; anchorId: string; points: Point[]; dashed: boolean; /** Anchor is a pad (light it in the net colour). */ pad?: boolean }>;
+  taps: Array<{ x: number; instanceId: string; anchorId: string; points: Point[]; dashed: boolean; blocked?: boolean; /** Anchor is a pad (light it in the net colour). */ pad?: boolean }>;
 }
 
 export interface ModuleDiagram {
@@ -159,9 +163,11 @@ export interface ModuleDiagram {
     height: number;
     title: string;
     caption: string;
-    rows: Array<{ label: string; color: string; detail: string; dashed: boolean; netId: string | null }>;
+    rows: Array<{ label: string; color: string; detail: string; dashed: boolean; blocked?: boolean; netId: string | null }>;
     /** Explain dashed lines (some wiring is proposed, not verified). */
     dashedNote: boolean;
+    /** Explain blocked lines (a check says do not wire them). */
+    blockedNote?: boolean;
   } | null;
   header: {
     title: string;

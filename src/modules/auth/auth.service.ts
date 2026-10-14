@@ -60,6 +60,9 @@ const parseDurationSeconds = (value: string, fallbackSeconds: number): number =>
 
 const REFRESH_TTL_SECONDS = parseDurationSeconds(env.JWT_REFRESH_EXPIRES_IN, 7 * 86400);
 
+/** How long a just-rotated refresh token still counts as a concurrent refresh rather than theft. */
+const ROTATION_GRACE_MS = 30_000;
+
 export class AuthService {
   private hashToken(token: string): string {
     return crypto.createHash('sha256').update(token).digest('hex');
@@ -172,6 +175,16 @@ export class AuthService {
     }
 
     if (storedToken.revokedAt) {
+      // Two tabs (or a tab and a retry) refreshing with the same cookie a moment apart is normal:
+      // the second request presents the token the first one just rotated. Within the grace window
+      // it gets its own fresh pair instead of tripping theft detection and signing the user out
+      // everywhere. Older reuse is still treated as compromise.
+      const rotatedRecently =
+        storedToken.replacedById !== null && Date.now() - storedToken.revokedAt.getTime() < ROTATION_GRACE_MS;
+      if (rotatedRecently && new Date() <= storedToken.expiresAt && !storedToken.user.suspendedAt) {
+        logger.info({ userId: storedToken.userId }, 'Concurrent refresh within the rotation grace window');
+        return this.issueRefreshPair(storedToken.user);
+      }
       // Reuse of a rotated token => compromise. Kill the whole family.
       await prisma.refreshToken.updateMany({
         where: { userId: storedToken.userId, revokedAt: null },
@@ -197,6 +210,7 @@ export class AuthService {
     });
 
     // Atomic rotation: the old token is revoked in the same transaction that creates the new one.
+    let lostRace = false;
     await prisma.$transaction(async (tx) => {
       const created = await tx.refreshToken.create({
         data: { userId: storedToken.user.id, tokenHash: this.hashToken(newRefreshToken), expiresAt: this.refreshExpiry() },
@@ -206,12 +220,27 @@ export class AuthService {
         data: { revokedAt: new Date(), replacedById: created.id },
       });
       if (revoked.count !== 1) {
-        // Lost a race with a concurrent refresh of the same token; abort this rotation.
-        throw new AppError(401, 'UNAUTHORIZED', 'Session invalidated. Please sign in again.');
+        // A concurrent refresh of the same token rotated it first; undo this rotation.
+        lostRace = true;
+        throw new AppError(409, 'CONFLICT', 'Concurrent refresh');
       }
+    }).catch((err: unknown) => {
+      if (!lostRace) throw err;
     });
 
+    // Same situation as the grace window above, caught inside the transaction instead.
+    if (lostRace) return this.issueRefreshPair(storedToken.user);
+
     return { accessToken, refreshToken: newRefreshToken };
+  }
+
+  /** A fresh access + refresh pair for a user, without touching their other refresh tokens. */
+  private async issueRefreshPair(user: { id: string; email: string; role: string }): Promise<{ accessToken: string; refreshToken: string }> {
+    const { accessToken, refreshToken } = this.generateTokens({ userId: user.id, email: user.email, role: user.role });
+    await prisma.refreshToken.create({
+      data: { userId: user.id, tokenHash: this.hashToken(refreshToken), expiresAt: this.refreshExpiry() },
+    });
+    return { accessToken, refreshToken };
   }
 
   async loginWithGoogle(input: GoogleAuthInput): Promise<AuthResult> {

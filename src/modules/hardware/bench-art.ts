@@ -39,7 +39,15 @@ const PAD_IN = 26; // board edge to pad centre
 const TITLE_H = 60;
 const HOLE_IN = 17;
 
-const C = {
+export type BenchTheme = 'dark' | 'light';
+
+/**
+ * Two palettes: the dark one is a teal soldermask for the dark canvas; the light one is a white
+ * soldermask so the boards blend into the light canvas instead of sitting on it as dark slabs.
+ * Chips, connectors and screens stay dark in both (as on a real board), so text printed inside
+ * them uses chipText/chipSub, while text printed on the board itself uses text/sub.
+ */
+const DARK_PALETTE = {
   board0: '#0F4C53',
   board1: '#0A343A',
   edge: '#2BB8B6',
@@ -53,7 +61,36 @@ const C = {
   cyan: '#20E6E0',
   dark: '#04191C',
   inner: '#082A2F',
+  chipText: '#F2FBFB',
+  chipSub: '#8ED8D4',
+  can0: '#16565D',
+  can1: '#0B3439',
+  sheen: 0.07,
 };
+
+const LIGHT_PALETTE: typeof DARK_PALETTE = {
+  board0: '#FFFFFF',
+  board1: '#EAF4F4',
+  edge: '#8CC8C5',
+  silk: '#6E9EA1',
+  pad: '#B4CDCF',
+  text: '#0B2A2E',
+  sub: '#017F7B',
+  label: '#2D4A4E',
+  power: '#B7790F',
+  ground: '#667B7E',
+  cyan: '#019893',
+  dark: '#1A3A3E',
+  inner: '#0D3A40',
+  chipText: '#F2FBFB',
+  chipSub: '#8ED8D4',
+  can0: '#E4ECED',
+  can1: '#B6C6C8',
+  sheen: 0.5,
+};
+
+/** The palette of the render in progress (renderBenchArt is synchronous, so this never interleaves). */
+let C = DARK_PALETTE;
 
 const SANS = "Inter, 'Segoe UI', Arial, sans-serif";
 const MONO = "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -105,7 +142,16 @@ interface Slot {
   pinId: string | null;
 }
 
-export function renderBenchArt(record: HardwareRecord, isController = false): BenchArt {
+export function renderBenchArt(record: HardwareRecord, isController = false, theme: BenchTheme = 'dark'): BenchArt {
+  C = theme === 'light' ? LIGHT_PALETTE : DARK_PALETTE;
+  try {
+    return renderWithPalette(record, isController);
+  } finally {
+    C = DARK_PALETTE;
+  }
+}
+
+function renderWithPalette(record: HardwareRecord, isController: boolean): BenchArt {
   const hwId = record.identity.hardware_entity_id;
   const kind = benchKind(record, isController);
   const pins = new Map(record.pins.map((p) => [p.pin_id, p]));
@@ -201,8 +247,8 @@ export function renderBenchArt(record: HardwareRecord, isController = false): Be
   out.push(
     `<defs>` +
       `<linearGradient id="${g('pcb')}" x1="0" y1="0" x2="0.35" y2="1"><stop offset="0" stop-color="${C.board0}"/><stop offset="1" stop-color="${C.board1}"/></linearGradient>` +
-      `<linearGradient id="${g('sheen')}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF" stop-opacity="0.07"/><stop offset="0.4" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient>` +
-      `<linearGradient id="${g('can')}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#16565D"/><stop offset="1" stop-color="#0B3439"/></linearGradient>` +
+      `<linearGradient id="${g('sheen')}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFFFF" stop-opacity="${C.sheen}"/><stop offset="0.4" stop-color="#FFFFFF" stop-opacity="0"/></linearGradient>` +
+      `<linearGradient id="${g('can')}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${C.can0}"/><stop offset="1" stop-color="${C.can1}"/></linearGradient>` +
       `<linearGradient id="${g('screen')}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#03181B"/><stop offset="1" stop-color="#062226"/></linearGradient>` +
       `</defs>`
   );
@@ -346,8 +392,8 @@ function feature(kind: BenchKind, cx: number, cy: number, w: number, h: number, 
         out.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="${C.inner}" stroke="${C.edge}" stroke-opacity="0.55" stroke-width="1.4"/>`);
         out.push(`<line x1="${x + 14}" y1="${y + 9}" x2="${x + w - 14}" y2="${y + 9}" stroke="${C.silk}" stroke-opacity="0.45" stroke-width="1.4" stroke-dasharray="4 4"/>`);
         out.push(`<rect x="${x + 10}" y="${y + 20}" width="${w - 20}" height="${h - 30}" rx="6" fill="url(#${g('can')})" stroke="${C.silk}" stroke-opacity="0.35"/>`);
-        out.push(`<text x="${cx}" y="${y + 20 + (h - 30) / 2 + (mod ? -2 : 5)}" fill="${C.text}" font-family="${MONO}" font-size="14" font-weight="700" text-anchor="middle">${esc(fit(silicon, w - 30, 14, true))}</text>`);
-        if (mod) out.push(`<text x="${cx}" y="${y + 20 + (h - 30) / 2 + 15}" fill="${C.sub}" font-family="${MONO}" font-size="10.5" text-anchor="middle">${esc(mod[0]!.toUpperCase())}</text>`);
+        out.push(`<text x="${cx}" y="${y + 20 + (h - 30) / 2 + (mod ? -2 : 5)}" fill="${C.chipText}" font-family="${MONO}" font-size="14" font-weight="700" text-anchor="middle">${esc(fit(silicon, w - 30, 14, true))}</text>`);
+        if (mod) out.push(`<text x="${cx}" y="${y + 20 + (h - 30) / 2 + 15}" fill="${C.chipSub}" font-family="${MONO}" font-size="10.5" text-anchor="middle">${esc(mod[0]!.toUpperCase())}</text>`);
         out.push(`<circle cx="${x + w - 18}" cy="${y + 30}" r="4" fill="${C.cyan}"/><circle cx="${x + w - 18}" cy="${y + 30}" r="8" fill="${C.cyan}" fill-opacity="0.2"/>`);
       } else {
         out.push(...chip(cx, cy, Math.min(w, h, 92), Math.min(w, h, 92), silicon, true));
@@ -371,8 +417,8 @@ function feature(kind: BenchKind, cx: number, cy: number, w: number, h: number, 
       const rx = cx - rw / 2;
       out.push(`<rect x="${rx}" y="${y}" width="${rw}" height="${h}" rx="6" fill="${C.inner}" stroke="${C.silk}" stroke-opacity="0.7" stroke-width="1.6"/>`);
       out.push(`<rect x="${rx + 8}" y="${y + 7}" width="${rw - 16}" height="${h - 14}" rx="4" fill="#0E3F45" stroke="${C.silk}" stroke-opacity="0.35"/>`);
-      out.push(`<text x="${cx}" y="${cy + 2}" fill="${C.text}" font-family="${SANS}" font-size="14" font-weight="700" text-anchor="middle" letter-spacing="0.8">RELAY</text>`);
-      out.push(`<text x="${cx}" y="${cy + 18}" fill="${C.sub}" font-family="${MONO}" font-size="10" text-anchor="middle">${esc(fit(silicon, rw - 20, 10, true))}</text>`);
+      out.push(`<text x="${cx}" y="${cy + 2}" fill="${C.chipText}" font-family="${SANS}" font-size="14" font-weight="700" text-anchor="middle" letter-spacing="0.8">RELAY</text>`);
+      out.push(`<text x="${cx}" y="${cy + 18}" fill="${C.chipSub}" font-family="${MONO}" font-size="10" text-anchor="middle">${esc(fit(silicon, rw - 20, 10, true))}</text>`);
       break;
     }
     case 'gps': {
@@ -390,7 +436,7 @@ function feature(kind: BenchKind, cx: number, cy: number, w: number, h: number, 
       out.push(`<path d="M${x} ${y + 8}q0 -8 8 -8h${w - 30}l14 12h0q8 0 8 8v${h - 20}q0 8 -8 8h-${w - 8}q-8 0 -8 -8z" fill="${C.inner}" stroke="${C.silk}" stroke-opacity="0.75" stroke-width="1.6"/>`);
       out.push(`<rect x="${x + 12}" y="${y + 18}" width="${w - 24}" height="${h - 30}" rx="4" fill="#0E3F45" stroke="${C.silk}" stroke-opacity="0.3"/>`);
       for (let k = 0; k < 8; k++) out.push(`<rect x="${x + 22 + k * ((w - 44) / 8)}" y="${y + h - 26}" width="${(w - 44) / 8 - 4}" height="10" rx="1.5" fill="#D9B45A" fill-opacity="0.75"/>`);
-      out.push(`<text x="${cx}" y="${y + 40}" fill="${C.text}" font-family="${MONO}" font-size="12" font-weight="700" text-anchor="middle">microSD</text>`);
+      out.push(`<text x="${cx}" y="${y + 40}" fill="${C.chipText}" font-family="${MONO}" font-size="12" font-weight="700" text-anchor="middle">microSD</text>`);
       break;
     }
     case 'sensor': {
@@ -438,7 +484,7 @@ function extra(e: Extra, cx: number, cy: number): string[] {
     out.push(
       `<circle cx="${cx}" cy="${cy - 6}" r="15" fill="#0B3237" stroke="${C.silk}" stroke-opacity="0.6" stroke-width="1.4"/>`,
       `<circle cx="${cx}" cy="${cy - 6}" r="10" fill="none" stroke="${C.silk}" stroke-opacity="0.3"/>`,
-      `<text x="${cx}" y="${cy - 2.5}" fill="${C.sub}" font-family="${MONO}" font-size="9" font-weight="700" text-anchor="middle">+</text>`
+      `<text x="${cx}" y="${cy - 2.5}" fill="${C.chipSub}" font-family="${MONO}" font-size="9" font-weight="700" text-anchor="middle">+</text>`
     );
   } else {
     const [w, h] = e.shape === 'sot' ? [24, 14] : [42, 20];
@@ -556,6 +602,6 @@ function chip(cx: number, cy: number, w: number, h: number, label: string, dot: 
     `<rect x="${x + 5}" y="${y + 5}" width="${w - 10}" height="${h - 10}" rx="4" fill="none" stroke="${C.silk}" stroke-opacity="0.12"/>`,
   ];
   if (dot) out.push(`<circle cx="${x + w - 11}" cy="${y + 11}" r="3" fill="${C.cyan}"/>`);
-  if (label) out.push(`<text x="${cx}" y="${cy + 4.5}" fill="${C.text}" font-family="${MONO}" font-size="12.5" font-weight="700" text-anchor="middle">${esc(fit(label, w - 14, 12.5, true))}</text>`);
+  if (label) out.push(`<text x="${cx}" y="${cy + 4.5}" fill="${C.chipText}" font-family="${MONO}" font-size="12.5" font-weight="700" text-anchor="middle">${esc(fit(label, w - 14, 12.5, true))}</text>`);
   return out;
 }
