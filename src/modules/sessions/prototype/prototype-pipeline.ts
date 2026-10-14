@@ -263,10 +263,18 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     const diff = current && revisionNotes ? diffBenches(current, payload) : null;
     if (diff && !diff.changed) {
       log.info('Prototype revision produced an identical bench; no version saved');
-      const open = payload.compatibility.results.filter((r) => r.status === 'BLOCKER' || r.status === 'WARNING').slice(0, 3);
+      // Most serious first; UNKNOWN matters here (a supply missing from a record is exactly why a
+      // module cannot be rewired), and power problems lead because most corrections are about power.
+      const rank = { BLOCKER: 0, UNKNOWN: 1, WARNING: 2, PASS: 3 } as const;
+      const open = payload.compatibility.results
+        .filter((r) => r.status !== 'PASS' && r.ruleType !== 'dependency_presence')
+        .sort((a, b) => rank[a.status] - rank[b.status] || Number(b.ruleType === 'required_power_rail') - Number(a.ruleType === 'required_power_rail'))
+        .slice(0, 4);
+      const power = payload.nets.filter((n) => n.class === 'power').map((n) => `- ${n.name}: ${n.members.map((m) => `${m.instanceId}.${m.pinName}`).join(' ↔ ')}`);
       const content = [
         `**No change to the bench.** I re-ran your request against the hardware library and the wiring rules, and the result is identical to ${current?.versionTag ?? 'the current version'}, so I did not save a new version.`,
         output.understanding ? `\nWhat I understood: ${output.understanding}` : null,
+        power.length > 0 ? `\nPower wiring as it stands:\n${power.join('\n')}` : null,
         open.length > 0 ? `\nWhat still stands in the way:\n${open.map((r) => `- ${r.message}`).join('\n')}` : null,
         '\nTell me the specific change, e.g. which module to add or swap, or which board should power which.',
       ]
