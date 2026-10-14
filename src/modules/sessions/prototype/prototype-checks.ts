@@ -140,7 +140,8 @@ export function evaluateCompatibility(controller: AllocInstance, peripherals: Al
   for (const p of peripherals) {
     const board = boards.get(p.instanceId)!;
     const links = allocation.linked.get(p.instanceId) ?? new Set();
-    if (board.record.interfaces.host_requirement === 'host_required' && links.size === 0) {
+    if (board.record.interfaces.host_requirement !== 'host_required') continue;
+    if (links.size === 0) {
       const required = board.record.interfaces.required_host_interfaces;
       out.push(
         make(
@@ -150,10 +151,14 @@ export function evaluateCompatibility(controller: AllocInstance, peripherals: Al
           [p.instanceId, mcu.instanceId]
         )
       );
+    } else {
+      // The check ran and passed: record it, so the summary counts what was actually checked.
+      out.push(make('required_host_interface', 'PASS', `${board.label} is linked to ${mcu.label} over ${[...links].join(', ')}.`, [p.instanceId, mcu.instanceId]));
     }
   }
 
   // signal_direction_conflict — two supplies, or two drivers, on one net.
+  let conflicts = 0;
   for (const net of allocation.nets) {
     if (net.class === 'ground') continue;
     const directions = net.members.map((m) => ({ m, dir: pinOf(m.instanceId, m.pinId)?.direction }));
@@ -168,6 +173,43 @@ export function evaluateCompatibility(controller: AllocInstance, peripherals: Al
           `${net.name} has ${offenders.length} ${supplies.length > 1 ? 'power outputs' : 'outputs'} driving it.`,
           [...new Set(offenders.map((d) => d.m.instanceId))],
           offenders.map((d) => d.m.pinId)
+        )
+      );
+      conflicts += 1;
+    }
+  }
+  const drivenNets = allocation.nets.filter((n) => n.class !== 'ground');
+  if (conflicts === 0 && drivenNets.length > 0) {
+    out.push(
+      make(
+        'signal_direction_conflict',
+        'PASS',
+        `No net has two outputs or two supplies driving it (${drivenNets.length} net${drivenNets.length === 1 ? '' : 's'} checked).`,
+        [...new Set(drivenNets.flatMap((n) => n.members.map((m) => m.instanceId)))]
+      )
+    );
+  }
+
+  // record_evidence — where each board's pinout and ratings come from. Every other check is only as
+  // good as these facts: a pinout from AI product knowledge is Unverified until checked against
+  // the board's documentation. (This is about evidence, not about library review status.)
+  for (const instance of [controller, ...peripherals]) {
+    const label = instance.entity.record.identity.product_name;
+    const method = instance.entity.verificationMethod;
+    if (method === 'vendor_live' || method === 'manual_verified' || method === 'verified_third_party') {
+      const from = method === 'vendor_live' ? "the vendor's product page" : method === 'manual_verified' ? "the board's documentation" : 'a third-party reference';
+      out.push(make('record_evidence', 'PASS', `${label}: pinout and ratings read from ${from}.`, [instance.instanceId]));
+    } else {
+      out.push(
+        make(
+          'record_evidence',
+          'UNKNOWN',
+          method === 'generic_reference'
+            ? `${label}: pinout follows a generic reference design, not this exact board's documentation.`
+            : `${label}: pinout and ratings come from AI product knowledge, not from the board's documentation.`,
+          [instance.instanceId],
+          [],
+          "Check the pin labels and supply range against the board's datasheet before powering up."
         )
       );
     }

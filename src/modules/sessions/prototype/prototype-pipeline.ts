@@ -141,7 +141,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     let sourcing = null as SourcingResult | null;
 
     // Library gaps are filled from vendor product pages: the boards found are private to this
-    // project (drawn as unverified) and queued for admin review before anyone else can use them.
+    // project and queued for admin review (internal) before anyone else can use them.
     // Up to two rounds: the second one fills gaps the first resolve still reported.
     const MAX_SOURCING_ROUNDS = 2;
     for (let round = 1; round <= MAX_SOURCING_ROUNDS && env.PROTOTYPE_SOURCING_ENABLED; round++) {
@@ -223,7 +223,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       'Checking library coverage',
       prototypeGaps.length > 0 ? 'warning' : 'completed',
       [
-        sourcedCount > 0 ? `${sourcedCount} module(s) sourced from vendor sites (unverified, sent for review)` : null,
+        sourcedCount > 0 ? `${sourcedCount} module(s) sourced from vendor sites for this project` : null,
         prototypeGaps.length > 0 ? `${prototypeGaps.length} need(s) still not covered: ${prototypeGaps.map((g) => g.need).join('; ')}` : 'Every need is covered',
       ]
         .filter(Boolean)
@@ -235,9 +235,6 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     emitSessionEvent.stageUpdate(sessionId, { step: 4, label: 'Assigning pins and checking compatibility', progress: 70 });
     const entities = new Map(library.map((e) => [e.hardwareEntityId, e]));
     const payload = assemblePrototype(composition, entities, {
-      // Unreviewed wiring (sourced or provisional boards) is drawn dashed and labelled, never hidden:
-      // the user asked to see the bench, and the dashed style + warnings say it is not verified.
-      allowProvisional: true,
       svgBasePath: `${env.API_PREFIX}/hardware/entities`,
       projectName: session.title ?? 'Prototype',
       understanding: output.understanding,
@@ -250,7 +247,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       'assigning_pins',
       'Assigning pins',
       counts.BLOCKER + counts.UNKNOWN > 0 ? 'warning' : 'completed',
-      `${payload.nets.length} nets, ${wires} wire(s), ${cables} cable(s) · ${counts.BLOCKER} blocker(s), ${counts.WARNING} warning(s), ${counts.UNKNOWN} unknown`
+      `${payload.nets.length} nets, ${wires} wire(s), ${cables} cable(s) · ${counts.BLOCKER} failed, ${counts.UNKNOWN} unverified, ${counts.WARNING} warning(s), ${counts.PASS} passed`
     );
 
     recordStep('rendering', 'Rendering', 'running');
@@ -346,7 +343,6 @@ function summaryMessage(payload: PrototypeArchitecture, tag: string, sourcing: S
   const wires = payload.connections.length - cables;
   const { summary } = payload.pinList;
   const counts = payload.compatibility.counts;
-  const unreviewed = payload.instances.some((i) => i.reviewStatus !== 'confirmed' || i.assetReadiness !== 'wiring_ready');
   return [
     `🧩 **Prototype bench assembled (${tag})**`,
     '',
@@ -355,14 +351,13 @@ function summaryMessage(payload: PrototypeArchitecture, tag: string, sourcing: S
     `- **Modules**: ${modules.length > 0 ? modules.join(', ') : 'none'}`,
     `- **Connections**: ${wires} jumper wire(s)${cables > 0 ? `, ${cables} STEMMA QT / Qwiic cable(s)` : ''}`,
     `- **Pin list**: ${summary.rows} contacts · ${summary.assigned + summary.proposed} connected · ${summary.blocking} blocking`,
-    `- **Checks**: ${counts.PASS} pass · ${counts.WARNING} warning · ${counts.BLOCKER} blocker · ${counts.UNKNOWN} unknown`,
+    `- **Checks**: ${counts.PASS} passed · ${counts.BLOCKER} failed · ${counts.UNKNOWN} unverified · ${counts.WARNING} warning`,
     payload.gaps.length > 0 ? `- **Not in library**: ${payload.gaps.map((g) => `${g.category} — ${g.need}`).join('; ')}` : null,
     sourcing && sourcing.sourced.length > 0
-      ? `- **Sourced for this project** (not in the library yet, sent to admin review): ${sourcing.sourced
-          .map((b) => `${b.productName} (${b.factsSource === 'vendor_page' ? 'pinout read from the vendor page' : 'pinout from model knowledge, unverified'})`)
+      ? `- **Sourced for this project**: ${sourcing.sourced
+          .map((b) => `${b.productName} (${b.factsSource === 'vendor_page' ? 'pinout read from the vendor page' : 'pinout from AI product knowledge — check it against the board'})`)
           .join('; ')}`
       : null,
-    unreviewed ? '- ⚠️ Boards awaiting review are drawn with dashed wiring: check every connection against the board before powering up.' : null,
     payload.notes ? `\n${payload.notes}` : null,
   ]
     .filter((line) => line !== null)
@@ -376,7 +371,7 @@ function decisionsFor(payload: PrototypeArchitecture): string[] {
     const to = payload.instances.find((i) => i.instanceId === c.to.instanceId)?.label ?? c.to.instanceId;
     out.push(`${from} → ${to} over a STEMMA QT / Qwiic cable`);
   }
-  const blockers = payload.compatibility.counts.BLOCKER;
-  if (blockers > 0) out.push(`${blockers} blocker${blockers > 1 ? 's' : ''} to resolve — see Checks on the module diagram`);
+  const failed = payload.compatibility.counts.BLOCKER;
+  if (failed > 0) out.push(`${failed} failed check${failed > 1 ? 's' : ''} to resolve — see Checks on the module diagram`);
   return out.slice(0, 4);
 }
