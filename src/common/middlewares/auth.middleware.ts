@@ -48,6 +48,17 @@ const SUSPENSION_EXEMPT_PATHS = ['/auth/login', '/auth/register', '/auth/google'
 const isSuspensionExempt = (req: Request): boolean =>
   SUSPENSION_EXEMPT_PATHS.some((suffix) => req.path.endsWith(suffix));
 
+/**
+ * Public auth endpoints never need the Bearer token, and a stale one must not block them: the
+ * browser sends its expired access token along with POST /auth/refresh, and rejecting it here
+ * (before the refresh handler reads the cookie) made every silent refresh fail once the token
+ * lapsed. A bad token on these paths is ignored and the request continues unauthenticated.
+ */
+const STALE_TOKEN_EXEMPT_PATHS = [...SUSPENSION_EXEMPT_PATHS, '/auth/forgot-password', '/auth/reset-password', '/auth/config'];
+
+const isStaleTokenExempt = (req: Request): boolean =>
+  STALE_TOKEN_EXEMPT_PATHS.some((suffix) => req.path.endsWith(suffix));
+
 export const authenticate = async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
   const authHeader = req.headers.authorization;
   const anonHeader = req.headers['x-anon-session-token'];
@@ -65,12 +76,16 @@ export const authenticate = async (req: Request, _res: Response, next: NextFunct
   let payload: AccessTokenPayload;
   try {
     payload = jwt.verify(token, env.JWT_ACCESS_SECRET) as AccessTokenPayload;
-  } catch {
-    return next(new AppError(401, 'UNAUTHORIZED', 'Invalid or expired access token'));
+  } catch (err) {
+    if (isStaleTokenExempt(req)) return next();
+    // details.reason lets the client tell "refresh and retry" (expired) from a malformed token.
+    const reason = err instanceof jwt.TokenExpiredError ? 'token_expired' : 'token_invalid';
+    return next(new AppError(401, 'UNAUTHORIZED', 'Invalid or expired access token', { reason }));
   }
 
   if (!payload || typeof payload.userId !== 'string') {
-    return next(new AppError(401, 'UNAUTHORIZED', 'Invalid access token payload'));
+    if (isStaleTokenExempt(req)) return next();
+    return next(new AppError(401, 'UNAUTHORIZED', 'Invalid access token payload', { reason: 'token_invalid' }));
   }
 
   try {

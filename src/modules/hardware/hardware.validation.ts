@@ -64,4 +64,6 @@ export type HardwareGovernanceInput = z.infer<typeof hardwareGovernanceSchema>;
 
 export const hardwareBenchQuerySchema = z.object({
   controller: z.enum(['0', '1']).optional(),
+  /** Light-canvas palette (white soldermask); dark is the default and what exports use. */
+  theme: z.enum(['dark', 'light']).optional(),
 });

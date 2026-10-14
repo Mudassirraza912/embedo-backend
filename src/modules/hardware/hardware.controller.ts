@@ -108,7 +108,7 @@ export class HardwareController {
   getBenchSvg = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const entity = await loadVisible(req);
-      const art = renderBenchArt(entity.record, req.query['controller'] === '1');
+      const art = renderBenchArt(entity.record, req.query['controller'] === '1', req.query['theme'] === 'light' ? 'light' : 'dark');
       const etag = `"${art.hash.replace(/^sha256:/, '').slice(0, 64)}"`;
       res.setHeader('ETag', etag);
       res.setHeader('Cache-Control', entity.scope === 'private_project' ? 'private, max-age=300' : 'public, max-age=300');
