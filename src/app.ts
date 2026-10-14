@@ -6,6 +6,7 @@ import swaggerUi from 'swagger-ui-express';
 import { env } from './config/env.js';
 import { swaggerDocument } from './config/swagger.js';
 import { requestIdMiddleware } from './common/middlewares/request-id.middleware.js';
+import { buildInfo } from './config/build-info.js';
 import { errorHandlerMiddleware } from './common/middlewares/error-handler.middleware.js';
 import { authenticate, requireDashboardAccess } from './common/middlewares/auth.middleware.js';
 import { AppError } from './common/errors/AppError.js';
@@ -39,12 +40,17 @@ export const createApp = (): Express => {
       contentSecurityPolicy: env.NODE_ENV === 'production' ? undefined : false,
     })
   );
-  app.use(cors({ origin: allowedOrigins, credentials: true }));
+  app.use(cors({ origin: allowedOrigins, credentials: true, exposedHeaders: ['X-Embedo-Version', 'X-Request-Id'] }));
   app.use(cookieParser());
   app.use(`${env.API_PREFIX}/admin/components/ingest/json`, express.json({ limit: '12mb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
   app.use(requestIdMiddleware);
+  // Every response says which build answered it (support, bug reports, deploy checks).
+  app.use((_req: Request, res: Response, next: NextFunction) => {
+    res.setHeader('X-Embedo-Version', buildInfo.version);
+    next();
+  });
 
   // Deep Health Check — mounted BEFORE the rate limiter so monitoring never competes with user traffic.
   app.get(`${env.API_PREFIX}/health`, async (req: Request, res: Response) => {
@@ -71,6 +77,10 @@ export const createApp = (): Express => {
       services: { database: dbStatus, redis: redisStatus },
       timestamp: new Date().toISOString(),
       env: env.NODE_ENV,
+      version: buildInfo.version,
+      commit: buildInfo.commit,
+      builtAt: buildInfo.builtAt,
+      channel: buildInfo.channel,
       requestId: req.id,
     });
   });

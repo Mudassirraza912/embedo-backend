@@ -3,6 +3,11 @@ name: Backend CI/CD
 # main        -> production   (api.embedo.ai,     /home/etcpanel/apps/embedo-api)
 # development -> development  (dev-api.embedo.ai, /home/etcpanel/apps/embedo-api-dev)
 # Pull requests into either branch run CI only.
+#
+# Versions (scripts/ci/next-version.sh): MAJOR.MINOR.BUILD, MAJOR.MINOR from package.json, BUILD
+# counted from the production tags. Every production deploy is tagged vX.Y.Z and gets a GitHub
+# Release with generated notes; development deploys run as X.Y.Z-dev.<run>. The running version is
+# in GET /api/v1/health and the X-Embedo-Version response header.
 
 on:
   push:
@@ -82,12 +87,29 @@ jobs:
     concurrency:
       group: deploy-backend-${{ github.ref_name }}
       cancel-in-progress: false
+    permissions:
+      contents: write # tag + GitHub Release for production deploys
     env:
       ENV_NAME: ${{ github.ref_name == 'main' && 'production' || 'development' }}
       APP_DIR: ${{ github.ref_name == 'main' && '/home/etcpanel/apps/embedo-api' || '/home/etcpanel/apps/embedo-api-dev' }}
       PUBLIC_HEALTH_URL: ${{ github.ref_name == 'main' && 'https://api.embedo.ai/api/v1/health' || 'https://dev-api.embedo.ai/api/v1/health' }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # tags, to count the build number
+
+      - name: Work out the version
+        id: version
+        run: |
+          bash scripts/ci/next-version.sh "$ENV_NAME" >> "$GITHUB_OUTPUT"
+          bash scripts/ci/next-version.sh "$ENV_NAME"
+
+      - name: Write build-info.json (read by the API at startup)
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node -e 'require("fs").writeFileSync("build-info.json", JSON.stringify({ version: process.env.VERSION, commit: process.env.GITHUB_SHA, builtAt: new Date().toISOString(), channel: process.env.ENV_NAME }, null, 2))'
+          cat build-info.json
 
       - name: Configure SSH
         env:
@@ -132,6 +154,32 @@ jobs:
           done
           echo "::error::$PUBLIC_HEALTH_URL did not return 200"
           exit 1
+
+      - name: Production reports the new version
+        if: env.ENV_NAME == 'production'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          live=$(curl -fsS "$PUBLIC_HEALTH_URL" | jq -r '.version')
+          echo "live: $live, expected: $VERSION"
+          [ "$live" = "$VERSION" ]
+
+      - name: Tag and publish the GitHub release
+        if: env.ENV_NAME == 'production'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # Creates tag $TAG on this commit; notes list the changes since the previous release.
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "API $TAG" --generate-notes
+
+      - name: Summary
+        if: always()
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "### Embedo API ${VERSION:-?} → ${ENV_NAME}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit \`${GITHUB_SHA::7}\` · health: $PUBLIC_HEALTH_URL" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Clean up SSH key
         if: always()

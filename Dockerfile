@@ -41,6 +41,8 @@ COPY --chown=node:node --from=builder /app/node_modules ./node_modules
 COPY --chown=node:node --from=builder /app/dist ./dist
 # Runtime data files (datasheet manifest / mirrors) read from src/data at runtime
 COPY --chown=node:node src/data ./src/data/
+# Which build this is (version, commit, build time); CI writes it before the build, see build-info.ts.
+COPY --chown=node:node build-info.json ./
 
 USER node
 

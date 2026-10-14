@@ -1,0 +1,4 @@
+{
+  "_comment": "Placeholder for local runs. CI overwrites this file on every deploy (see scripts/ci/next-version.sh); do not edit by hand.",
+  "channel": "local"
+}
