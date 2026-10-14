@@ -9,7 +9,7 @@ import { validateAndRepairDesignGraph } from './validator.js';
 import { projectArchitecture } from './diagram-projector.js';
 import { CanonicalDesignGraph, ProjectedArchitecture, StructuredIntent, structuredIntentSchema } from './types.js';
 import { persistNewVersion } from '../version.service.js';
-import { getAppliedChangeLineage, filterAppliedSuggestions, compactGraphForRevision, describeGraphChanges } from './refinement-history.js';
+import { getAppliedChangeLineage, filterAppliedSuggestions, compactGraphForRevision, describeGraphChanges, isSameChange } from './refinement-history.js';
 import { recoverConversationContext } from './conversation-context.js';
 
 // A reworded clarification must still be about the missing field; otherwise the gate's own
@@ -417,7 +417,7 @@ export async function runGenerationPipeline(
         structuredIntent,
         grounding,
         sessionId,
-        `${revisionNotes}\n\nYOUR PREVIOUS ANSWER RETURNED THE BASELINE UNCHANGED — that is not acceptable. Make at least one real change to nodes, part numbers, power rails or connections that fulfils this request. Do not describe a change in engineeringDecisions that is not in the graph, and do not "add" something the baseline already has.`,
+        `${revisionNotes}\n\nYOUR PREVIOUS ANSWER RETURNED THE BASELINE UNCHANGED — that is not acceptable. Make at least one real change to nodes, part numbers, power rails or connections that fulfils this request. If the request is to enhance or improve an existing feature (e.g. GPS, battery, regulator, interface), upgrade the component part number(s) to higher-precision / higher-performance alternatives or add supporting circuitry. Do not describe a change in engineeringDecisions that is not in the graph, and do not "add" something the baseline already has.`,
         revision,
         previousSuggestions
       ));
@@ -494,7 +494,11 @@ export async function runGenerationPipeline(
     // to v1.0 except the caption) — the copilot asks for a concrete change instead.
     const graphChanges = revision && baselineGraph ? describeGraphChanges(baselineGraph, finalizedGraph) : [];
     if (revision && baselineGraph && graphChanges.length === 0) {
-      const examples = (baselineGraph.suggestedRefinements ?? []).slice(0, 2).map((s) => `"${s}"`).join(' or ');
+      const examples = (baselineGraph.suggestedRefinements ?? [])
+        .filter((s) => !isSameChange(s, revisionNotes ?? ''))
+        .slice(0, 2)
+        .map((s) => `"${s}"`)
+        .join(' or ');
       const reply = `I couldn't turn "${(revisionNotes ?? '').slice(0, 120)}" into a concrete hardware change, so the design is unchanged and no new version was created. Tell me specifically what to change${
         examples ? ` — for example ${examples}` : ' — e.g. a part to swap, a rail to add, or a feature to include'
       }.`;
