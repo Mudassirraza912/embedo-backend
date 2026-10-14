@@ -136,7 +136,8 @@ export class SessionsController {
         id as string,
         input,
         req.user?.id,
-        req.anonSessionToken
+        req.anonSessionToken,
+        req.ip
       );
 
       res.status(200).json({
