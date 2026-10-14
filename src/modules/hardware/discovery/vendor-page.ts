@@ -73,7 +73,14 @@ export interface VendorPage {
   status: number;
 }
 
-export async function fetchVendorPage(rawUrl: string): Promise<VendorPage> {
+export interface VendorHtml {
+  url: string;
+  html: string;
+  status: number;
+}
+
+/** Raw HTML of an allowlisted vendor page; every redirect hop is re-checked by the SSRF guard. */
+export async function fetchVendorHtml(rawUrl: string): Promise<VendorHtml> {
   const allowedHosts = vendorDomains();
   let current = (await assertSafeOutboundUrl(rawUrl, { allowedHosts })).href;
 
@@ -95,17 +102,21 @@ export async function fetchVendorPage(rawUrl: string): Promise<VendorPage> {
       const type = res.headers.get('content-type') ?? '';
       if (!/text\/html|application\/xhtml/i.test(type)) throw new Error(`not an HTML page (${type || 'no content type'})`);
       if (Number(res.headers.get('content-length') ?? 0) > MAX_BYTES) throw new Error('page too large');
-      const html = (await res.text()).slice(0, MAX_BYTES);
-      const text = htmlToText(html).slice(0, MAX_TEXT);
-      return {
-        url: current,
-        text,
-        fingerprint: `sha256:${crypto.createHash('sha256').update(text).digest('hex')}`,
-        status: res.status,
-      };
+      return { url: current, html: (await res.text()).slice(0, MAX_BYTES), status: res.status };
     } finally {
       clearTimeout(timer);
     }
   }
   throw new Error('too many redirects');
+}
+
+export async function fetchVendorPage(rawUrl: string): Promise<VendorPage> {
+  const page = await fetchVendorHtml(rawUrl);
+  const text = htmlToText(page.html).slice(0, MAX_TEXT);
+  return {
+    url: page.url,
+    text,
+    fingerprint: `sha256:${crypto.createHash('sha256').update(text).digest('hex')}`,
+    status: page.status,
+  };
 }

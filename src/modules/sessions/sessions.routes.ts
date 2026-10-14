@@ -11,6 +11,7 @@ import {
   feedbackSchema,
   outcomeSchema,
   sessionIdParamSchema,
+  sourcingQuerySchema,
   versionParamSchema,
 } from './sessions.validation.js';
 
@@ -43,6 +44,8 @@ router.post('/:id/force-generate', rateLimitDiscuss, validate({ params: sessionI
 router.post('/:id/retry', rateLimitDiscuss, validate({ params: sessionIdParamSchema }), sessionsController.retry);
 
 router.get('/:id/architecture', validate({ params: sessionIdParamSchema }), sessionsController.getArchitecture);
+
+router.get('/:id/sourcing', validate({ params: sessionIdParamSchema, query: sourcingQuerySchema }), sessionsController.getSourcing);
 
 router.get('/:id/versions', validate({ params: sessionIdParamSchema }), sessionsController.getVersions);
 router.get('/:id/versions/:version', validate({ params: versionParamSchema }), sessionsController.getVersion);

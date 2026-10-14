@@ -27,7 +27,7 @@ export const ASSET_READINESS = ['catalog_only', 'metadata_ready', 'visual_ready'
 export const SIGNAL_CLASSES = ['power', 'ground', 'data', 'control', 'debug', 'analog', 'other'] as const;
 export const DIRECTIONS = ['input', 'output', 'bidirectional', 'power_in', 'power_out', 'ground'] as const;
 export const CONNECTION_MODES = ['whole_connector', 'individual_contacts', 'both'] as const;
-export const SOURCE_TYPES = ['product_page', 'schematic', 'guide', 'datasheet', 'user_upload', 'admin_reference'] as const;
+export const SOURCE_TYPES = ['product_page', 'schematic', 'guide', 'datasheet', 'user_upload', 'admin_reference', 'retail_listing'] as const;
 export const HOST_REQUIREMENTS = ['standalone', 'host_required', 'optional_host'] as const;
 export const FUNCTIONAL_CATEGORIES = [
   'Processing',

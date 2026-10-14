@@ -3,6 +3,7 @@ import { prisma } from '../../db/prisma.js';
 import { AppError } from '../../common/errors/AppError.js';
 import { sessionsService } from '../sessions/sessions.service.js';
 import { hardwareLibraryService, LibraryEntity } from './hardware-library.service.js';
+import { renderBenchArt } from './bench-art.js';
 
 /**
  * Read access to library boards for the Prototype UI (module artwork + record summary).
@@ -98,6 +99,28 @@ export class HardwareController {
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
       res.status(200).send(entity.svg.markup);
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  /** The board as drawn on the Prototype module diagram (bench art, rendered from the record). */
+  getBenchSvg = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const entity = await loadVisible(req);
+      const art = renderBenchArt(entity.record, req.query['controller'] === '1');
+      const etag = `"${art.hash.replace(/^sha256:/, '').slice(0, 64)}"`;
+      res.setHeader('ETag', etag);
+      res.setHeader('Cache-Control', entity.scope === 'private_project' ? 'private, max-age=300' : 'public, max-age=300');
+      if (req.headers['if-none-match'] === etag) {
+        res.status(304).end();
+        return;
+      }
+      res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+      res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'");
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      res.status(200).send(art.svg);
     } catch (err) {
       next(err);
     }

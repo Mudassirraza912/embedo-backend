@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { upgradePrototypeDiagram, upgradePrototypeDiagrams } from './prototype/diagram-upgrade.js';
 import { sessionsService } from './sessions.service.js';
 import { sessionTypeOf } from './session-type.js';
 import {
@@ -48,7 +49,9 @@ export class SessionsController {
         req.anonSessionToken
       );
 
-      const data = sessions.map((s) => ({
+      // Prototype payloads saved in the old diagram format are redrawn (one library read).
+      const architectures = await upgradePrototypeDiagrams(sessions.map((s) => s.architecture));
+      const data = sessions.map((s, index) => ({
         id: s.id,
         sessionId: s.id,
         // Never derived from intentText: raw user input can contain profanity (see
@@ -58,7 +61,7 @@ export class SessionsController {
         mode: sessionTypeOf(s.applicationContext),
         type: sessionTypeOf(s.applicationContext),
         status: s.status,
-        architecture: s.architecture,
+        architecture: architectures[index],
         messages: s.chatMessages,
         createdAt: s.createdAt.getTime(),
         savedAt: s.updatedAt.getTime(),
@@ -93,7 +96,7 @@ export class SessionsController {
         applicationContext: session.applicationContext,
         type: sessionTypeOf(session.applicationContext),
         status: session.status,
-        architecture: session.architecture,
+        architecture: await upgradePrototypeDiagram(session.architecture),
         createdAt: session.createdAt,
         updatedAt: session.updatedAt,
         chatMessages: session.chatMessages,
@@ -162,6 +165,17 @@ export class SessionsController {
         success: true,
         data: result,
       });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  getSourcing = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id } = req.params;
+      const { version, refresh } = req.query as unknown as { version?: string; refresh: boolean };
+      const result = await sessionsService.getSourcing(id as string, { version, refresh }, req.user?.id, req.anonSessionToken);
+      res.status(200).json({ success: true, data: result });
     } catch (err) {
       next(err);
     }

@@ -3,6 +3,7 @@ import { LibraryEntity } from '../../hardware/hardware-library.service.js';
 import { allocatePins, AllocInstance } from './prototype-allocator.js';
 import { countResults, evaluateCompatibility } from './prototype-checks.js';
 import { layoutPrototype } from './prototype-layout.js';
+import { BenchArt, renderBenchArt } from '../../hardware/bench-art.js';
 import { buildPinList } from './prototype-pin-list.js';
 import { buildHardwareLibrary } from './prototype-library.js';
 import {
@@ -33,12 +34,22 @@ export interface AssembleOptions {
 
 const isWiringReady = (entity: LibraryEntity) => entity.reviewStatus === 'confirmed' && entity.assetReadiness === 'wiring_ready';
 
-function badgeFor(entity: LibraryEntity): string | null {
+export function badgeFor(entity: LibraryEntity): string | null {
   if (!entity.svg) return 'NO ARTWORK';
   if (entity.scope === 'private_project') return 'PRIVATE · PROVISIONAL';
   if (entity.reviewStatus !== 'confirmed') return 'PROVISIONAL';
   if (entity.assetReadiness !== 'wiring_ready') return 'AWAITING WIRING REVIEW';
   return null;
+}
+
+/** Where the frontend loads a board's bench art from (hash = cache key). */
+export function benchSvgRef(art: BenchArt, hardwareEntityId: string, isController: boolean, svgBasePath: string): PrototypeSvgRef {
+  return {
+    url: `${svgBasePath}/${encodeURIComponent(hardwareEntityId)}/bench.svg${isController ? '?controller=1' : ''}`,
+    hash: art.hash,
+    width: art.width,
+    height: art.height,
+  };
 }
 
 export function assemblePrototype(
@@ -56,6 +67,16 @@ export function assemblePrototype(
         }
       : null;
 
+  // The diagram draws every board in bench style, rendered from its record (see bench-art.ts).
+  const benchCache = new Map<string, BenchArt>();
+  const benchOf = (entity: LibraryEntity, isController: boolean): BenchArt => {
+    const key = `${entity.hardwareEntityId}|${isController}`;
+    if (!benchCache.has(key)) benchCache.set(key, renderBenchArt(entity.record, isController));
+    return benchCache.get(key)!;
+  };
+  const benchRef = (entity: LibraryEntity, isController: boolean): PrototypeSvgRef =>
+    benchSvgRef(benchOf(entity, isController), entity.hardwareEntityId, isController, options.svgBasePath);
+
   const toInstance = (instanceId: string, entity: LibraryEntity, role: string | null, isController: boolean): PrototypeInstance => ({
     instanceId,
     hardwareEntityId: entity.hardwareEntityId,
@@ -65,7 +86,7 @@ export function assemblePrototype(
     reviewStatus: entity.reviewStatus,
     assetReadiness: entity.assetReadiness,
     scope: entity.scope,
-    svg: svgRef(entity),
+    svg: benchRef(entity, isController),
   });
 
   const controllerEntity = composition.controller ? entities.get(composition.controller.hardwareEntityId) : undefined;
@@ -130,13 +151,16 @@ export function assemblePrototype(
   const moduleDiagram = layoutPrototype({
     instances: instances.map((i) => {
       const entity = entities.get(i.hardwareEntityId)!;
+      const art = benchOf(entity, i.isController);
       return {
         instanceId: i.instanceId,
         label: i.label,
         isController: i.isController,
-        width: entity.svg?.parsed.width ?? null,
-        height: entity.svg?.parsed.height ?? null,
-        anchors: entity.svg?.parsed.anchors ?? new Map(),
+        width: art.width,
+        height: art.height,
+        anchors: art.anchors,
+        inset: art.inset,
+        edges: art.edges,
         badge: badgeFor(entity),
       };
     }),
@@ -144,6 +168,7 @@ export function assemblePrototype(
     connections,
     gaps,
     drawProposed: options.allowProvisional,
+    projectName: options.projectName,
   });
 
   const pinList = buildPinList({ instances, entities, nets, connections, results, requiredPins });
