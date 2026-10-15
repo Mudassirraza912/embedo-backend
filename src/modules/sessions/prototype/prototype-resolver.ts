@@ -40,17 +40,26 @@ Return ONLY this JSON object:
   "suggestedRefinements": ["Add a microSD data logger", "..."]
 }`;
 
+/**
+ * Prose fields are trimmed to fit, never a reason to reject a selection: a long note or gap
+ * suggestion made a revision fail twice on dev (2026-10-15, "notes: at most 600", then
+ * "gaps.0.suggestion: at most 200"). Ids, the controller and the module list stay strict.
+ */
+const clip = (max: number) => z.preprocess((v) => (typeof v === 'string' ? v.trim().slice(0, max) : v), z.string().max(max));
+const optionalClip = (max: number) => z.preprocess((v) => (typeof v === 'string' ? v.trim().slice(0, max) : v), z.string().max(max).nullable().optional());
+const capped = <T extends z.ZodTypeAny>(item: T, max: number) => z.preprocess((v) => (Array.isArray(v) ? v.slice(0, max) : v), z.array(item).max(max));
+
 const linkSchema = z.object({
   interface: z.enum(LINK_INTERFACES),
   pinName: z.string().max(40).nullable().optional(),
-  purpose: z.string().max(200).nullable().optional(),
+  purpose: optionalClip(200),
 });
 
 export const resolverOutputSchema = z.object({
-  understanding: z.string().max(600).default(''),
+  understanding: clip(600).default(''),
   isPrototypeRequest: z.boolean().default(true),
   controller: z
-    .object({ hardwareEntityId: z.string().min(1).max(64), role: z.string().max(200).nullable().optional() })
+    .object({ hardwareEntityId: z.string().min(1).max(64), role: optionalClip(200) })
     .nullable()
     .default(null),
   modules: z
@@ -58,19 +67,16 @@ export const resolverOutputSchema = z.object({
       z.object({
         instanceId: z.string().regex(/^[a-z][a-z0-9_]{0,23}$/, 'instanceId must be lowercase letters/digits, e.g. "bme1"'),
         hardwareEntityId: z.string().min(1).max(64),
-        role: z.string().max(200).default(''),
+        role: clip(200).default(''),
         links: z.array(linkSchema).max(8).default([]),
       })
     )
     .max(16)
     .default([]),
-  gaps: z
-    .array(z.object({ category: z.string().max(40).default('Interface'), need: z.string().max(200), suggestion: z.string().max(200).default('') }))
-    .max(10)
-    .default([]),
-  notes: z.string().max(600).default(''),
+  gaps: capped(z.object({ category: clip(40).default('Interface'), need: clip(200), suggestion: clip(200).default('') }), 10).default([]),
+  notes: clip(600).default(''),
   /** Quick-refinement chips: short next steps for this bench, shown under the version card. */
-  suggestedRefinements: z.array(z.string().max(60)).max(6).default([]),
+  suggestedRefinements: capped(clip(60), 6).default([]),
 });
 
 export type ResolverOutput = z.infer<typeof resolverOutputSchema>;
