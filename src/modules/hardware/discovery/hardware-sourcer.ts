@@ -290,6 +290,10 @@ const inferHostRequirement = (f: SourcedFacts): 'standalone' | 'host_required' |
 };
 
 /** Cross-checks the model output against itself before anything is built. */
+/** Whether extracted facts name any SPI pin (by silkscreen name or listed function). */
+export const hasSpiPins = (f: SourcedFacts): boolean =>
+  f.pins.some((p) => /^(SCK|SCLK|MOSI|MISO|MO|MI|COPI|CIPO)$/i.test(p.name) || p.functions.some((fn) => /SPI|SCK|MOSI|MISO/i.test(fn)));
+
 export function checkFacts(f: SourcedFacts): string[] {
   const problems: string[] = [];
   const names = new Set<string>();
@@ -494,6 +498,16 @@ async function extractFacts(sessionId: string, product: z.infer<typeof productSc
       await aiRouterService.markSchemaResult(result.aiCallId, false, verdict.problems.join('; '));
       throw new Error(`could not extract a consistent pinout (${verdict.problems.slice(0, 3).join('; ')})`);
     }
+  }
+  // Controllers almost always break out SPI; a pinout without SCK/MOSI/MISO is usually an omission
+  // (seen on prod: a Feather nRF52840 record with no SPI pins, so no SPI module could be wired).
+  // Ask once more; keep the first answer if the second is not better.
+  if (verdict.facts.is_controller && !hasSpiPins(verdict.facts)) {
+    const retry = await run(
+      'Your previous answer listed no SPI pins (SCK, MOSI/COPI, MISO/CIPO). If this board breaks out SPI on its headers, include those pins with their silkscreen names and an SPI interface entry. If it truly has none, return the same answer. Return ONLY the JSON object.'
+    );
+    const second = evaluate(retry.content);
+    if (second.facts && hasSpiPins(second.facts)) verdict = second;
   }
   // "vendor_page" is only honest when a page was actually read.
   return page ? verdict.facts : { ...verdict.facts, facts_source: 'model_knowledge' };

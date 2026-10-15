@@ -198,7 +198,10 @@ export function buildPinList(input: PinListInput): PinList {
     rows.push(...pending.map((p) => p.row));
   }
 
-  const summary = { rows: rows.length, assigned: 0, proposed: 0, blocking: 0, conflict: 0, warning: 0, unknown: 0, optional: 0 };
-  for (const row of rows) summary[row.status] += 1;
-  return { summary, rows };
+  const counts = { rows: rows.length, assigned: 0, proposed: 0, blocking: 0, conflict: 0, warning: 0, unknown: 0, optional: 0 };
+  for (const row of rows) counts[row.status] += 1;
+  // "Every required connection is assigned" must not be said of a bench with a board wired to nothing.
+  const wired = new Set(rows.filter((r) => r.netId).map((r) => r.instanceId));
+  const unwiredModules = input.instances.filter((i) => !i.isController && !wired.has(i.instanceId)).map((i) => ({ instanceId: i.instanceId, label: i.label }));
+  return { summary: { ...counts, unwiredModules }, rows };
 }
