@@ -248,12 +248,12 @@ describe('prototype power chain (bench supplies wired from their records)', () =
       );
       for (const m of net.members) expect(wired.has(`${m.instanceId}|${m.anchorId}`)).toBe(true);
     }
-    // The diagram has one track per net, and every member pad is tapped onto it.
+    // The diagram has a track per net (one per band when it wraps), and every member pad is tapped onto one.
     const buses = payload.moduleDiagram.buses ?? [];
     for (const net of payload.nets) {
-      const bus = buses.find((x) => x.netId === net.netId);
-      expect(bus).toBeDefined();
-      for (const m of net.members) expect(bus!.taps.some((t) => t.instanceId === m.instanceId && t.anchorId === m.anchorId)).toBe(true);
+      const taps = buses.filter((x) => x.netId === net.netId).flatMap((x) => x.taps);
+      expect(taps.length).toBeGreaterThan(0);
+      for (const m of net.members) expect(taps.some((t) => t.instanceId === m.instanceId && t.anchorId === m.anchorId)).toBe(true);
     }
   });
 

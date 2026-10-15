@@ -39,7 +39,7 @@ describe('old-format prototype diagrams are redrawn when served', () => {
   it('redraws the diagram with bench art and keeps everything else as saved', () => {
     expect(boardsToUpgrade(legacy)).toEqual(['HW-FX01', 'HW-FX03', 'HW-FX04']);
     const up = upgradeWithEntities(legacy, entities);
-    expect(up.moduleDiagram.layoutVersion).toBe(2);
+    expect(up.moduleDiagram.layoutVersion).toBe(3);
     expect(up.moduleDiagram.buses!.length).toBeGreaterThan(0);
     expect(up.moduleDiagram.labels).toEqual([]);
     expect(up.instances.every((i) => i.svg!.url.includes('/bench.svg'))).toBe(true);
@@ -55,6 +55,12 @@ describe('old-format prototype diagrams are redrawn when served', () => {
     expect(upgradeWithEntities(architect, entities)).toBe(architect);
     expect(upgradeWithEntities(null, entities)).toBeNull();
     expect(boardsToUpgrade(current)).toEqual([]);
+  });
+
+  it('redraws a single-backbone (v2) payload with the current layout', () => {
+    const v2 = { ...current, moduleDiagram: { ...current.moduleDiagram, layoutVersion: 2, width: 9999 } };
+    expect(boardsToUpgrade(v2)).toEqual(['HW-FX01', 'HW-FX03', 'HW-FX04']);
+    expect(upgradeWithEntities(v2, entities).moduleDiagram).toEqual(current.moduleDiagram);
   });
 
   it('exports an old payload in the new style only', () => {

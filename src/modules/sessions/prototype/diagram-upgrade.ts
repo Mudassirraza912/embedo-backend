@@ -2,21 +2,24 @@ import { env } from '../../../config/env.js';
 import { renderBenchArt } from '../../hardware/bench-art.js';
 import { hardwareLibraryService, LibraryEntity } from '../../hardware/hardware-library.service.js';
 import { benchSvgRef } from './prototype-assembler.js';
-import { layoutPrototype } from './prototype-layout.js';
+import { LAYOUT_VERSION, layoutPrototype } from './prototype-layout.js';
 import { isPrototypeArchitecture, PrototypeArchitecture } from './prototype.types.js';
 
 /**
  * Prototype payloads are normalised when served (nothing is written back to the database):
  *
- * - Saved before the bus-backbone layout (moduleDiagram without `buses`): redrawn, so the old lane
- *   drawing and the old board artwork never render again. Only the drawing changes.
+ * - Saved with an older layout (no `buses`, or `layoutVersion` below the current one): redrawn, so
+ *   the old lane drawing, old board artwork and over-wide single backbones never render again.
+ *   Only the drawing changes.
  * - Saved before 2026-10-14: library review status was shown to users (PROVISIONAL badges, wiring
  *   "proposed, awaiting review" drawn dashed). Review status is internal, so it is scrubbed: a
  *   connection is drawn unless a check blocks it, and no review badge or note remains.
  */
 
 const needsUpgrade = (value: unknown): value is PrototypeArchitecture =>
-  isPrototypeArchitecture(value) && Boolean(value.moduleDiagram) && !Array.isArray(value.moduleDiagram.buses);
+  isPrototypeArchitecture(value) &&
+  Boolean(value.moduleDiagram) &&
+  (!Array.isArray(value.moduleDiagram.buses) || (value.moduleDiagram.layoutVersion ?? 0) < LAYOUT_VERSION);
 
 /** Redraws one payload with the current layout + bench art. Returns other values unchanged. */
 export function upgradeWithEntities<T>(value: T, entities: Map<string, LibraryEntity>): T {

@@ -145,8 +145,10 @@ export interface DiagramBus {
 }
 
 export interface ModuleDiagram {
-  /** Absent on v1 payloads (lane layout, vertical labels); 2 = bus backbone. */
+  /** Absent on v1 payloads (lane layout, vertical labels); 2 = bus backbone; 3 = backbone that wraps into stacked bands. */
   layoutVersion?: number;
+  /** Layout v3: number of stacked bands. A net spanning bands has one track per band, same name and colour. */
+  bands?: number;
   width: number;
   height: number;
   modules: DiagramModule[];
