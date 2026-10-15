@@ -12,7 +12,7 @@ import { SOURCING_TASK_CASE, sourceHardware, SourcingResult } from '../../hardwa
 import { assemblePrototype } from './prototype-assembler.js';
 import { filterAppliedSuggestions, getAppliedChangeLineage } from '../pipeline/refinement-history.js';
 import { isPrototypeArchitecture, isPrototypeComposition, PrototypeArchitecture, PrototypeComposition } from './prototype.types.js';
-import { describeBench, diffBenches } from './prototype-diff.js';
+import { benchDiffView, describeBench, diffBenches } from './prototype-diff.js';
 
 /**
  * Prototype pipeline (plan D5), run by the ai-pipeline worker for sessions of type "prototype".
@@ -332,7 +332,14 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
         proposalCard: {
           content: proposalCardText(baseVersionTag, changesApplied, ['', checks]),
           metadata: { sessionType: 'prototype', executionSteps },
-          pendingChange: { changes: changesApplied, changeSummary, checks: counts, modules: payload.instances.length },
+          pendingChange: {
+            changes: changesApplied,
+            changeSummary,
+            checks: counts,
+            checksBefore: current.compatibility.counts,
+            modules: payload.instances.length,
+            diff: benchDiffView(current, payload),
+          },
         },
       });
       log.info({ baseVersionTag }, 'Prototype revision saved as a proposal awaiting approval');

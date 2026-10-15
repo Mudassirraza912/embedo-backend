@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from '@jest/globals';
+import { LAYOUT_VERSION } from '../../src/modules/sessions/prototype/prototype-layout.js';
 import { assemblePrototype } from '../../src/modules/sessions/prototype/prototype-assembler.js';
 import { PrototypeArchitecture } from '../../src/modules/sessions/prototype/prototype.types.js';
 import { LibraryEntity } from '../../src/modules/hardware/hardware-library.service.js';
@@ -29,7 +30,7 @@ describe('prototype layout bands', () => {
 
   it('keeps a small bench on one backbone', () => {
     const d = build(2).moduleDiagram;
-    expect(d.layoutVersion).toBe(3);
+    expect(d.layoutVersion).toBe(LAYOUT_VERSION);
     expect(d.bands).toBe(1);
   });
 
@@ -64,6 +65,27 @@ describe('prototype layout bands', () => {
     expect(new Set(d.buses!.map((b) => b.busId)).size).toBe(d.buses!.length);
     const labels = d.legendCard!.rows.map((r) => r.label);
     expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it('joins a net across bands with a riser, so lower bands visibly connect to the controller', () => {
+    const d = build(12).moduleDiagram;
+    const byNet = new Map<string, NonNullable<typeof d.buses>>();
+    for (const b of d.buses!) if (b.netId) byNet.set(b.netId, [...(byNet.get(b.netId) ?? []), b]);
+    const spanning = [...byNet.values()].filter((list) => list.length > 1);
+    expect(spanning.length).toBeGreaterThan(0);
+    for (const list of spanning) {
+      const sorted = [...list].sort((a, b) => a.y - b.y);
+      for (let k = 1; k < sorted.length; k++) {
+        const riser = sorted[k]!.taps.find((t) => t.instanceId === '');
+        expect(riser).toBeDefined();
+        // From the band above down to this band's track, at one x, starting where that track runs.
+        expect(riser!.points[0]![1]).toBe(sorted[k - 1]!.y);
+        expect(riser!.points.at(-1)![1]).toBe(sorted[k]!.y);
+        expect(riser!.points[0]![0]).toBe(riser!.points.at(-1)![0]);
+        expect(sorted[k - 1]!.x1).toBeLessThanOrEqual(riser!.x);
+        expect(riser!.pad).toBe(false);
+      }
+    }
   });
 
   it('draws every connection of the bench', () => {

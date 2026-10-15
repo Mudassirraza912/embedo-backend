@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from '@jest/globals';
+import { LAYOUT_VERSION } from '../../src/modules/sessions/prototype/prototype-layout.js';
 import { assemblePrototype, AssembleOptions } from '../../src/modules/sessions/prototype/prototype-assembler.js';
 import { renderPrototypeSvg } from '../../src/modules/sessions/prototype/prototype-svg-exporter.js';
 import { PrototypeComposition } from '../../src/modules/sessions/prototype/prototype.types.js';
@@ -93,7 +94,7 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
   it('lays nets out as labelled backbone tracks that every board taps', () => {
     const p = assemblePrototype(composition, entities, options);
     const d = p.moduleDiagram;
-    expect(d.layoutVersion).toBe(3);
+    expect(d.layoutVersion).toBe(LAYOUT_VERSION);
     const wiredNets = new Set(p.connections.filter((c) => c.kind === 'wire').flatMap((c) => c.netIds));
     expect(new Set(d.buses!.map((b) => b.netId))).toEqual(wiredNets);
     // Power first, then ground; one distinct y per track.
