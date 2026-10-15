@@ -184,6 +184,8 @@ interface LaneRequest {
 
 /** Clear space between one band's lowest escape and the next band's highest. */
 const BAND_GAP = 72;
+/** Space between the track labels and the first riser, and after the last riser. */
+const RISER_MARGIN = 14;
 /** A bench narrower than this stays on one backbone. */
 const SINGLE_BAND_MAX_WIDTH = 1800;
 /** Wider benches wrap into the band count whose width:height is closest to this (landscape canvas). */
@@ -379,6 +381,13 @@ function layoutBands(input: LayoutInput, bandCount: number): ModuleDiagram {
     addEndpoint({ instanceId: c.to.instanceId, anchorId: c.to.anchorId, trackId: to });
   }
 
+  // Nets with pads in more than one band get a riser: a vertical line in a channel left of the
+  // boards that joins the net's track in every band, so a lower band visibly connects up to the
+  // controller instead of relying on matching names.
+  const spanning = orderedTracks
+    .map((t) => t.id)
+    .filter((baseId) => new Set([...bandTracks.values()].filter((t) => t.baseId === baseId).map((t) => t.band)).size > 1);
+
   // --- rows: boards whose pins face up hang under their band's tracks, everything else sits on them -
   const rk = (band: number, row: Row) => `${band}|${row}`;
   const rowOf = new Map<string, Row>();
@@ -478,7 +487,9 @@ function layoutBands(input: LayoutInput, bandCount: number): ModuleDiagram {
 
   // --- horizontal placement --------------------------------------------------------------------------
   const pillW = Math.max(0, ...orderedTracks.map((t) => t.label.length * PILL.charW + 2 * PILL.padX));
-  const trackStart = PAD + pillW;
+  const trackHead = PAD + pillW;
+  const riserX = new Map(spanning.map((baseId, k) => [baseId, trackHead + RISER_MARGIN + k * LANE_PITCH]));
+  const trackStart = trackHead + (spanning.length > 0 ? 2 * RISER_MARGIN + (spanning.length - 1) * LANE_PITCH : 0);
   const boxes = new Map<string, Box>(); // content boxes
   const laneX = new Map<string, number>(); // `${key}|${gap}|${portion}|${trackId}` -> x
   const gapWidth = (g: { L: string[]; R: string[] }, edgeGap: boolean) => {
@@ -604,7 +615,8 @@ function layoutBands(input: LayoutInput, bandCount: number): ModuleDiagram {
       busTaps.set(trackId, taps);
     }
     // Across bands the wire follows its track to the start of each band (the tracks share a name).
-    const bridge: Point[] = ends.from === ends.to ? [] : [[trackStart, a[a.length - 1]![1]], [trackStart, b[b.length - 1]![1]]];
+    const rx = riserX.get(bandTracks.get(ends.from)!.baseId) ?? trackStart;
+    const bridge: Point[] = ends.from === ends.to ? [] : [[rx, a[a.length - 1]![1]], [rx, b[b.length - 1]![1]]];
     wires.push({
       connectionId: c.id,
       kind: c.kind,
@@ -618,10 +630,33 @@ function layoutBands(input: LayoutInput, bandCount: number): ModuleDiagram {
       busId: ends.from,
     });
   }
+  // Riser segments: one per pair of neighbouring band tracks of a spanning net, drawn as a tap on
+  // the lower track that starts on the upper one (no pad; a junction dot at each end).
+  for (const baseId of spanning) {
+    const x = riserX.get(baseId)!;
+    const own = [...bandTracks.values()].filter((t) => t.baseId === baseId && (busTaps.get(t.id) ?? []).length > 0).sort((p, q) => p.y - q.y);
+    for (let k = 1; k < own.length; k++) {
+      const upper = own[k - 1]!;
+      const lower = own[k]!;
+      const taps = busTaps.get(lower.id)!;
+      taps.push({
+        x,
+        instanceId: '',
+        anchorId: `riser:${upper.id}`,
+        points: [
+          [r1(x), r1(upper.y)],
+          [r1(x), r1(lower.y)],
+        ],
+        dashed: upper.allDashed && lower.allDashed,
+        ...(upper.allBlocked && lower.allBlocked ? { blocked: true } : {}),
+        pad: false,
+      });
+    }
+  }
   const tapsPerBase = new Map<string, number>();
   for (const [id, taps] of busTaps) {
     const baseId = bandTracks.get(id)!.baseId;
-    tapsPerBase.set(baseId, (tapsPerBase.get(baseId) ?? 0) + taps.length);
+    tapsPerBase.set(baseId, (tapsPerBase.get(baseId) ?? 0) + taps.filter((t) => t.instanceId !== "").length);
   }
   const baseOfBus = new Map<string, string>();
   const buses: DiagramBus[] = [...bandTracks.values()]
@@ -638,7 +673,7 @@ function layoutBands(input: LayoutInput, bandCount: number): ModuleDiagram {
         label: t.label,
         color: t.color,
         y: r1(t.y),
-        x1: r1(trackStart),
+        x1: r1(trackHead),
         x2: r1(Math.max(...taps.map((p) => p.x))),
         labelX: PAD,
         labelWidth: r1(pillW),

@@ -9,7 +9,7 @@ import { AppError } from '../../src/common/errors/AppError.js';
 import { aiRouterService } from '../../src/modules/ai/ai-router.service.js';
 import { routeMessage } from '../../src/modules/sessions/conversation-router.service.js';
 import { LibraryEntity } from '../../src/modules/hardware/hardware-library.service.js';
-import { describeBench, diffBenches } from '../../src/modules/sessions/prototype/prototype-diff.js';
+import { benchDiffView, describeBench, diffBenches } from '../../src/modules/sessions/prototype/prototype-diff.js';
 import { stripPowerLinks, ResolverOutput } from '../../src/modules/sessions/prototype/prototype-resolver.js';
 import { renderBenchArt } from '../../src/modules/hardware/bench-art.js';
 import { crossingsOf } from '../../src/modules/sessions/prototype/prototype-svg-exporter.js';
@@ -181,6 +181,19 @@ describe('bench description and diff', () => {
 
   it('an identical bench is no change, whatever the request said', () => {
     expect(diffBenches(before, before)).toEqual({ lines: [], changed: false });
+  });
+
+  it('shows a rewired net as its old line then its new one (approval diff view)', () => {
+    const view = benchDiffView(before, after);
+    const wiring = view.find((sec) => sec.title === 'Wiring')!.lines;
+    const i = wiring.findIndex((l) => l.op === '+' && l.text.startsWith('3V3:'));
+    expect(i).toBeGreaterThan(0);
+    expect(wiring[i - 1]!.op).toBe('-');
+    expect(wiring[i - 1]!.text).toContain('mcu.3V');
+    expect(wiring[i]!.text).toContain('regulator1.VOUT');
+    // The diff view and the text summary come from the same comparison.
+    expect(wiring.filter((l) => l.op === '+').length).toBe(diffBenches(before, after).lines.filter((l) => /^(Rewired|Connected)/.test(l)).length);
+    expect(benchDiffView(before, before)).toEqual([]);
   });
 });
 
