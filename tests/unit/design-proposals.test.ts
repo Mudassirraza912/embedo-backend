@@ -51,6 +51,9 @@ describe('design proposals (manual apply mode)', () => {
   it('accepts applyMode on the chat endpoint, and only auto or manual', () => {
     expect(discussSchema.parse({ messages: [{ role: 'user', content: 'add a GPS' }], applyMode: 'manual' }).applyMode).toBe('manual');
     expect(discussSchema.safeParse({ messages: [{ role: 'user', content: 'add a GPS' }], applyMode: 'sometimes' }).success).toBe(false);
+    // Long specs (a 20-module bill, ~2400 characters) are accepted up to 6000 characters.
+    expect(discussSchema.safeParse({ messages: [{ role: 'user', content: 'x'.repeat(2400) }] }).success).toBe(true);
+    expect(discussSchema.safeParse({ messages: [{ role: 'user', content: 'x'.repeat(6001) }] }).success).toBe(false);
   });
 
   it('proposes without touching the design: proposal row + "Proposed change" card', async () => {

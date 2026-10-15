@@ -4,7 +4,7 @@ import { aiRouterService } from '../../src/modules/ai/ai-router.service.js';
 import { prepareBundle } from '../../src/modules/hardware/hardware-admin.service.js';
 import { hardwareLibraryService } from '../../src/modules/hardware/hardware-library.service.js';
 import { hardwareProposalService } from '../../src/modules/hardware/hardware-proposal.service.js';
-import { checkFacts, factsSchema, factsToBoard, normaliseFacts, pageMatchesProduct, sourceHardware, SourcedFacts } from '../../src/modules/hardware/discovery/hardware-sourcer.js';
+import { addressesFromPage, checkFacts, factsSchema, factsToBoard, normaliseFacts, pageMatchesProduct, sourceHardware, SourcedFacts } from '../../src/modules/hardware/discovery/hardware-sourcer.js';
 import { buildRecord, buildSvg } from '../../src/modules/hardware/discovery/record-builder.js';
 import { htmlToText, isAllowedVendorUrl } from '../../src/modules/hardware/discovery/vendor-page.js';
 import { allocatePins } from '../../src/modules/sessions/prototype/prototype-allocator.js';
@@ -219,6 +219,30 @@ describe('hardware sourcing (vendor pages → private board + review queue)', ()
     expect(qt.connectors[0]!.kind).toBe('header');
     // Facts nested one level down ({"board": {...}}) are unwrapped instead of read as nothing.
     accept({ board: relayFacts });
+  });
+
+  it('reads I2C addresses only where the product page states them next to "address"', () => {
+    const page = 'The SHT31-D has a default I2C address of 0x44, and can be changed to 0x45 by connecting ADR to VIN. Register 0x2C starts a measurement.';
+    expect(addressesFromPage(page)).toEqual(['0x44', '0x45']);
+    expect(addressesFromPage('Write 0x2C then 0x06 to start.')).toEqual([]);
+  });
+
+  it('keeps a pin on both its STEMMA QT socket and its header (socket listed first)', () => {
+    const qtBoard = factsSchema.parse(
+      normaliseFacts({
+        ...relayFacts,
+        pins: ['GND', '3V3', 'SDA', 'SCL', 'INT'],
+        connectors: [
+          { ref: 'QT1', kind: 'stemma_qt', pins: ['GND', '3V3', 'SDA', 'SCL'] },
+          { ref: 'J1', kind: 'header', pins: ['3V3', 'GND', 'SCL', 'SDA', 'SDA', 'INT'] },
+        ],
+      })
+    );
+    expect(qtBoard.connectors.map((c) => [c.kind, c.pins])).toEqual([
+      ['stemma_qt', ['GND', '3V3', 'SDA', 'SCL']],
+      ['header', ['3V3', 'GND', 'SCL', 'SDA', 'INT']],
+    ]);
+    expect(checkFacts(qtBoard)).toEqual([]);
   });
 
   it('never repairs an electrical fact: a board with no ground pin is still rejected', () => {

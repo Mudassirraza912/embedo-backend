@@ -204,6 +204,8 @@ export interface PinListRow {
 
 export interface PinList {
   summary: {
+    /** Non-controller boards with no connected contact (on the bench, wired to nothing). Since 2026-10-15. */
+    unwiredModules?: Array<{ instanceId: string; label: string }>;
     rows: number;
     assigned: number;
     proposed: number;

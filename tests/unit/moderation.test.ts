@@ -148,3 +148,16 @@ describe('Governance & Safety Moderation Service', () => {
     expect(result.allowed).toBe(true);
   });
 });
+
+describe('tier 3 classifier output parsing', () => {
+  it('reads the JSON object even when wrapped in prose or fences', async () => {
+    const { safeJson } = await import('../../src/modules/governance/moderation.service.js');
+    expect(safeJson('```json\n{"flagged": false, "category": "none", "reason": "ok"}\n```')).toEqual({ flagged: false, category: 'none', reason: 'ok' });
+    expect(safeJson('Here is my answer: {"flagged": false, "category": "none", "reason": "Industrial sensors."} Done.')).toEqual({
+      flagged: false,
+      category: 'none',
+      reason: 'Industrial sensors.',
+    });
+    expect(safeJson('{"flagged": false, "reason": "cut off mid')).toBeUndefined();
+  });
+});

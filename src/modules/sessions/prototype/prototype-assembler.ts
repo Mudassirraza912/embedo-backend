@@ -105,6 +105,23 @@ export function assemblePrototype(
     const peripherals: AllocInstance[] = modules.map((m) => ({ instanceId: m.instanceId, entity: entities.get(m.hardwareEntityId)!, links: m.links }));
     const allocation = allocatePins(controller, peripherals);
     results = [...allocation.results, ...evaluateCompatibility(controller, peripherals, allocation)];
+    // A board on the bench with nothing wired to it (no power, ground or signal) is reported, unless
+    // a failed or unverified controller-link check already names it.
+    const onNets = new Set(allocation.nets.flatMap((n) => n.members.map((m) => m.instanceId)));
+    for (const m of modules) {
+      if (onNets.has(m.instanceId)) continue;
+      const covered = results.some((r) => r.ruleType === 'required_host_interface' && r.status !== 'PASS' && r.status !== 'WARNING' && r.instanceIds.includes(m.instanceId));
+      if (covered) continue;
+      const label = instances.find((i) => i.instanceId === m.instanceId)?.label ?? m.instanceId;
+      results.push({
+        ruleType: 'required_host_interface',
+        status: 'WARNING',
+        message: `${label} is on the bench but nothing is wired to it (no power, ground or signal).`,
+        suggestedFix: 'Remove it if the controller already does its job, or say how it should connect.',
+        instanceIds: [m.instanceId],
+        pinIds: [],
+      });
+    }
     nets = allocation.nets;
     requiredPins = allocation.requiredPins;
 

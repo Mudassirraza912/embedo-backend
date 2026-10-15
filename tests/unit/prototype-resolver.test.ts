@@ -81,6 +81,11 @@ describe('prototype resolver contract', () => {
     expect(validateResolverOutput(out, byId)).toEqual([]);
   });
 
+  it('keeps every gap of a large brief (two were dropped at a cap of 10)', () => {
+    const gaps = Array.from({ length: 12 }, (_, i) => ({ category: 'Sensing', need: `module ${i + 9}`, suggestion: '' }));
+    expect(resolverOutputSchema.parse({ ...valid, gaps }).gaps).toHaveLength(12);
+  });
+
   it('accepts a valid selection', () => {
     expect(validateResolverOutput(resolverOutputSchema.parse(valid), byId)).toEqual([]);
   });

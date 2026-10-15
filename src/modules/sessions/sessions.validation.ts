@@ -2,6 +2,12 @@ import { z } from 'zod';
 import { SESSION_TYPES } from './session-type.js';
 import { APPLY_MODES } from './version.service.js';
 
+/**
+ * Longest brief or chat message. Detailed specs (a 20-module bill with interfaces per module) run
+ * past 2000 characters; the home box used to cut them silently at 600.
+ */
+export const MAX_MESSAGE_CHARS = 6000;
+
 /** architect (default) | prototype. Omitted on /discuss = keep the session's own type. */
 export const sessionTypeSchema = z.enum(SESSION_TYPES);
 
@@ -20,7 +26,7 @@ export const versionParamSchema = z.object({
 });
 
 export const createSessionSchema = z.object({
-  intentText: z.string().min(3, 'Intent text must be at least 3 characters long').max(2000, 'Intent text cannot exceed 2000 characters'),
+  intentText: z.string().min(3, 'Intent text must be at least 3 characters long').max(MAX_MESSAGE_CHARS, `Intent text cannot exceed ${MAX_MESSAGE_CHARS} characters`),
   domain: z.string().max(100).optional(),
   // Matches the VARCHAR(100) column; 200 used to pass validation and then fail the insert.
   applicationContext: z.string().max(100).optional(),
@@ -29,7 +35,7 @@ export const createSessionSchema = z.object({
 
 export const discussMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
-  content: z.string().min(1, 'Message content cannot be empty').max(2000, 'Message content cannot exceed 2000 characters'),
+  content: z.string().min(1, 'Message content cannot be empty').max(MAX_MESSAGE_CHARS, `Message content cannot exceed ${MAX_MESSAGE_CHARS} characters`),
 });
 
 export const discussSchema = z.object({

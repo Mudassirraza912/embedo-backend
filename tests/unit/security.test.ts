@@ -75,8 +75,8 @@ describe('Security & Multi-Tenancy Hardening', () => {
       expect(response.body.error.code).toBe('VALIDATION_ERROR');
     });
 
-    it('should reject session creation with oversized intentText (> 2000 chars)', async () => {
-      const longIntent = 'A'.repeat(2500);
+    it('should reject session creation with oversized intentText (> 6000 chars)', async () => {
+      const longIntent = 'A'.repeat(6001);
       const response = await request(app)
         .post('/api/v1/sessions')
         .send({ intentText: longIntent });

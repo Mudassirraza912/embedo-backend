@@ -66,6 +66,12 @@ class NetBook {
     return net;
   }
 
+  /** Whether a board pin is already on any net. */
+  hasMember(instanceId: string, pinId: string): boolean {
+    for (const net of this.nets.values()) if (net.members.some((m) => m.instanceId === instanceId && m.pinId === pinId)) return true;
+    return false;
+  }
+
   list(): PrototypeNet[] {
     return [...this.nets.values()];
   }
@@ -449,8 +455,22 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       if (sck && mosi) spiBus = { name: 'SPI', sck, mosi, miso: named(['MISO', 'MI', 'CIPO']), csHint: named(['CS', 'SS']) };
     }
     if (!spiBus) {
+      // A record with no SPI pin at all says nothing about the board (AI-sourced records have
+      // dropped SCK/MOSI/MISO): that is unverified, not "no free bus".
+      const recordHasSpi = mcu.record.pins.some(
+        (pin) => hasFunction(pin, 'SPI') || /^(SCK|SCLK|MOSI|MISO|MO|MI|COPI|CIPO)$/i.test(pin.pin_name)
+      );
       results.push(
-        result('required_host_interface', 'BLOCKER', `${mcu.label} has no free SPI bus.`, [mcu.instanceId, ...spiPeripherals.map((p) => p.instanceId)], [], 'Choose a controller with a free SPI bus.')
+        recordHasSpi
+          ? result('required_host_interface', 'BLOCKER', `${mcu.label} has no free SPI bus.`, [mcu.instanceId, ...spiPeripherals.map((p) => p.instanceId)], [], 'Choose a controller with a free SPI bus.')
+          : result(
+              'required_host_interface',
+              'UNKNOWN',
+              `${mcu.label}'s record lists no SPI pins (SCK/MOSI/MISO), so ${spiPeripherals.map((p) => boards.get(p.instanceId)?.label ?? p.instanceId).join(', ')} could not be wired over SPI.`,
+              [mcu.instanceId, ...spiPeripherals.map((p) => p.instanceId)],
+              [],
+              "Check the board's pinout: the record may be incomplete. Most dev boards break out SPI."
+            )
       );
     } else {
       usedMcuSignalPins.add(spiBus.sck.pin_id);
@@ -556,6 +576,10 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       // Power and ground pins are wired by the power plan below, never to a controller signal pin:
       // a supply output on a GPIO (5 V into a 3.3 V pin) would damage the controller.
       if (isPowerPin(pPin)) continue;
+      // A pin a bus already wired (an SPI chip select the resolver also listed as GPIO) keeps that
+      // one line. Wiring it again took a second controller pin onto the same net: two outputs
+      // driving one chip select (seen on dev 2026-10-15: SD1_CS on GP17 and GP14).
+      if (nets.hasMember(p.instanceId, pPin.pin_id)) continue;
       const capable =
         link.interface === 'ANALOG'
           ? (pin: HardwarePin) => hasFunction(pin, 'ADC') || pin.signal_class === 'analog'
