@@ -16,23 +16,29 @@ const quotaKey = (ip: string) => `quota:guest:messages:${ip}`;
 export interface GuestQuotaStatus {
   used: number;
   limit: number;
+  remaining: number;
   resetAt: string | null;
+  unit: 'credits';
 }
 
 async function status(ip: string): Promise<GuestQuotaStatus> {
   const { limits } = await limitsService.forGuest();
   const [count, ttl] = await Promise.all([redis.get(quotaKey(ip)), redis.ttl(quotaKey(ip))]);
+  const used = Number(count ?? 0);
+  const limit = limits.messagesPerSession;
   return {
-    used: Number(count ?? 0),
-    limit: limits.messagesPerSession,
+    used,
+    limit,
+    remaining: Math.max(0, limit - used),
     resetAt: ttl > 0 ? new Date(Date.now() + ttl * 1000).toISOString() : null,
+    unit: 'credits',
   };
 }
 
 export const guestQuotaService = {
   status,
 
-  /** Throws GUEST_QUOTA_EXCEEDED (with the reset time) once this IP has used its allowance. */
+  /** Throws GUEST_QUOTA_EXCEEDED (with the reset time and credits details) once this IP has used its allowance. */
   async assertAvailable(ip: string | undefined): Promise<void> {
     if (!ip) return;
     let current: GuestQuotaStatus;
@@ -47,20 +53,31 @@ export const guestQuotaService = {
       throw new AppError(
         403,
         'GUEST_QUOTA_EXCEEDED',
-        `You've used all ${current.limit} free guest messages for today. Sign in (it's free) to keep going, or come back after the limit resets.`,
-        { limit: current.limit, resetAt: current.resetAt }
+        `You've used all your guest credits for today. Sign in (it's free) to keep going with your account allowance, or come back after the credits reset.`,
+        { limit: current.limit, used: current.used, remaining: 0, resetAt: current.resetAt, unit: 'credits' }
       );
     }
   },
 
-  /** Records one guest message; the first one in a window starts the 24-hour clock. */
-  async consume(ip: string | undefined): Promise<void> {
-    if (!ip) return;
+  /** Records guest operation credits; the first one in a window starts the 24-hour clock. */
+  async consume(ip: string | undefined, amount = 1): Promise<void> {
+    if (!ip || amount <= 0) return;
     try {
-      const used = await redis.incr(quotaKey(ip));
-      if (used === 1) await redis.expire(quotaKey(ip), WINDOW_SECONDS);
+      const used = amount === 1 ? await redis.incr(quotaKey(ip)) : await redis.incrby(quotaKey(ip), amount);
+      if (used === amount) await redis.expire(quotaKey(ip), WINDOW_SECONDS);
     } catch (err) {
       logger.warn({ err }, 'Guest quota could not be recorded');
+    }
+  },
+
+  /** Rolls back consumed credits if the operation failed. */
+  async rollback(ip: string | undefined, amount = 1): Promise<void> {
+    if (!ip || amount <= 0) return;
+    try {
+      const current = await redis.decrby(quotaKey(ip), amount);
+      if (current < 0) await redis.set(quotaKey(ip), 0);
+    } catch (err) {
+      logger.warn({ err }, 'Guest quota rollback failed');
     }
   },
 };

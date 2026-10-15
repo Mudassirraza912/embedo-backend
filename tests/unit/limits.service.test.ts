@@ -26,7 +26,7 @@ describe('sanitizeOverrides / applyOverrides', () => {
   it('overlays overrides on the plan base without mutating it', () => {
     const base = { ...DEFAULT_LIMITS.free };
     expect(applyOverrides(base, { messagesPerSession: 99 })).toEqual({ ...base, messagesPerSession: 99 });
-    expect(base.messagesPerSession).toBe(20);
+    expect(base.messagesPerSession).toBe(DEFAULT_LIMITS.free.messagesPerSession);
   });
 });
 

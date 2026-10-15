@@ -7,6 +7,7 @@ import { AiRouterService } from '../modules/ai/ai-router.service.js';
 import { RetryablePipelineError } from '../modules/sessions/pipeline/orchestrator.js';
 import { runSessionPipeline } from '../modules/sessions/pipeline/dispatch.js';
 import { SessionType, sessionTypeOf } from '../modules/sessions/session-type.js';
+import { guestQuotaService } from '../modules/limits/guest-quota.service.js';
 
 export const AI_PIPELINE_QUEUE_NAME = 'ai-pipeline';
 
@@ -16,6 +17,8 @@ export interface AiPipelineJobData {
   iterationNotes?: string;
   /** For logs and the queue dashboard only: the pipeline dispatches on the session's stored type. */
   type?: SessionType;
+  ipAddress?: string;
+  userId?: string;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -34,8 +37,34 @@ export const aiPipelineQueue = new Queue<AiPipelineJobData>(AI_PIPELINE_QUEUE_NA
 export const pipelineJobId = (sessionId: string, kind: 'initial' | 'iteration'): string =>
   kind === 'initial' ? `session_${sessionId}` : `session_${sessionId}_iter`;
 
-const markSessionFailed = async (sessionId: string, reason: string, retryable: boolean): Promise<void> => {
+const markSessionFailed = async (
+  sessionId: string,
+  reason: string,
+  retryable: boolean,
+  ipAddress?: string,
+  _userId?: string
+): Promise<void> => {
   try {
+    if (ipAddress) {
+      await guestQuotaService.rollback(ipAddress);
+      logger.info({ sessionId, ipAddress }, 'Guest credit rolled back after pipeline failure');
+    }
+
+    try {
+      const lastUserMessage = await prisma.chatMessage.findFirst({
+        where: { sessionId, role: 'user' },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (lastUserMessage) {
+        const meta = (lastUserMessage.metadata as Record<string, unknown> | null) ?? {};
+        await prisma.chatMessage.update({
+          where: { id: lastUserMessage.id },
+          data: { metadata: { ...meta, failure: true, refunded: true } },
+        });
+      }
+    } catch (metaErr) {
+      logger.warn({ err: metaErr, sessionId }, 'Failed to mark user message metadata as refunded');
+    }
     // A failed refinement must not take down a session that already has a working architecture:
     // the last good version is still active and valid, so keep the session DONE (FAILED used to
     // make every later chat message go unanswered). Only a session that never produced an
@@ -124,7 +153,7 @@ export const createAiPipelineWorker = () => {
 
     if (sessionId && exhausted) {
       const retryable = !(err instanceof UnrecoverableError);
-      void markSessionFailed(sessionId, err.message, retryable);
+      void markSessionFailed(sessionId, err.message, retryable, job?.data?.ipAddress, job?.data?.userId);
     }
   });
 

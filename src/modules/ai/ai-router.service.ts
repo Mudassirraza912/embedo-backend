@@ -125,27 +125,51 @@ export class AiRouterService {
         jsonMode: options.jsonMode,
       });
     } catch (err: unknown) {
-      // A failed provider call is still a call: log it so cost/error visibility survives even
-      // when generation never produces a result (previously only successful calls were logged).
-      if (options.sessionId) {
+      if (route.provider === 'openai' && env.ANTHROPIC_API_KEY && this.isQuotaOrAuthError(err)) {
+        logger.warn({ taskCase: options.taskCase, originalModel: route.model }, 'OpenAI quota exhausted, attempting Anthropic fallback');
+        const fallbackModel =
+          options.taskCase === 'A' || options.taskCase === 'D' || options.taskCase === 'R' || options.taskCase === 'X'
+            ? 'claude-sonnet-4-6'
+            : 'claude-haiku-4-5-20251001';
         try {
-          await prisma.aiCall.create({
-            data: {
-              sessionId: options.sessionId,
-              taskCase: options.taskCase,
-              modelProvider: route.provider,
-              modelName: route.model,
-              prompt: promptRecord,
-              response: '',
-              schemaPass: false,
-              errorMessage: (err instanceof Error ? err.message : String(err)).slice(0, 2000),
-            },
+          generateResult = await modelProviderService.generate('anthropic', {
+            model: fallbackModel,
+            systemPrompt: options.systemPrompt,
+            messages,
+            temperature: options.temperature ?? route.temperature,
+            maxTokens: options.maxTokens ?? route.maxTokens,
+            jsonMode: options.jsonMode,
           });
-        } catch (ledgerErr: unknown) {
-          logger.error({ err: ledgerErr, sessionId: options.sessionId, taskCase: options.taskCase }, 'Failed to record failed ai_calls ledger entry');
+          route.provider = 'anthropic';
+          route.model = fallbackModel;
+        } catch (fallbackErr) {
+          logger.error({ fallbackErr }, 'Anthropic fallback failed');
         }
       }
-      throw err;
+
+      if (!generateResult) {
+        // A failed provider call is still a call: log it so cost/error visibility survives even
+        // when generation never produces a result (previously only successful calls were logged).
+        if (options.sessionId) {
+          try {
+            await prisma.aiCall.create({
+              data: {
+                sessionId: options.sessionId,
+                taskCase: options.taskCase,
+                modelProvider: route.provider,
+                modelName: route.model,
+                prompt: promptRecord,
+                response: '',
+                schemaPass: false,
+                errorMessage: (err instanceof Error ? err.message : String(err)).slice(0, 2000),
+              },
+            });
+          } catch (ledgerErr: unknown) {
+            logger.error({ err: ledgerErr, sessionId: options.sessionId, taskCase: options.taskCase }, 'Failed to record failed ai_calls ledger entry');
+          }
+        }
+        throw err;
+      }
     }
 
     const cachedTokens = generateResult.cachedTokens ?? 0;
@@ -231,25 +255,50 @@ export class AiRouterService {
         },
       });
     } catch (err: unknown) {
-      if (options.sessionId) {
+      if (route.provider === 'openai' && env.ANTHROPIC_API_KEY && this.isQuotaOrAuthError(err)) {
+        logger.warn({ taskCase: options.taskCase, originalModel: route.model }, 'OpenAI quota exhausted in stream, attempting Anthropic fallback');
+        const fallbackModel = 'claude-haiku-4-5-20251001';
         try {
-          await prisma.aiCall.create({
-            data: {
-              sessionId: options.sessionId,
-              taskCase: options.taskCase,
-              modelProvider: route.provider,
-              modelName: route.model,
-              prompt: promptRecord,
-              response: partial,
-              schemaPass: false,
-              errorMessage: (err instanceof Error ? err.message : String(err)).slice(0, 2000),
+          generateResult = await modelProviderService.generateStream('anthropic', {
+            model: fallbackModel,
+            systemPrompt: options.systemPrompt,
+            messages,
+            temperature: options.temperature ?? route.temperature,
+            maxTokens: options.maxTokens ?? route.maxTokens,
+            jsonMode: options.jsonMode,
+            onDelta: (delta, meta) => {
+              partial += delta;
+              options.onDelta(delta, meta);
             },
           });
-        } catch (ledgerErr: unknown) {
-          logger.error({ err: ledgerErr, sessionId: options.sessionId, taskCase: options.taskCase }, 'Failed to record failed streaming ai_calls entry');
+          route.provider = 'anthropic';
+          route.model = fallbackModel;
+        } catch (fallbackErr) {
+          logger.error({ fallbackErr }, 'Anthropic stream fallback failed');
         }
       }
-      throw err;
+
+      if (!generateResult) {
+        if (options.sessionId) {
+          try {
+            await prisma.aiCall.create({
+              data: {
+                sessionId: options.sessionId,
+                taskCase: options.taskCase,
+                modelProvider: route.provider,
+                modelName: route.model,
+                prompt: promptRecord,
+                response: partial,
+                schemaPass: false,
+                errorMessage: (err instanceof Error ? err.message : String(err)).slice(0, 2000),
+              },
+            });
+          } catch (ledgerErr: unknown) {
+            logger.error({ err: ledgerErr, sessionId: options.sessionId, taskCase: options.taskCase }, 'Failed to record failed streaming ai_calls entry');
+          }
+        }
+        throw err;
+      }
     }
 
     const cachedTokens = generateResult.cachedTokens ?? 0;
@@ -344,6 +393,14 @@ export class AiRouterService {
 
   clearCache(): void {
     this.cache.clear();
+  }
+
+  private isQuotaOrAuthError(err: unknown): boolean {
+    if (err instanceof ProviderError && (err.kind === 'auth' || err.kind === 'rate_limited')) {
+      return /insufficient_quota|credit_balance_exhausted|quota|billing|exceeded your current quota/i.test(err.message);
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    return /insufficient_quota|credit_balance_exhausted|quota|billing|exceeded your current quota/i.test(msg);
   }
 
   /** Whether a provider error should be retried under Rule #8. */
