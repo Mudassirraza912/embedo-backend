@@ -97,6 +97,7 @@ model DesignSession {
   parentSession    DesignSession?    @relation("SessionIterations", fields: [parentSessionId], references: [id])
   childSessions    DesignSession[]   @relation("SessionIterations")
   versions         SessionVersion[]
+  proposals        DesignProposal[]
   chatMessages     ChatMessage[]
   aiCalls          AiCall[]
   userFeedback     UserFeedback[]
@@ -127,6 +128,34 @@ model SessionVersion {
   @@unique([sessionId, versionNumber], map: "session_versions_session_version_unique")
   @@index([sessionId], map: "session_versions_session_idx")
   @@map("session_versions")
+}
+
+/// A revision built while the user's apply mode was "manual": the full design is kept here and the
+/// chat shows a "Proposed change" card. Approving saves it as the next version (only while the
+/// design is still at baseVersionTag); any other new version makes a pending proposal outdated.
+model DesignProposal {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId      String    @map("session_id") @db.Uuid
+  /// pending | approved | rejected | outdated (design_proposals_status_check)
+  status         String    @default("pending") @db.VarChar(20)
+  /// The version this was built on; null only if the design had no tag.
+  baseVersionTag String?   @map("base_version_tag") @db.VarChar(20)
+  /// The version it became, once approved.
+  versionTag     String?   @map("version_tag") @db.VarChar(20)
+  changeSummary  String    @map("change_summary") @db.Text
+  appliedChanges String[]  @map("applied_changes")
+  designGraph    Json      @map("design_graph")
+  architecture   Json
+  /// The version card to post on approval: { content, metadata } with VERSION_TAG_PLACEHOLDER for the tag.
+  card           Json
+  messageId      String?   @map("message_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  decidedAt      DateTime? @map("decided_at") @db.Timestamp(6)
+
+  session DesignSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, status], map: "design_proposals_session_status_idx")
+  @@map("design_proposals")
 }
 
 model ChatMessage {

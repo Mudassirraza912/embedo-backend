@@ -8,7 +8,7 @@ import { buildCanonicalDesignGraph, DesignGraphSchemaError, generateFreshSuggest
 import { validateAndRepairDesignGraph } from './validator.js';
 import { projectArchitecture } from './diagram-projector.js';
 import { CanonicalDesignGraph, ProjectedArchitecture, StructuredIntent, structuredIntentSchema } from './types.js';
-import { persistNewVersion } from '../version.service.js';
+import { ApplyMode, persistNewVersion, proposalCardText, proposeVersion, versionTagOf } from '../version.service.js';
 import { getAppliedChangeLineage, filterAppliedSuggestions, compactGraphForRevision, describeGraphChanges, isSameChange } from './refinement-history.js';
 import { recoverConversationContext } from './conversation-context.js';
 
@@ -56,6 +56,8 @@ import { aiRouterService } from '../../ai/ai-router.service.js';
 export interface PipelineExecutionOptions {
   forceGenerate?: boolean;
   iterationNotes?: string;
+  /** `manual`: a revision of an existing design is saved as a proposal awaiting approval. */
+  applyMode?: ApplyMode;
 }
 
 export interface PipelineExecutionResult {
@@ -520,14 +522,7 @@ export async function runGenerationPipeline(
     // The request (not the label) is kept as lineage: Sol is told these must stay applied.
     const appliedChanges: string[] = isRevision ? [(revisionNotes ?? '').slice(0, 500)] : ['Initial architecture generated'];
 
-    const { versionTag } = await persistNewVersion({
-      sessionId,
-      designGraph: finalizedGraph,
-      architecture: projectedArchitecture,
-      changeSummary,
-      appliedChanges,
-      sessionStatus: 'DONE',
-      buildChatMessage: (tag) => ({
+    const versionCard = (tag: string) => ({
         content: `✨ **Hardware Architecture Synthesized (${tag})**\n\n- **Controller**: ${projectedArchitecture.projectMeta.controller}\n- **Tagline**: ${projectedArchitecture.projectMeta.tagline}\n- **Total BOM Components**: ${projectedArchitecture.bom.length}\n- **Diagrams Generated**: Functional Block, Power Tree, Protocol Map${
           warningCount > 0 ? `\n- **Auto-repairs applied**: ${warningCount}` : ''
         }`,
@@ -544,7 +539,41 @@ export async function runGenerationPipeline(
           validationIssues: validation.issues,
           executionSteps,
         },
-      }),
+      });
+
+    // Manual apply mode: the revision waits for the user's approval; the design is untouched.
+    if (isRevision && options.applyMode === 'manual') {
+      const baseVersionTag = versionTagOf(session.architecture);
+      const changes = graphChanges.slice(0, 6);
+      await proposeVersion({
+        sessionId,
+        designGraph: finalizedGraph,
+        architecture: projectedArchitecture,
+        changeSummary,
+        appliedChanges,
+        sessionStatus: 'DONE',
+        buildChatMessage: versionCard,
+        baseVersionTag,
+        proposalCard: {
+          content: proposalCardText(baseVersionTag, changes, [`\n${changeSummary}`]),
+          metadata: { executionSteps },
+          pendingChange: { changes, changeSummary },
+        },
+      });
+      log.info({ baseVersionTag }, 'Revision saved as a proposal awaiting approval');
+      // Same client handling as a clarification: the chat is re-read, the canvas stays as it is.
+      emitSessionEvent.clarificationNeeded(sessionId, []);
+      return { status: 'clarification_needed', questions: [] };
+    }
+
+    const { versionTag } = await persistNewVersion({
+      sessionId,
+      designGraph: finalizedGraph,
+      architecture: projectedArchitecture,
+      changeSummary,
+      appliedChanges,
+      sessionStatus: 'DONE',
+      buildChatMessage: versionCard,
     });
 
     projectedArchitecture.versionTag = versionTag;

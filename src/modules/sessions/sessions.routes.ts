@@ -13,6 +13,7 @@ import {
   sessionIdParamSchema,
   sourcingQuerySchema,
   versionParamSchema,
+  proposalParamSchema,
 } from './sessions.validation.js';
 
 const router = Router();
@@ -50,6 +51,11 @@ router.get('/:id/sourcing', validate({ params: sessionIdParamSchema, query: sour
 
 router.get('/:id/versions', validate({ params: sessionIdParamSchema }), sessionsController.getVersions);
 router.get('/:id/versions/:version', validate({ params: versionParamSchema }), sessionsController.getVersion);
+// Proposed changes (manual apply mode): preview, approve, reject.
+router.get('/:id/proposals/:proposalId', validate({ params: proposalParamSchema }), sessionsController.getProposal);
+router.post('/:id/proposals/:proposalId/approve', rateLimitDiscuss, validate({ params: proposalParamSchema }), sessionsController.approveProposal);
+router.post('/:id/proposals/:proposalId/reject', rateLimitDiscuss, validate({ params: proposalParamSchema }), sessionsController.rejectProposal);
+
 router.post(
   '/:id/versions/:version/rollback',
   rateLimitDiscuss,
