@@ -25,10 +25,15 @@ export interface ModerationActor {
   sessionId?: string;
 }
 
+// Text fields are trimmed, never a reason to fail screening: with the Anthropic fallback a long
+// "reason" ran into the token cap and every long brief got 503 "screening unavailable" (dev,
+// 2026-10-15, a 2,441-character brief).
+const clipped = (max: number, fallback: string) =>
+  z.preprocess((v) => (typeof v === 'string' ? v.slice(0, max) : v), z.string().max(max).default(fallback));
 const tier3Schema = z.object({
   flagged: z.boolean(),
-  category: z.string().max(100).default('none'),
-  reason: z.string().max(500).default(''),
+  category: clipped(100, 'none'),
+  reason: clipped(500, ''),
 });
 
 const TIER3_SYSTEM_PROMPT = `You are a strict safety classifier for an embedded-hardware design assistant.
@@ -41,7 +46,7 @@ Classify whether the user's request asks for hardware whose primary purpose is c
 
 Legitimate engineering language is NOT harmful: "kill switch", "tamper detection", "lock controller", "RFID reader", "intrusion alarm", "motor driver", "security camera", "signal generator", "RF module", "jam detection". Only flag clear, intentional misuse.
 
-Respond ONLY with JSON: {"flagged": boolean, "category": string, "reason": string}`;
+Respond ONLY with JSON: {"flagged": boolean, "category": string, "reason": string}. Keep "reason" under 25 words.`;
 
 /**
  * Three-tier governance:
@@ -85,7 +90,7 @@ export class ModerationService {
         userPrompt: text.slice(0, 6000),
         sessionId,
         temperature: 0,
-        maxTokens: 200,
+        maxTokens: 500,
         jsonMode: true,
         validateResponse: (t) => tier3Schema.safeParse(safeJson(t)).success,
       });
@@ -246,11 +251,19 @@ export class ModerationService {
   }
 }
 
-function safeJson(text: string): unknown {
+/** The classifier's JSON object, also when a model wraps it in prose. */
+export function safeJson(text: string): unknown {
   try {
     return JSON.parse(stripJsonFences(text));
   } catch {
-    return undefined;
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start < 0 || end <= start) return undefined;
+    try {
+      return JSON.parse(text.slice(start, end + 1));
+    } catch {
+      return undefined;
+    }
   }
 }
 
