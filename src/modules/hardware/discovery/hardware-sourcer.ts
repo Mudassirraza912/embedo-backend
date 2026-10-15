@@ -104,9 +104,18 @@ export function normaliseFacts(raw: unknown): unknown {
   for (const c of Array.isArray(out.connectors) ? out.connectors : []) {
     if (!c || typeof c !== 'object') continue;
     const conn = c as Record<string, unknown>;
+    // A pin may sit on several connectors (a breakout's header and its STEMMA QT socket both carry
+    // SDA/SCL/3V3/GND); duplicates are only dropped within one connector. Dropping them across
+    // connectors made header pins look socket-only, which raised the "only on its STEMMA QT
+    // socket" warning on boards that have them on the header too.
+    const inThis = new Set<string>();
     const names = (Array.isArray(conn.pins) ? conn.pins : [])
       .map(pinLabel)
-      .filter((n): n is string => Boolean(n) && seen.has(n!.toUpperCase()) && !placed.has(n!.toUpperCase()));
+      .filter((n): n is string => {
+        if (!n || !seen.has(n.toUpperCase()) || inThis.has(n.toUpperCase())) return false;
+        inThis.add(n.toUpperCase());
+        return true;
+      });
     if (names.length === 0) continue;
     names.forEach((n) => placed.add(n.toUpperCase()));
     const kind = conn.kind === 'stemma_qt' && names.length !== 4 ? 'header' : conn.kind;
@@ -290,6 +299,26 @@ const inferHostRequirement = (f: SourcedFacts): 'standalone' | 'host_required' |
 };
 
 /** Cross-checks the model output against itself before anything is built. */
+/** I2C target interfaces of a module that carry no address. */
+const i2cWithoutAddress = (f: SourcedFacts) =>
+  f.is_controller ? [] : f.interfaces.filter((i) => /I2C|STEMMA|QWIIC/i.test(i.type) && !/controller/i.test(i.role ?? '') && i.addresses.length === 0);
+
+/**
+ * 7-bit I2C addresses a product page states in words ("I2C address 0x77", "default address is
+ * 0x44, or 0x45 with ADDR high"), in page order. Only addresses next to the word "address" count,
+ * so register values and part numbers are not picked up.
+ */
+export function addressesFromPage(text: string): string[] {
+  const found: string[] = [];
+  for (const m of text.matchAll(/address(?:es)?\b[^.\n]{0,80}/gi)) {
+    for (const a of m[0].matchAll(/\b0x([0-7][0-9a-f])\b/gi)) {
+      const addr = `0x${a[1]!.toUpperCase()}`;
+      if (!found.includes(addr)) found.push(addr);
+    }
+  }
+  return found.slice(0, 8);
+}
+
 /** Whether extracted facts name any SPI pin (by silkscreen name or listed function). */
 export const hasSpiPins = (f: SourcedFacts): boolean =>
   f.pins.some((p) => /^(SCK|SCLK|MOSI|MISO|MO|MI|COPI|CIPO)$/i.test(p.name) || p.functions.some((fn) => /SPI|SCK|MOSI|MISO/i.test(fn)));
@@ -448,7 +477,7 @@ async function proposeProducts(input: SourcingInput) {
     '',
     `NEEDS:\n${needs.length > 0 ? needs.map((n) => `- ${n}`).join('\n') : '- everything the request needs (controller and modules)'}`,
     '',
-    `REQUEST:\n${input.requestText.slice(0, 3000)}`,
+    `REQUEST:\n${input.requestText.slice(0, 6000)}`,
     input.exclude && input.exclude.length > 0 ? `\nALREADY SOURCED (do not propose again): ${input.exclude.join('; ')}` : '',
   ].join('\n');
   const result = await aiRouterService.executeTask({
@@ -508,6 +537,20 @@ async function extractFacts(sessionId: string, product: z.infer<typeof productSc
     );
     const second = evaluate(retry.content);
     if (second.facts && hasSpiPins(second.facts)) verdict = second;
+  }
+  // An I2C module without an address leaves the address check unverified (prod: 42 of 51 sourced
+  // I2C modules had none). The page's own wording first, then one more question.
+  if (i2cWithoutAddress(verdict.facts).length > 0) {
+    const fromPage = page ? addressesFromPage(page.text) : [];
+    if (fromPage.length > 0) {
+      verdict = { ...verdict, facts: { ...verdict.facts, interfaces: verdict.facts.interfaces.map((i) => (i2cWithoutAddress(verdict.facts!).includes(i) ? { ...i, addresses: fromPage } : i)) } };
+    } else {
+      const retry = await run(
+        'Your previous answer gave no I2C address for this module. Give its 7-bit I2C address(es) in hex ("0x77"), default first, then any alternates selectable by a jumper or pin. Only addresses you know for this exact product; if you do not know, return the same answer. Return ONLY the JSON object.'
+      );
+      const second = evaluate(retry.content);
+      if (second.facts && i2cWithoutAddress(second.facts).length === 0) verdict = second;
+    }
   }
   // "vendor_page" is only honest when a page was actually read.
   return page ? verdict.facts : { ...verdict.facts, facts_source: 'model_knowledge' };

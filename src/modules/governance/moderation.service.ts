@@ -82,7 +82,7 @@ export class ModerationService {
       const result = await aiRouterService.executeTask({
         taskCase: 'M',
         systemPrompt: TIER3_SYSTEM_PROMPT,
-        userPrompt: text.slice(0, 4000),
+        userPrompt: text.slice(0, 6000),
         sessionId,
         temperature: 0,
         maxTokens: 200,
