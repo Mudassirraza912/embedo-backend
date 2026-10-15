@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from '@jest/globals';
+import { LAYOUT_VERSION } from '../../src/modules/sessions/prototype/prototype-layout.js';
 import { assemblePrototype } from '../../src/modules/sessions/prototype/prototype-assembler.js';
 import { PrototypeArchitecture } from '../../src/modules/sessions/prototype/prototype.types.js';
 import { LibraryEntity } from '../../src/modules/hardware/hardware-library.service.js';
@@ -29,7 +30,7 @@ describe('prototype layout bands', () => {
 
   it('keeps a small bench on one backbone', () => {
     const d = build(2).moduleDiagram;
-    expect(d.layoutVersion).toBe(3);
+    expect(d.layoutVersion).toBe(LAYOUT_VERSION);
     expect(d.bands).toBe(1);
   });
 

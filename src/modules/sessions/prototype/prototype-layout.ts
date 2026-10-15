@@ -29,7 +29,7 @@ import {
  * rows and tracks; a net with pads in several bands gets a track in each, same name and colour.
  */
 
-export const LAYOUT_VERSION = 3;
+export const LAYOUT_VERSION = 4;
 
 /** Per-class shades: tracks of one class (e.g. SDA / SCL) get neighbouring but distinct colours. */
 export const NET_SHADES: Record<NetClass | 'cable', string[]> = {
