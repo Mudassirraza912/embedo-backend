@@ -43,4 +43,16 @@ describe('guestQuotaService — per-IP guest messages across tabs (1.5.4)', () =
     jest.spyOn(redis, 'ttl').mockRejectedValue(new Error('redis down'));
     await expect(guestQuotaService.assertAvailable('203.0.113.7')).resolves.toBeUndefined();
   });
+
+  it('rolls back consumed credits and floors at zero', async () => {
+    const decrby = jest.spyOn(redis, 'decrby').mockResolvedValueOnce(2).mockResolvedValueOnce(-1);
+    const set = jest.spyOn(redis, 'set').mockResolvedValue('OK');
+    await guestQuotaService.rollback('203.0.113.7', 1);
+    expect(decrby).toHaveBeenCalledWith('quota:guest:messages:203.0.113.7', 1);
+    expect(set).not.toHaveBeenCalled();
+
+    await guestQuotaService.rollback('203.0.113.7', 5);
+    expect(decrby).toHaveBeenCalledWith('quota:guest:messages:203.0.113.7', 5);
+    expect(set).toHaveBeenCalledWith('quota:guest:messages:203.0.113.7', 0);
+  });
 });

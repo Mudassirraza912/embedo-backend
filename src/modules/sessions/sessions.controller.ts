@@ -34,6 +34,7 @@ export class SessionsController {
           applicationContext: result.session.applicationContext,
           intentText: result.session.intentText,
           createdAt: result.session.createdAt,
+          credits: result.credits,
           ...(result.issuedAnonToken ? { anonSessionToken: result.issuedAnonToken } : {}),
         },
       });
@@ -76,6 +77,18 @@ export class SessionsController {
     }
   };
 
+  getCredits = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const credits = await sessionsService.getCredits(req.user?.id, req.ip);
+      res.status(200).json({
+        success: true,
+        data: credits,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
   getSession = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { id } = req.params;
@@ -84,6 +97,8 @@ export class SessionsController {
         req.user?.id,
         req.anonSessionToken
       );
+
+      const credits = await sessionsService.getCreditsForSession(session, req.ip);
 
       // Safe response DTO stripping internal credentials
       const sanitizedSession = {
@@ -102,6 +117,7 @@ export class SessionsController {
         chatMessages: session.chatMessages,
         userFeedback: session.userFeedback,
         designOutcome: session.designOutcome,
+        credits,
       };
 
       res.status(200).json({

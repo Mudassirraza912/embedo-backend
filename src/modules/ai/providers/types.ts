@@ -59,6 +59,7 @@ export const classifyProviderError = (provider: string, err: unknown): ProviderE
   const message = e?.message ?? 'Unknown provider error';
 
   if (e?.name === 'AbortError' || /timeout|timed out/i.test(message)) return new ProviderError(provider, 'timeout', message, status);
+  if (/insufficient_quota|credit_balance_exhausted|quota|billing/i.test(message)) return new ProviderError(provider, 'auth', message, status);
   if (status === 429) return new ProviderError(provider, 'rate_limited', message, status);
   if (status === 401 || status === 403) return new ProviderError(provider, 'auth', message, status);
   if (status !== undefined && status >= 500) return new ProviderError(provider, 'server', message, status);

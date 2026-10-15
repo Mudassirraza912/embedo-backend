@@ -22,8 +22,8 @@ export type LimitOverrides = Partial<Limits>;
 
 /** The values that were hard-coded before this became editable; also the fallback if the DB read fails. */
 export const DEFAULT_LIMITS: Record<PlanName, Limits> = {
-  guest: { messagesPerSession: 6, maxInFlightSessions: 0, sessionsPerHour: 5 },
-  free: { messagesPerSession: 20, maxInFlightSessions: 3, sessionsPerHour: 20 },
+  guest: { messagesPerSession: 25, maxInFlightSessions: 0, sessionsPerHour: 5 },
+  free: { messagesPerSession: 50, maxInFlightSessions: 3, sessionsPerHour: 20 },
   paid: { messagesPerSession: 500, maxInFlightSessions: 0, sessionsPerHour: 20 },
 };
 

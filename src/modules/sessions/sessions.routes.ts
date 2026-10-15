@@ -19,6 +19,7 @@ const router = Router();
 
 // Order matters: rate limit -> validate (bounds) -> moderate (only validated, bounded text reaches the moderation API)
 router.get('/', sessionsController.listSessions);
+router.get('/credits', sessionsController.getCredits);
 
 router.post(
   '/',

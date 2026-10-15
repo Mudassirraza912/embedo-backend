@@ -48,6 +48,9 @@ export class ModelProviderService {
       if (providerName.toLowerCase() === 'openai') {
         return await this.openai.generateStream(options);
       }
+      if (providerName.toLowerCase() === 'anthropic') {
+        return await this.anthropic.generateStream(options);
+      }
       const { onDelta, ...rest } = options;
       const result = await this.generate(providerName, rest);
       onDelta(result.text, { firstTokenMs: result.latencyMs });
