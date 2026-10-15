@@ -214,6 +214,139 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
     }
   }
 
+  // 5. Power converter & battery voltage compatibility validation
+  const isPrimaryBattery = (n: DesignNode) =>
+    /\b(aa|aaa|cr2032|cr2025|coin|alkaline|primary|1\.5v|3v)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`) &&
+    !/\b(lipo|li-po|lithium-ion|li-ion|18650|rechargeable)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`);
+
+  const batteryNode = graph.nodes.find((n) => n.category === 'power' && isPrimaryBattery(n));
+  if (batteryNode) {
+    // 5a. Check for incompatible buck-only regulators on primary battery supplies
+    const BUCK_ONLY_PARTS = /\b(ap63203|lm2596|mp2307|lmr14030|tps54302|aoz1282)/i;
+    for (const node of graph.nodes) {
+      if (node.category === 'power' && BUCK_ONLY_PARTS.test(node.partNumber ?? '')) {
+        const oldPart = node.partNumber;
+        node.partNumber = 'TPS63031DSKR';
+        node.label = 'TPS63031';
+        node.sublabel = 'buck-boost converter';
+        node.manufacturer = 'Texas Instruments';
+        node.rationale =
+          'High efficiency buck-boost converter (1.8V–5.5V input) capable of maintaining 3.3V rail as 2x AA batteries drain to 2.0V';
+        issues.push({
+          severity: 'warning',
+          code: 'REGULATOR_TOPOLOGY_INCOMPATIBLE',
+          message: `Buck converter '${oldPart}' requires input >= 3.8V and cannot operate from low-voltage battery '${batteryNode.label}' (1.8V–3.0V). Auto-repaired to TPS63031 buck-boost converter.`,
+          nodeId: node.id,
+        });
+
+        // Update BOM if present
+        for (const item of graph.bom || []) {
+          if (BUCK_ONLY_PARTS.test(item.partNumber)) {
+            item.partNumber = 'TPS63031DSKR';
+            item.manufacturer = 'Texas Instruments';
+            item.description = 'Buck-Boost Regulator 3.3V 800mA';
+            item.category = 'Power Management';
+          }
+        }
+      }
+    }
+
+    // 5b. Safety check: Primary non-rechargeable batteries cannot have a battery charger or USB-C charging path
+    const chargerIndex = graph.nodes.findIndex(
+      (n) => n.category === 'power' && /\b(charger|pmic|bq25186|mcp73831|tp4056)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`)
+    );
+    if (chargerIndex !== -1) {
+      const charger = graph.nodes[chargerIndex];
+      issues.push({
+        severity: 'warning',
+        code: 'PRIMARY_BATTERY_CHARGER_REMOVED',
+        message: `Primary battery '${batteryNode.label}' cannot be recharged. Auto-removed hazardous charger '${charger.label}' and charging path.`,
+        nodeId: charger.id,
+      });
+      // Remove charger from nodes
+      graph.nodes.splice(chargerIndex, 1);
+      nodeMap.delete(charger.id);
+
+      // Remove charger from BOM
+      graph.bom = (graph.bom || []).filter(
+        (b) => !/\b(charger|pmic|bq25186|mcp73831|tp4056)\b/i.test(`${b.partNumber} ${b.description}`)
+      );
+
+      // Re-route battery to regulator if edge was from charger to regulator
+      const regNode = graph.nodes.find((n) => n.category === 'power' && n.id !== batteryNode.id);
+      if (regNode) {
+        validEdges.push({
+          from: batteryNode.id,
+          to: regNode.id,
+          label: 'VBAT',
+          type: 'power',
+        });
+      }
+    }
+  }
+
+  // 6. Wireless capability factual verification (LoRaWAN)
+  // STM32L072CZ is a standalone MCU without integrated LoRa radio.
+  // If the project specifies LoRaWAN, ensure either an integrated LoRa SoC is used or a discrete transceiver (SX1262/RFM95W) is present.
+  const isLoraProject =
+    /lora/i.test(graph.projectMeta.name) ||
+    /lora/i.test(graph.projectMeta.tagline) ||
+    graph.nodes.some((n) => /lora/i.test(`${n.label} ${n.sublabel ?? ''} ${n.rationale ?? ''}`));
+
+  if (isLoraProject && mcuNode) {
+    const isLoraMcu = /\b(stm32wl|cmwx1|lora-e5|e5)\b/i.test(mcuNode.partNumber ?? '');
+    const hasLoraTransceiver = graph.nodes.some(
+      (n) => n.id !== mcuNode.id && /\b(sx126|sx127|rfm9|lora)\b/i.test(`${n.partNumber} ${n.label} ${n.sublabel ?? ''}`)
+    );
+
+    if (!isLoraMcu && !hasLoraTransceiver) {
+      const loraNode: DesignNode = {
+        id: 'lora_transceiver',
+        label: 'SX1262',
+        sublabel: 'LoRaWAN Transceiver',
+        category: 'connectivity',
+        partNumber: 'SX1262IMLTRT',
+        manufacturer: 'Semtech',
+        rationale: 'Sub-GHz LoRaWAN transceiver paired with host MCU via SPI and DIO/BUSY GPIOs',
+        interfaces: ['SPI', 'GPIO'],
+        voltageV: 3.3,
+        currentMa: 45,
+      };
+      graph.nodes.push(loraNode);
+      nodeMap.set(loraNode.id, loraNode);
+
+      validEdges.push({
+        from: mcuNode.id,
+        to: loraNode.id,
+        label: 'SPI',
+        type: 'spi',
+      });
+
+      if (graph.powerRails.length > 0) {
+        const rail = graph.powerRails.find((r) => r.voltageV === 3.3) || graph.powerRails[0];
+        if (rail && !rail.consumers.includes(loraNode.id)) {
+          rail.consumers.push(loraNode.id);
+        }
+      }
+
+      graph.bom.push({
+        partNumber: 'SX1262IMLTRT',
+        manufacturer: 'Semtech',
+        category: 'Wireless / RF',
+        description: 'LoRa Transceiver IC 150MHz - 960MHz',
+        qty: 1,
+        unitCostUsd: 3.8,
+      });
+
+      issues.push({
+        severity: 'warning',
+        code: 'DISCRETE_LORA_TRANSCEIVER_ADDED',
+        message: `Microcontroller '${mcuNode.partNumber}' does not have an integrated LoRa radio. Added discrete Semtech SX1262 LoRaWAN transceiver connected via SPI.`,
+        nodeId: loraNode.id,
+      });
+    }
+  }
+
   const repairedGraph: CanonicalDesignGraph = { ...graph, edges: validEdges };
   const hasCriticalErrors = issues.some((i) => i.severity === 'error');
 

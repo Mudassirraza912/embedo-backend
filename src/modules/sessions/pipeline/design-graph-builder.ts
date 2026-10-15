@@ -125,16 +125,45 @@ export async function buildCanonicalDesignGraph(
 Your goal is to synthesize a production-grade, electrically consistent Canonical Design Graph for an embedded hardware system based on user specifications.
 
 CRITICAL HARDWARE RULES:
-1. Every component MUST have real, commercially available manufacturer part numbers (e.g. ESP32-S3-MINI-1, BQ25186, AP63203WU-7, DRV2605L, BQ27426, MMICT5848, ICM-42688-P, etc.).
+1. Every component MUST have real, commercially available manufacturer part numbers (e.g. ESP32-S3-MINI-1, STM32WLE5JC, STM32L072CZTX, SX1262IMLTRT, TPS63031DSKR, TPS62840DLYR, AP63203WU-7, BQ25186, SHT40-AD1B-R2, ICM-42688-P, etc.).
 2. Node IDs must be clean lowercase alphanumeric strings (e.g. "usbc", "mcu", "charger", "battery", "regulator", "imu", "storage", "display", "haptic", "gauge").
-3. Power Path: Always include a complete power path (e.g., USB-C 5V -> Charger -> LiPo Battery -> 3.3V Buck/LDO Regulator -> MCU and loads).
+3. Power Source & Power Path Architecture:
+   - Match the user's requested power source EXACTLY:
+     * Primary Non-Rechargeable Batteries (e.g. 2x AA, AAA, CR2032, Li-SOCl2):
+       - DO NOT include USB-C, DO NOT include a battery charger IC (like BQ25186), and DO NOT include a LiPo battery. Charging primary cells is a catastrophic electrical safety hazard!
+       - The battery node MUST represent the specified battery (e.g. id: "battery", label: "2x AA Battery Pack", sublabel: "3.0V nominal (2.0V-3.0V)", category: "power").
+       - Power Converter Topology Selection:
+         * 2x AA alkaline batteries deliver 3.0V fresh, dropping to ~1.8V - 2.0V as they drain.
+         * To power a 3.3V system rail from 2.0V–3.0V, you MUST use a BUCK-BOOST converter (e.g. TPS63031, TPS63001) or BOOST converter (e.g. MCP1640, TPS61099), or if all components support 1.8V-3.6V, an ultra-low-Iq LDO or direct battery connection.
+         * NEVER use a pure buck-only regulator (such as AP63203, which requires at least 3.8V input) on a 2x AA battery pack! A buck regulator cannot boost voltage and would cause the board to never power on.
+     * Rechargeable Batteries (e.g. 1S LiPo / Li-Ion, 3.7V nominal, 3.0V-4.2V):
+       - Include USB-C (5V input) -> Charger IC (e.g. BQ25186) -> LiPo Battery -> 3.3V Low-Iq Buck/LDO Regulator -> System rails.
+     * External DC Power (e.g. 9V–24V DC):
+       - DC Terminal/Jack -> Buck Regulator (e.g. AP63203WU-7) -> 3.3V / 5V rails.
 4. Category values must be one of: power, control, sensing, storage, connectivity, audio, ui, haptic, gauge, motor.
 5. Edge types must be one of: power, i2c, spi, uart, usb, sdmmc, gpio, signal, analog.
 6. Power rails must list every active voltage domain (e.g. 5V, 3.3V, VSYS, VBAT) and all consumer node IDs connected to that rail.
 7. Output valid JSON matching the exact schema without markdown formatting or code blocks.
 8. "suggestedRefinements": propose 4-6 short, chip-friendly next steps (2-4 words each) that are SPECIFIC to this device's purpose and domain — what an experienced engineer would actually suggest next for THIS product (e.g. for an access-control terminal: "Add door-ajar sensor", "Add PoE input", "Log access events"; for a soil sensor: "Add rain gauge input", "Use LoRaWAN uplink"). Ground them in what's actually missing from the current nodes/edges/powerRails; never suggest something already present. Avoid generic catch-alls ("Add battery backup", "Include ESD protection", "Add Wi-Fi connectivity", "Optimize power consumption", "Enhance user interface") unless one is clearly the single most valuable gap for this specific design. Cover different areas (sensing, connectivity, power, security, UX) rather than variations of one idea.
 9. When a component's grounded specs include BOTH "recommendedOperating" and "absoluteMaxRatings", the two are DIFFERENT tables from the datasheet, not one range: absoluteMaxRatings is a destructive limit the datasheet itself marks as "stress ratings only, exceeding these may cause permanent damage" — it is NEVER a value to design to. Every node's voltageV and every power rail must come from recommendedOperating (its "typ", or a value inside its min/max). If only absoluteMaxRatings is present for a part, treat its operating range as unknown rather than using the absolute-max figures directly. The same applies to currentMa: never use an absoluteMaxRatings current (e.g. a pin input limit) as a node's current draw. Take currentMa from recommendedOperating or from supply/quiescent/active current figures stated in the grounded text; if none is grounded, give a conservative engineering estimate and say so in the node's rationale.
-10. Grounded specs may also list "powerModes" (supply current per operating mode, already in mA), "interfaces" (role, voltage level, max rate and pull-up requirements), "cautions" (constraints stated in the datasheet) and "pins". Use them: size a node's currentMa from its active/typical powerModes entry, put the required pull-ups and logic-level compatibility on the matching bus edges, never violate a listed caution (e.g. a pin that must not be pulled low at boot), and use the listed pin names for interface pin assignments rather than inventing pins.`;
+10. Grounded specs may also list "powerModes" (supply current per operating mode, already in mA), "interfaces" (role, voltage level, max rate and pull-up requirements), "cautions" (constraints stated in the datasheet) and "pins". Use them: size a node's currentMa from its active/typical powerModes entry, put the required pull-ups and logic-level compatibility on the matching bus edges, never violate a listed caution (e.g. a pin that must not be pulled low at boot), and use the listed pin names for interface pin assignments rather than inventing pins.
+11. Battery Life & Power Budget Calculation:
+    When a battery runtime is specified (e.g., "runs 2 years on 2x AA batteries") or for any battery-operated device:
+    - You MUST include a battery life & power budget calculation in "engineeringDecisions":
+      a. State usable battery capacity in mAh (e.g., 2x AA Alkaline in series = ~2400-3000 mAh nominal, ~2500 mAh usable).
+      b. State maximum allowable average current: I_avg_max = (Capacity in mAh) / (Target runtime in hours). For 2 years (17,520 hours): 2500 mAh / 17520 h ≈ 0.143 mA (143 µA).
+      c. Detail the duty-cycle power consumption model for the specified reporting interval (e.g. 10-minute cycle = 600 s):
+         - Deep Sleep (~598-599 s): MCU in ultra-low-power sleep + sensor standby ≈ 2-5 µA.
+         - Active / LoRaWAN TX (~1-2 s): sensor read + LoRaWAN uplink at +14 dBm ≈ 25-40 mA.
+         - Weighted average current: I_avg = (T_sleep * I_sleep + T_tx * I_tx) / T_interval ≈ (599 * 0.003 mA + 1 * 35 mA) / 600 ≈ 61 µA.
+      d. State the estimated battery lifetime: 2500 mAh / 0.061 mA ≈ 40,980 hours ≈ 4.6 years (exceeds the 2-year requirement with safe design margin).
+12. Component Interface and Capability Factuality:
+    - Never claim a microcontroller has integrated wireless capabilities unless that specific part number actually integrates them.
+    - Example: STM32L072CZ is a standalone Cortex-M0+ MCU and DOES NOT have integrated LoRaWAN. For LoRaWAN, you must either:
+      a. Select an integrated LoRaWAN SoC (e.g. STM32WLE5JC / STM32WL55CC).
+      b. Select a certified SiP module (e.g. Murata CMWX1ZZABZ-091 or Seeed LoRa-E5).
+      c. Pair the MCU with an external LoRa transceiver (e.g. Semtech SX1262, SX1276, or RFM95W) connected via SPI and GPIOs.
+    - The same applies to BLE: do not add a separate BLE module if the MCU already integrates BLE (e.g. ESP32-S3, nRF52840), and do not claim a non-wireless MCU has integrated BLE.`;
 
   const userPrompt = `Synthesize the Canonical Design Graph for the following hardware intent:
 ${JSON.stringify(intent, null, 2)}
