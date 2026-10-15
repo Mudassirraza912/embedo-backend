@@ -12,6 +12,7 @@ import { SOURCING_TASK_CASE, sourceHardware, SourcingResult } from '../../hardwa
 import { assemblePrototype } from './prototype-assembler.js';
 import { filterAppliedSuggestions, getAppliedChangeLineage } from '../pipeline/refinement-history.js';
 import { isPrototypeArchitecture, isPrototypeComposition, PrototypeArchitecture, PrototypeComposition } from './prototype.types.js';
+import { describeBench, diffBenches } from './prototype-diff.js';
 
 /**
  * Prototype pipeline (plan D5), run by the ai-pipeline worker for sessions of type "prototype".
@@ -127,6 +128,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
         history: turns.slice(-LLM_HISTORY_TURNS - 1, -1),
         catalogue,
         current: currentComposition,
+        currentBench: current ? describeBench(current) : null,
         sessionId,
       });
       emitSessionEvent.aiCallCompleted(sessionId, { taskCase: RESOLVER_TASK_CASE, schemaPass: true, latencyMs: resolved.latencyMs });
@@ -139,7 +141,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     let sourcing = null as SourcingResult | null;
 
     // Library gaps are filled from vendor product pages: the boards found are private to this
-    // project (drawn as unverified) and queued for admin review before anyone else can use them.
+    // project and queued for admin review (internal) before anyone else can use them.
     // Up to two rounds: the second one fills gaps the first resolve still reported.
     const MAX_SOURCING_ROUNDS = 2;
     for (let round = 1; round <= MAX_SOURCING_ROUNDS && env.PROTOTYPE_SOURCING_ENABLED; round++) {
@@ -221,7 +223,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       'Checking library coverage',
       prototypeGaps.length > 0 ? 'warning' : 'completed',
       [
-        sourcedCount > 0 ? `${sourcedCount} module(s) sourced from vendor sites (unverified, sent for review)` : null,
+        sourcedCount > 0 ? `${sourcedCount} module(s) sourced from vendor sites for this project` : null,
         prototypeGaps.length > 0 ? `${prototypeGaps.length} need(s) still not covered: ${prototypeGaps.map((g) => g.need).join('; ')}` : 'Every need is covered',
       ]
         .filter(Boolean)
@@ -233,9 +235,6 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     emitSessionEvent.stageUpdate(sessionId, { step: 4, label: 'Assigning pins and checking compatibility', progress: 70 });
     const entities = new Map(library.map((e) => [e.hardwareEntityId, e]));
     const payload = assemblePrototype(composition, entities, {
-      // Unreviewed wiring (sourced or provisional boards) is drawn dashed and labelled, never hidden:
-      // the user asked to see the bench, and the dashed style + warnings say it is not verified.
-      allowProvisional: true,
       svgBasePath: `${env.API_PREFIX}/hardware/entities`,
       projectName: session.title ?? 'Prototype',
       understanding: output.understanding,
@@ -248,16 +247,44 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       'assigning_pins',
       'Assigning pins',
       counts.BLOCKER + counts.UNKNOWN > 0 ? 'warning' : 'completed',
-      `${payload.nets.length} nets, ${wires} wire(s), ${cables} cable(s) · ${counts.BLOCKER} blocker(s), ${counts.WARNING} warning(s), ${counts.UNKNOWN} unknown`
+      `${payload.nets.length} nets, ${wires} wire(s), ${cables} cable(s) · ${counts.BLOCKER} failed, ${counts.UNKNOWN} unverified, ${counts.WARNING} warning(s), ${counts.PASS} passed`
     );
 
     recordStep('rendering', 'Rendering', 'running');
     emitSessionEvent.stageUpdate(sessionId, { step: 5, label: 'Drawing the module diagram and pin list', progress: 90 });
     recordStep('rendering', 'Rendering', 'completed', `${payload.pinList.summary.rows} pin rows`);
 
+    // A revision is described by what actually changed in the graph, never by the request text.
+    // When nothing changed, no version is saved and the chat says so: "Updated the bench" on an
+    // identical bench is exactly the false success this must never report.
+    const diff = current && revisionNotes ? diffBenches(current, payload) : null;
+    if (diff && !diff.changed) {
+      log.info('Prototype revision produced an identical bench; no version saved');
+      // Most serious first; UNKNOWN matters here (a supply missing from a record is exactly why a
+      // module cannot be rewired), and power problems lead because most corrections are about power.
+      const rank = { BLOCKER: 0, UNKNOWN: 1, WARNING: 2, PASS: 3 } as const;
+      const open = payload.compatibility.results
+        .filter((r) => r.status !== 'PASS' && r.ruleType !== 'dependency_presence')
+        .sort((a, b) => rank[a.status] - rank[b.status] || Number(b.ruleType === 'required_power_rail') - Number(a.ruleType === 'required_power_rail'))
+        .slice(0, 4);
+      const power = payload.nets.filter((n) => n.class === 'power').map((n) => `- ${n.name}: ${n.members.map((m) => `${m.instanceId}.${m.pinName}`).join(' ↔ ')}`);
+      const content = [
+        `**No change to the bench.** I re-ran your request against the hardware library and the wiring rules, and the result is identical to ${current?.versionTag ?? 'the current version'}, so I did not save a new version.`,
+        output.understanding ? `\nWhat I understood: ${output.understanding}` : null,
+        power.length > 0 ? `\nPower wiring as it stands:\n${power.join('\n')}` : null,
+        open.length > 0 ? `\nWhat still stands in the way:\n${open.map((r) => `- ${r.message}`).join('\n')}` : null,
+        '\nTell me the specific change, e.g. which module to add or swap, or which board should power which.',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      recordStep('rendering', 'Rendering', 'warning', 'No change to the bench');
+      return await replyWithoutDesign(content, { prototypeNoChange: true, sessionType: 'prototype' });
+    }
+    const changesApplied = diff?.lines.slice(0, 12) ?? [];
+
     // Persist (atomic, serialized per session) and announce.
     emitSessionEvent.stageUpdate(sessionId, { step: 6, label: 'Saving the prototype version', progress: 100 });
-    const changeSummary = revisionNotes ? revisionNotes.slice(0, 200) : 'Initial prototype assembled';
+    const changeSummary = changesApplied.length > 0 ? changesApplied.join('; ').slice(0, 200) : 'Initial prototype assembled';
     // Quick-refinement chips, minus anything this bench already received (same rule as Architect).
     const appliedLineage = await getAppliedChangeLineage(sessionId);
     const quickRefinements = filterAppliedSuggestions(output.suggestedRefinements, [...appliedLineage, ...(revisionNotes ? [revisionNotes] : [])]).slice(0, 5);
@@ -266,14 +293,16 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       designGraph: composition,
       architecture: payload,
       changeSummary,
-      appliedChanges: [revisionNotes ? revisionNotes.slice(0, 500) : 'Initial prototype assembled'],
+      // The request is kept first so quick-refinement filtering still sees what was asked for.
+      appliedChanges: revisionNotes ? [revisionNotes.slice(0, 500), ...changesApplied] : ['Initial prototype assembled'],
       sessionStatus: 'DONE',
       buildChatMessage: (tag) => ({
-        content: summaryMessage(payload, tag, sourcing),
+        content: summaryMessage(payload, tag, sourcing, changesApplied),
         metadata: {
           versionTag: tag,
           prototypeVersionTag: tag,
           sessionType: 'prototype',
+          changesApplied,
           projectMeta: payload.projectMeta,
           controller: { name: payload.projectMeta.controller, partNumber: composition.controller?.hardwareEntityId ?? null, rationale: controllerRationale },
           engineeringDecisions: decisionsFor(payload),
@@ -308,28 +337,27 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
 }
 
 /** Short, factual card text: what was placed, how it connects, and what is not in the library. */
-function summaryMessage(payload: PrototypeArchitecture, tag: string, sourcing: SourcingResult | null): string {
+function summaryMessage(payload: PrototypeArchitecture, tag: string, sourcing: SourcingResult | null, changes: string[] = []): string {
   const modules = payload.instances.filter((i) => !i.isController).map((i) => `${i.label} (${i.instanceId})`);
   const cables = payload.connections.filter((c) => c.kind === 'cable').length;
   const wires = payload.connections.length - cables;
   const { summary } = payload.pinList;
   const counts = payload.compatibility.counts;
-  const unreviewed = payload.instances.some((i) => i.reviewStatus !== 'confirmed' || i.assetReadiness !== 'wiring_ready');
   return [
     `🧩 **Prototype bench assembled (${tag})**`,
     '',
+    changes.length > 0 ? `**What changed**\n${changes.map((c) => `- ${c}`).join('\n')}\n` : null,
     `- **Controller**: ${payload.projectMeta.controller}`,
     `- **Modules**: ${modules.length > 0 ? modules.join(', ') : 'none'}`,
     `- **Connections**: ${wires} jumper wire(s)${cables > 0 ? `, ${cables} STEMMA QT / Qwiic cable(s)` : ''}`,
     `- **Pin list**: ${summary.rows} contacts · ${summary.assigned + summary.proposed} connected · ${summary.blocking} blocking`,
-    `- **Checks**: ${counts.PASS} pass · ${counts.WARNING} warning · ${counts.BLOCKER} blocker · ${counts.UNKNOWN} unknown`,
+    `- **Checks**: ${counts.PASS} passed · ${counts.BLOCKER} failed · ${counts.UNKNOWN} unverified · ${counts.WARNING} warning`,
     payload.gaps.length > 0 ? `- **Not in library**: ${payload.gaps.map((g) => `${g.category} — ${g.need}`).join('; ')}` : null,
     sourcing && sourcing.sourced.length > 0
-      ? `- **Sourced for this project** (not in the library yet, sent to admin review): ${sourcing.sourced
-          .map((b) => `${b.productName} (${b.factsSource === 'vendor_page' ? 'pinout read from the vendor page' : 'pinout from model knowledge, unverified'})`)
+      ? `- **Sourced for this project**: ${sourcing.sourced
+          .map((b) => `${b.productName} (${b.factsSource === 'vendor_page' ? 'pinout read from the vendor page' : 'pinout from AI product knowledge — check it against the board'})`)
           .join('; ')}`
       : null,
-    unreviewed ? '- ⚠️ Boards awaiting review are drawn with dashed wiring: check every connection against the board before powering up.' : null,
     payload.notes ? `\n${payload.notes}` : null,
   ]
     .filter((line) => line !== null)
@@ -343,7 +371,7 @@ function decisionsFor(payload: PrototypeArchitecture): string[] {
     const to = payload.instances.find((i) => i.instanceId === c.to.instanceId)?.label ?? c.to.instanceId;
     out.push(`${from} → ${to} over a STEMMA QT / Qwiic cable`);
   }
-  const blockers = payload.compatibility.counts.BLOCKER;
-  if (blockers > 0) out.push(`${blockers} blocker${blockers > 1 ? 's' : ''} to resolve — see Checks on the module diagram`);
+  const failed = payload.compatibility.counts.BLOCKER;
+  if (failed > 0) out.push(`${failed} failed check${failed > 1 ? 's' : ''} to resolve — see Checks on the module diagram`);
   return out.slice(0, 4);
 }

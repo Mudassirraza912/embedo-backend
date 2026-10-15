@@ -97,16 +97,46 @@ function renderHeader(d: ModuleDiagram): string[] {
   return out;
 }
 
-const coreWidth = (b: DiagramBus) => (b.netClass === 'power' || b.netClass === 'ground' ? 2.8 : 2.4);
+/** Line weight by class (same as the web canvas): rails heaviest, signals lighter. */
+const coreWidth = (b: DiagramBus) => (b.netClass === 'power' ? 3.4 : b.netClass === 'ground' ? 3 : b.kind === 'cable' ? 2.6 : 2.2);
+
+/**
+ * Bridges: where a leg crosses a track it is not connected to, the track gets a small gap, so only
+ * real junctions (dots) read as connections. Visual only; never adds or removes a connection.
+ */
+export function crossingsOf(buses: DiagramBus[]): Array<{ x: number; y: number }> {
+  const out: Array<{ x: number; y: number }> = [];
+  for (const b of buses) {
+    for (const o of buses) {
+      if (o === b) continue;
+      for (const t of o.taps) {
+        for (let i = 1; i < t.points.length; i++) {
+          const [xa, ya] = t.points[i - 1]!;
+          const [xb, yb] = t.points[i]!;
+          if (xa !== xb) continue;
+          const lo = Math.min(ya, yb);
+          const hi = Math.max(ya, yb);
+          if (b.y > lo + 0.5 && b.y < hi - 0.5 && xa > b.x1 + 1 && xa < b.x2 - 1) out.push({ x: xa, y: b.y });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** A connection a check blocks is drawn (the export shows the whole graph) in red, "do not wire". */
+const BLOCKED = '#FF5C5C';
+const BLOCKED_DASH = ' stroke-dasharray="4 5"';
 
 /** The track itself, drawn under the boards. */
 function renderTrack(b: DiagramBus): string[] {
-  const dash = b.dashed ? ' stroke-dasharray="10 6"' : '';
+  const dash = b.blocked ? BLOCKED_DASH : b.dashed ? ' stroke-dasharray="10 6"' : '';
+  const color = b.blocked ? BLOCKED : b.color;
   const at = `x1="${b.x1}" y1="${b.y}" x2="${b.x2}" y2="${b.y}"`;
   const out: string[] = [];
-  if (b.kind === 'cable') out.push(`<line ${at} stroke="${b.color}" stroke-width="10" stroke-opacity="0.16" stroke-linecap="round"/>`);
-  out.push(`<line ${at} stroke="${b.color}" stroke-width="8" stroke-opacity="0.2" filter="url(#glow)"/>`);
-  out.push(`<line ${at} stroke="${b.color}" stroke-width="${coreWidth(b)}" stroke-linecap="round"${dash}/>`);
+  if (b.kind === 'cable') out.push(`<line ${at} stroke="${color}" stroke-width="10" stroke-opacity="0.16" stroke-linecap="round"/>`);
+  out.push(`<line ${at} stroke="${color}" stroke-width="8" stroke-opacity="0.2" filter="url(#glow)"/>`);
+  out.push(`<line ${at} stroke="${color}" stroke-width="${coreWidth(b)}" stroke-linecap="round"${dash}/>`);
   return out;
 }
 
@@ -114,9 +144,10 @@ function renderTrack(b: DiagramBus): string[] {
 function renderTaps(b: DiagramBus): string[] {
   const out: string[] = [];
   for (const t of b.taps) {
-    const dash = t.dashed ? ' stroke-dasharray="10 6"' : '';
-    out.push(`<polyline points="${pts(t.points)}" fill="none" stroke="${b.color}" stroke-width="7" stroke-opacity="0.16" filter="url(#glow)"/>`);
-    out.push(`<polyline points="${pts(t.points)}" fill="none" stroke="${b.color}" stroke-width="${coreWidth(b)}" stroke-linejoin="round" stroke-linecap="round"${dash}/>`);
+    const dash = t.blocked ? BLOCKED_DASH : t.dashed ? ' stroke-dasharray="10 6"' : '';
+    const color = t.blocked ? BLOCKED : b.color;
+    out.push(`<polyline points="${pts(t.points)}" fill="none" stroke="${color}" stroke-width="7" stroke-opacity="0.16" filter="url(#glow)"/>`);
+    out.push(`<polyline points="${pts(t.points)}" fill="none" stroke="${color}" stroke-width="${coreWidth(b)}" stroke-linejoin="round" stroke-linecap="round"${dash}/>`);
   }
   for (const t of b.taps) {
     const [px, py] = t.points[0]!;
@@ -163,6 +194,13 @@ function renderLegend(card: NonNullable<ModuleDiagram['legendCard']>): string[] 
       `<text x="${x + 76 + labelW + 34}" y="${ry + 4}" fill="${TEXT}" fill-opacity="0.8" font-family="${SANS}" font-size="12.5">${esc(fit(r.detail, 44))}</text>`
     );
   });
+  if (card.blockedNote) {
+    const ny = y + height - (card.dashedNote ? 40 : 16);
+    out.push(
+      `<line x1="${x + 24}" y1="${ny - 4}" x2="${x + 62}" y2="${ny - 4}" stroke="${BLOCKED}" stroke-width="2"${BLOCKED_DASH}/>`,
+      `<text x="${x + 76}" y="${ny}" fill="${BLOCKED}" font-family="${SANS}" font-size="10.5">Red: failed or unverified, don&apos;t wire yet</text>`
+    );
+  }
   if (card.dashedNote) {
     const ny = y + height - 16;
     out.push(
@@ -216,6 +254,7 @@ export function renderPrototypeSvg(payload: PrototypeArchitecture, artwork: Map<
 
   parts.push(...renderHeader(d));
   for (const b of d.buses ?? []) parts.push(...renderTrack(b));
+  for (const c of crossingsOf(d.buses ?? [])) parts.push(`<rect x="${c.x - 6}" y="${c.y - 7}" width="12" height="14" rx="3" fill="${CANVAS}"/>`);
 
   for (const m of d.modules) {
     const markup = artwork.get(m.instanceId);

@@ -92,7 +92,11 @@ export interface LayoutInput {
   nets: PrototypeNet[];
   connections: PrototypeConnection[];
   gaps: PrototypeGap[];
-  /** Draw `proposed` connections dashed (dev override). Off: only `drawn` connections get a wire. */
+  /**
+   * Draw `proposed` connections dashed (dev override). Off: only `drawn` connections get a wire.
+   * `blocked` connections are always drawn (styled "do not wire") so the canvas shows every net in
+   * the graph; hiding them made the diagram disagree with the stored wiring.
+   */
   drawProposed: boolean;
   projectName?: string;
 }
@@ -178,7 +182,7 @@ interface LaneRequest {
 export function layoutPrototype(input: LayoutInput): ModuleDiagram {
   const controller = input.instances.find((i) => i.isController) ?? null;
   const peripherals = input.instances.filter((i) => i !== controller);
-  const visible = input.connections.filter((c) => c.state === 'drawn' || (c.state === 'proposed' && input.drawProposed));
+  const visible = input.connections.filter((c) => c.state === 'drawn' || c.state === 'blocked' || (c.state === 'proposed' && input.drawProposed));
   const netById = new Map(input.nets.map((n) => [n.netId, n]));
   const instById = new Map(input.instances.map((i) => [i.instanceId, i]));
   const artSize = (i: LayoutInstance) => ({ width: i.width ?? PLACEHOLDER.width, height: i.height ?? PLACEHOLDER.height });
@@ -216,6 +220,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     y: number;
     connectionIds: string[];
     allDashed: boolean;
+    allBlocked: boolean;
   }
   const tracks = new Map<string, Track>();
   const trackOfConnection = new Map<string, string>();
@@ -227,6 +232,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     if (existing) {
       existing.connectionIds.push(c.id);
       existing.allDashed = existing.allDashed && dashed;
+      existing.allBlocked = existing.allBlocked && c.state === 'blocked';
       continue;
     }
     const net = c.kind === 'wire' ? netById.get(c.netIds[0] ?? '') : undefined;
@@ -240,6 +246,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
       y: 0,
       connectionIds: [c.id],
       allDashed: dashed,
+      allBlocked: c.state === 'blocked',
     });
   }
   const orderedTracks = [...tracks.values()].sort(
@@ -471,16 +478,19 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     const b = legOf(c.to.instanceId, c.to.anchorId, trackId);
     if (!a || !b) continue;
     const dashed = c.state !== 'drawn';
+    const blocked = c.state === 'blocked';
     for (const [end, leg] of [
       [c.from, a],
       [c.to, b],
     ] as const) {
       const taps = busTaps.get(trackId) ?? [];
       const existing = taps.find((t) => t.instanceId === end.instanceId && t.anchorId === end.anchorId);
-      if (existing) existing.dashed = existing.dashed && dashed;
-      else {
+      if (existing) {
+        existing.dashed = existing.dashed && dashed;
+        if (existing.blocked && !blocked) delete existing.blocked;
+      } else {
         const whole = instById.get(end.instanceId)?.anchors.get(end.anchorId)?.whole ?? false;
-        taps.push({ x: leg[leg.length - 1]![0], instanceId: end.instanceId, anchorId: end.anchorId, points: leg, dashed, pad: !whole });
+        taps.push({ x: leg[leg.length - 1]![0], instanceId: end.instanceId, anchorId: end.anchorId, points: leg, dashed, ...(blocked ? { blocked } : {}), pad: !whole });
       }
       busTaps.set(trackId, taps);
     }
@@ -492,6 +502,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
       color: track.color,
       strokeWidth: c.kind === 'cable' ? 5 : track.netClass === 'power' || track.netClass === 'ground' ? 2.6 : 2.2,
       dashed,
+      ...(blocked ? { blocked } : {}),
       points: dedupe([...a, ...[...b].reverse()]),
       busId: trackId,
     });
@@ -513,6 +524,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
         labelX: PAD,
         labelWidth: r1(pillW),
         dashed: t.allDashed,
+        ...(t.allBlocked ? { blocked: true } : {}),
         shared: taps.length > 2,
         taps,
       };
@@ -537,7 +549,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
 
   const perTrack = buses.length <= 8;
   const legendRows: NonNullable<ModuleDiagram['legendCard']>['rows'] = perTrack
-    ? buses.map((b) => ({ label: b.label, color: b.color, detail: describe(b.netClass, b.label, b.shared), dashed: b.dashed, netId: b.netId }))
+    ? buses.map((b) => ({ label: b.label, color: b.color, detail: describe(b.netClass, b.label, b.shared), dashed: b.dashed, ...(b.blocked ? { blocked: true } : {}), netId: b.netId }))
     : CLASS_ORDER.filter((cls) => buses.some((b) => b.netClass === cls)).map((cls) => {
         const of = buses.filter((b) => b.netClass === cls);
         const names = of.filter((b) => b.kind === 'net').map((b) => b.label);
@@ -546,6 +558,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
           color: of[0]!.color,
           detail: cls === 'cable' ? `${of.length} cable${of.length === 1 ? '' : 's'}` : names.join(', '),
           dashed: of.every((b) => b.dashed),
+          ...(of.every((b) => b.blocked) ? { blocked: true } : {}),
           netId: null,
         };
       });
@@ -557,7 +570,8 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
         )
       : 0;
   const anyDashed = legendRows.some((r) => r.dashed);
-  const legendH = legendRows.length > 0 ? 54 + legendRows.length * LEGEND_ROW + (anyDashed ? 26 : 4) : 0;
+  const anyBlocked = buses.some((b) => b.blocked || b.taps.some((t) => t.blocked));
+  const legendH = legendRows.length > 0 ? 54 + legendRows.length * LEGEND_ROW + (anyDashed ? 26 : 4) + (anyBlocked ? 22 : 0) : 0;
 
   // --- shift down if around-the-board escapes rose above the content top ----------------------------
   const allPoints = wires.flatMap((w) => w.points);
@@ -604,7 +618,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
   const legendX = Math.max(cursor, contentRight - legendW);
   const legendCard =
     legendRows.length > 0
-      ? { x: r1(legendX), y: r1(bottomY), width: r1(legendW), height: r1(legendH), title: 'Legend', caption: perTrack ? 'Nets & buses' : 'Net classes', rows: legendRows, dashedNote: anyDashed }
+      ? { x: r1(legendX), y: r1(bottomY), width: r1(legendW), height: r1(legendH), title: 'Legend', caption: perTrack ? 'Nets & buses' : 'Net classes', rows: legendRows, dashedNote: anyDashed, ...(anyBlocked ? { blockedNote: true } : {}) }
       : null;
   const bottomExtent = Math.max(
     bottomY + (rows.bottom.length > 0 ? Math.max(...rows.bottom.map((i) => contentSize(i).height)) : 0),

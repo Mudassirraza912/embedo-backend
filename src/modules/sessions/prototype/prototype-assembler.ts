@@ -23,8 +23,6 @@ import {
  */
 
 export interface AssembleOptions {
-  /** PROTOTYPE_ALLOW_PROVISIONAL: draw not-yet-reviewed wiring dashed instead of hiding it. */
-  allowProvisional: boolean;
   /** Base path for module artwork, e.g. "/api/v1/hardware/entities". */
   svgBasePath: string;
   projectName: string;
@@ -32,15 +30,6 @@ export interface AssembleOptions {
   notes: string;
 }
 
-const isWiringReady = (entity: LibraryEntity) => entity.reviewStatus === 'confirmed' && entity.assetReadiness === 'wiring_ready';
-
-export function badgeFor(entity: LibraryEntity): string | null {
-  if (!entity.svg) return 'NO ARTWORK';
-  if (entity.scope === 'private_project') return 'PRIVATE · PROVISIONAL';
-  if (entity.reviewStatus !== 'confirmed') return 'PROVISIONAL';
-  if (entity.assetReadiness !== 'wiring_ready') return 'AWAITING WIRING REVIEW';
-  return null;
-}
 
 /** Where the frontend loads a board's bench art from (hash = cache key). */
 export function benchSvgRef(art: BenchArt, hardwareEntityId: string, isController: boolean, svgBasePath: string): PrototypeSvgRef {
@@ -119,7 +108,6 @@ export function assemblePrototype(
     nets = allocation.nets;
     requiredPins = allocation.requiredPins;
 
-    const entityOf = (instanceId: string) => entities.get(instances.find((i) => i.instanceId === instanceId)?.hardwareEntityId ?? '');
     const failing = results.filter((r) => r.status === 'BLOCKER' || r.status === 'UNKNOWN');
     const pinsOf = (c: (typeof allocation.connections)[number]): Set<string> => {
       const pins = new Set<string>();
@@ -135,15 +123,13 @@ export function assemblePrototype(
       }
       return pins;
     };
-    // Gating per connection (plan D5): drawn only when both boards are wiring-ready and no BLOCKER
-    // or UNKNOWN touches it; otherwise the mapping is shown but not asserted.
+    // A connection is drawn unless a failing or unverifiable check touches it. Whether a board has
+    // been accepted into the shared library is internal (admin review) and never changes the
+    // drawing: users see check results, not review status (product decision 2026-10-14).
     connections = allocation.connections.map((c) => {
       const pins = pinsOf(c);
       const blocked = failing.some((r) => r.pinIds.some((p) => pins.has(p)));
-      const fromEntity = entityOf(c.from.instanceId);
-      const toEntity = entityOf(c.to.instanceId);
-      const ready = Boolean(fromEntity && toEntity && isWiringReady(fromEntity) && isWiringReady(toEntity));
-      const state: ConnectionState = blocked ? 'blocked' : ready ? 'drawn' : 'proposed';
+      const state: ConnectionState = blocked ? 'blocked' : 'drawn';
       return { ...c, state };
     });
   }
@@ -161,13 +147,13 @@ export function assemblePrototype(
         anchors: art.anchors,
         inset: art.inset,
         edges: art.edges,
-        badge: badgeFor(entity),
+        badge: null,
       };
     }),
     nets,
     connections,
     gaps,
-    drawProposed: options.allowProvisional,
+    drawProposed: false,
     projectName: options.projectName,
   });
 
