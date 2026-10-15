@@ -234,6 +234,36 @@ export class SessionsController {
     }
   };
 
+  getProposal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id, proposalId } = req.params;
+      const result = await sessionsService.getProposal(id as string, proposalId as string, req.user?.id, req.anonSessionToken);
+      res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  approveProposal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id, proposalId } = req.params;
+      const result = await sessionsService.approveProposal(id as string, proposalId as string, req.user?.id, req.anonSessionToken);
+      res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  rejectProposal = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { id, proposalId } = req.params;
+      const result = await sessionsService.rejectProposal(id as string, proposalId as string, req.user?.id, req.anonSessionToken);
+      res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  };
+
   rollbackVersion = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { id, version } = req.params;

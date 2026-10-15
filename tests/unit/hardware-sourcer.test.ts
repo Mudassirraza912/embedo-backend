@@ -4,7 +4,7 @@ import { aiRouterService } from '../../src/modules/ai/ai-router.service.js';
 import { prepareBundle } from '../../src/modules/hardware/hardware-admin.service.js';
 import { hardwareLibraryService } from '../../src/modules/hardware/hardware-library.service.js';
 import { hardwareProposalService } from '../../src/modules/hardware/hardware-proposal.service.js';
-import { checkFacts, factsSchema, factsToBoard, pageMatchesProduct, sourceHardware, SourcedFacts } from '../../src/modules/hardware/discovery/hardware-sourcer.js';
+import { checkFacts, factsSchema, factsToBoard, normaliseFacts, pageMatchesProduct, sourceHardware, SourcedFacts } from '../../src/modules/hardware/discovery/hardware-sourcer.js';
 import { buildRecord, buildSvg } from '../../src/modules/hardware/discovery/record-builder.js';
 import { htmlToText, isAllowedVendorUrl } from '../../src/modules/hardware/discovery/vendor-page.js';
 import { allocatePins } from '../../src/modules/sessions/prototype/prototype-allocator.js';
@@ -188,6 +188,42 @@ describe('hardware sourcing (vendor pages → private board + review queue)', ()
     expect(parsed.pins.find((p) => p.name === 'VIN')).toMatchObject({ direction: 'power_in' });
     const board = factsToBoard(parsed, 'HWP-REFS0001', 'FAM-X', null);
     expect(board.connectors.map((c) => c.ref)).toEqual(['HEADER1B', 'HEADER2']);
+  });
+
+  it('keeps boards whose extraction only overran presentation limits (prod failures, 2026-10-15)', () => {
+    const accept = (raw: unknown) => {
+      const parsed = factsSchema.safeParse(normaliseFacts(raw));
+      expect(parsed.success).toBe(true);
+      expect(checkFacts(parsed.success ? parsed.data : relayFacts)).toEqual([]);
+      return parsed.success ? parsed.data : relayFacts;
+    };
+    // "notes: Array must contain at most 4" and "logic_level_summary: at most 80 characters"
+    const chatty = accept({ ...relayFacts, notes: ['a', 'b', 'c', 'd', 'e', 'f'], logic_level_summary: 'x'.repeat(200) });
+    expect(chatty.notes).toHaveLength(4);
+    expect(chatty.logic_level_summary).toHaveLength(80);
+    // "connectors.0.pins.0: Expected string, received object" and "GPIO 0"-style labels
+    const objects = accept({
+      ...relayFacts,
+      pins: [...relayFacts.pins.slice(0, 5), { ...relayFacts.pins[5]!, name: 'N C' }],
+      connectors: [
+        { ref: 'JP1', kind: 'header', pins: [{ name: 'SIG' }, { pin: 'VIN' }, { label: 'GND' }] },
+        { ref: 'TB1', kind: 'screw_terminal', pins: ['NO', 'COM', 'N C'] },
+      ],
+    });
+    expect(objects.connectors[1]!.pins).toEqual(['NO', 'COM', 'N_C']);
+    // "connectors.1.pins: Array must contain at least 1 element" and pins on no connector
+    const loose = accept({ ...relayFacts, connectors: [{ ref: 'JP1', kind: 'header', pins: ['SIG', 'VIN', 'GND'] }, { ref: 'X', kind: 'header', pins: [] }] });
+    expect(loose.connectors.flatMap((c) => c.pins).sort()).toEqual(['COM', 'GND', 'NC', 'NO', 'SIG', 'VIN']);
+    // A STEMMA QT connector without 4 contacts is drawn as a plain header instead of failing.
+    const qt = accept({ ...relayFacts, connectors: [{ ref: 'QT', kind: 'stemma_qt', pins: ['SIG', 'VIN', 'GND'] }, relayFacts.connectors[1]] });
+    expect(qt.connectors[0]!.kind).toBe('header');
+    // Facts nested one level down ({"board": {...}}) are unwrapped instead of read as nothing.
+    accept({ board: relayFacts });
+  });
+
+  it('never repairs an electrical fact: a board with no ground pin is still rejected', () => {
+    const parsed = factsSchema.parse(normaliseFacts({ ...relayFacts, pins: relayFacts.pins.filter((p) => p.name !== 'GND'), connectors: [{ ref: 'J1', kind: 'header', pins: ['SIG', 'VIN', 'NO', 'COM', 'NC'] }] }));
+    expect(checkFacts(parsed)).toContain('no ground pin');
   });
 
   it('wires a Qwiic-only module through a socket-to-header cable and says which cable to use', async () => {

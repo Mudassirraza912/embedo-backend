@@ -4,7 +4,7 @@ import { env } from '../../../config/env.js';
 import { logger } from '../../../config/logger.js';
 import { emitSessionEvent } from '../../realtime/socket.js';
 import { hardwareLibraryService } from '../../hardware/hardware-library.service.js';
-import { persistNewVersion } from '../version.service.js';
+import { persistNewVersion, proposalCardText, proposeVersion } from '../version.service.js';
 import { GENERATION_HOLD_MESSAGE } from '../pipeline/sufficiency-gate.js';
 import { NonRetryablePipelineError, PipelineExecutionOptions, PipelineExecutionResult } from '../pipeline/orchestrator.js';
 import { catalogueLine, PrototypeResolverError, RESOLVER_TASK_CASE, resolvePrototype, retrieveCatalogue } from './prototype-resolver.js';
@@ -288,15 +288,9 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     // Quick-refinement chips, minus anything this bench already received (same rule as Architect).
     const appliedLineage = await getAppliedChangeLineage(sessionId);
     const quickRefinements = filterAppliedSuggestions(output.suggestedRefinements, [...appliedLineage, ...(revisionNotes ? [revisionNotes] : [])]).slice(0, 5);
-    const { versionTag } = await persistNewVersion({
-      sessionId,
-      designGraph: composition,
-      architecture: payload,
-      changeSummary,
-      // The request is kept first so quick-refinement filtering still sees what was asked for.
-      appliedChanges: revisionNotes ? [revisionNotes.slice(0, 500), ...changesApplied] : ['Initial prototype assembled'],
-      sessionStatus: 'DONE',
-      buildChatMessage: (tag) => ({
+    // The request is kept first so quick-refinement filtering still sees what was asked for.
+    const appliedChanges = revisionNotes ? [revisionNotes.slice(0, 500), ...changesApplied] : ['Initial prototype assembled'];
+    const versionCard = (tag: string) => ({
         content: summaryMessage(payload, tag, sourcing, changesApplied),
         metadata: {
           versionTag: tag,
@@ -320,7 +314,41 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
           validationPass: counts.BLOCKER === 0,
           executionSteps,
         },
-      }),
+      });
+
+    // Manual apply mode: the revision waits for the user's approval; the bench is untouched.
+    if (current && revisionNotes && options.applyMode === 'manual') {
+      const baseVersionTag = current.versionTag ?? null;
+      const checks = `**Checks after the change**: ${counts.PASS} passed · ${counts.BLOCKER} failed · ${counts.UNKNOWN} unverified · ${counts.WARNING} warning`;
+      await proposeVersion({
+        sessionId,
+        designGraph: composition,
+        architecture: payload,
+        changeSummary,
+        appliedChanges,
+        sessionStatus: 'DONE',
+        buildChatMessage: versionCard,
+        baseVersionTag,
+        proposalCard: {
+          content: proposalCardText(baseVersionTag, changesApplied, ['', checks]),
+          metadata: { sessionType: 'prototype', executionSteps },
+          pendingChange: { changes: changesApplied, changeSummary, checks: counts, modules: payload.instances.length },
+        },
+      });
+      log.info({ baseVersionTag }, 'Prototype revision saved as a proposal awaiting approval');
+      // Same client handling as a clarification: the chat is re-read, the canvas stays as it is.
+      emitSessionEvent.clarificationNeeded(sessionId, []);
+      return { status: 'clarification_needed', questions: [] };
+    }
+
+    const { versionTag } = await persistNewVersion({
+      sessionId,
+      designGraph: composition,
+      architecture: payload,
+      changeSummary,
+      appliedChanges,
+      sessionStatus: 'DONE',
+      buildChatMessage: versionCard,
     });
 
     payload.versionTag = versionTag;

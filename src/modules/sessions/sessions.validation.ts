@@ -1,11 +1,17 @@
 import { z } from 'zod';
 import { SESSION_TYPES } from './session-type.js';
+import { APPLY_MODES } from './version.service.js';
 
 /** architect (default) | prototype. Omitted on /discuss = keep the session's own type. */
 export const sessionTypeSchema = z.enum(SESSION_TYPES);
 
 export const sessionIdParamSchema = z.object({
   id: z.string().uuid('Invalid session UUID format'),
+});
+
+export const proposalParamSchema = z.object({
+  id: z.string().uuid('Invalid session UUID format'),
+  proposalId: z.string().uuid('Invalid proposal UUID format'),
 });
 
 export const versionParamSchema = z.object({
@@ -29,6 +35,8 @@ export const discussMessageSchema = z.object({
 export const discussSchema = z.object({
   messages: z.array(discussMessageSchema).min(1, 'At least one message is required').max(30, 'Conversation history cannot exceed 30 messages'),
   type: sessionTypeSchema.optional(),
+  /** How a revision reaches the design: applied straight away (auto) or proposed for approval (manual). */
+  applyMode: z.enum(APPLY_MODES).optional(),
 });
 
 export const feedbackSchema = z.object({

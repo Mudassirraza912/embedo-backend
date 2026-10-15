@@ -25,23 +25,115 @@ import { fetchVendorPage, isAllowedVendorUrl, VendorPage } from './vendor-page.j
 export const SOURCING_TASK_CASE = 'X';
 const MAX_PRODUCTS = 4;
 
+/**
+ * Model output is trimmed to fit, never rejected for length: a fifth note or a long summary is not
+ * a reason to throw away a board whose pinout was read correctly (seen on prod 2026-10-15: most
+ * sourced boards failed on "notes: at most 4" and similar, so new projects found no boards).
+ */
+const clip = (max: number) => z.preprocess((v) => (typeof v === 'string' ? v.trim().slice(0, max) : v), z.string().max(max));
+const list = <T extends z.ZodTypeAny>(item: T, max: number) =>
+  z.preprocess((v) => (v == null ? [] : Array.isArray(v) ? v.slice(0, max) : [v]), z.array(item).max(max));
+const optionalClip = (max: number) => z.preprocess((v) => (typeof v === 'string' ? v.trim().slice(0, max) || null : v), z.string().max(max).nullable().optional());
+
 const productSchema = z.object({
-  role: z.enum(['controller', 'module']),
-  need: z.string().max(200),
+  // Anything that is not the controller is a module ("sensor", "breakout", ...).
+  role: z.preprocess((v) => (v === 'controller' ? 'controller' : 'module'), z.enum(['controller', 'module'])),
+  need: clip(200).default(''),
   product_name: z.string().min(2).max(160),
   vendor: z.string().min(2).max(80),
-  vendor_sku: z.string().max(60).nullable().optional(),
-  product_url: z.string().max(500).nullable().optional(),
-  reason: z.string().max(300).default(''),
+  vendor_sku: optionalClip(60),
+  product_url: optionalClip(500),
+  reason: clip(300).default(''),
 });
 
 const proposalOutputSchema = z.object({
   isPrototypeRequest: z.boolean().default(true),
-  understanding: z.string().max(600).default(''),
-  products: z.array(productSchema).max(MAX_PRODUCTS).default([]),
+  understanding: clip(600).default(''),
+  products: list(productSchema, MAX_PRODUCTS).default([]),
 });
 
 const pinNameRe = /^[A-Za-z0-9][A-Za-z0-9_.+\-/]{0,23}$/;
+
+/** A pin reference as a short silkscreen label: "GPIO 0" -> "GPIO_0", {name:"SDA"} -> "SDA". */
+export const pinLabel = (raw: unknown): string | null => {
+  const text =
+    typeof raw === 'string'
+      ? raw
+      : raw && typeof raw === 'object'
+        ? ((raw as Record<string, unknown>).name ?? (raw as Record<string, unknown>).pin ?? (raw as Record<string, unknown>).label)
+        : null;
+  if (typeof text !== 'string') return null;
+  const label = text
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^A-Za-z0-9_.+\-/]/g, '')
+    .replace(/^[^A-Za-z0-9]+/, '')
+    .slice(0, 24);
+  return label || null;
+};
+
+/**
+ * Repairs what is only presentation in extracted facts, never an electrical fact: unwraps
+ * {"facts": {...}}, normalises pin labels everywhere they are referenced, drops duplicate pins
+ * and connector entries naming pins that do not exist, puts pins found on no connector on an
+ * extra header, turns a "STEMMA QT" connector without 4 pins into a plain header, and keeps only
+ * known categories. Pins themselves, their classes, directions and voltages are left as given.
+ */
+export function normaliseFacts(raw: unknown): unknown {
+  let f = raw;
+  if (Array.isArray(f)) f = f[0];
+  if (f && typeof f === 'object' && !('pins' in f)) {
+    const inner = Object.values(f as Record<string, unknown>).find((v) => v && typeof v === 'object' && !Array.isArray(v) && 'pins' in (v as object));
+    if (inner) f = inner;
+  }
+  if (!f || typeof f !== 'object') return f;
+  const out: Record<string, unknown> = { ...(f as Record<string, unknown>) };
+
+  const seen = new Set<string>();
+  const pins: unknown[] = [];
+  for (const p of Array.isArray(out.pins) ? out.pins : []) {
+    const name = pinLabel(p);
+    if (!name || seen.has(name.toUpperCase())) continue;
+    seen.add(name.toUpperCase());
+    pins.push(typeof p === 'string' ? name : { ...(p as Record<string, unknown>), name });
+  }
+  out.pins = pins;
+
+  const placed = new Set<string>();
+  const connectors: Array<Record<string, unknown>> = [];
+  for (const c of Array.isArray(out.connectors) ? out.connectors : []) {
+    if (!c || typeof c !== 'object') continue;
+    const conn = c as Record<string, unknown>;
+    const names = (Array.isArray(conn.pins) ? conn.pins : [])
+      .map(pinLabel)
+      .filter((n): n is string => Boolean(n) && seen.has(n!.toUpperCase()) && !placed.has(n!.toUpperCase()));
+    if (names.length === 0) continue;
+    names.forEach((n) => placed.add(n.toUpperCase()));
+    const kind = conn.kind === 'stemma_qt' && names.length !== 4 ? 'header' : conn.kind;
+    connectors.push({ ...conn, kind, pins: names.slice(0, 48), ref: typeof conn.ref === 'string' && conn.ref.trim() ? conn.ref : `J${connectors.length + 1}` });
+  }
+  const loose = pins.map(pinLabel).filter((n): n is string => Boolean(n) && !placed.has(n!.toUpperCase()));
+  for (let i = 0; i < loose.length; i += 48) connectors.push({ ref: `J${connectors.length + 1}`, kind: 'header', pins: loose.slice(i, i + 48) });
+  out.connectors = connectors.slice(0, 8);
+
+  if (Array.isArray(out.interfaces)) {
+    out.interfaces = out.interfaces.map((i) => {
+      if (!i || typeof i !== 'object') return i;
+      const iface = { ...(i as Record<string, unknown>) };
+      for (const key of ['sda', 'scl', 'sck', 'mosi', 'miso', 'cs', 'tx', 'rx']) {
+        if (iface[key] == null) continue;
+        const name = pinLabel(iface[key]);
+        iface[key] = name && seen.has(name.toUpperCase()) ? name : null;
+      }
+      return iface;
+    });
+  }
+  if (Array.isArray(out.functional_categories)) {
+    const known = out.functional_categories.filter((c) => (FUNCTIONAL_CATEGORIES as readonly unknown[]).includes(c));
+    out.functional_categories = known.length > 0 ? known : out.functional_categories;
+  }
+  return out;
+}
 
 /** Models sometimes list a pin as a bare name; classify it from the name instead of rejecting the board. */
 const pinFromName = (raw: unknown): unknown => {
@@ -64,14 +156,14 @@ export const factsSchema = z.object({
   vendor_sku: z.string().max(60).nullable().optional(),
   is_controller: z.boolean().default(false),
   functional_categories: z.array(z.enum(FUNCTIONAL_CATEGORIES)).min(1),
-  prototype_role: z.string().max(120),
-  main_silicon: z.string().max(80).nullable().optional(),
-  secondary_ics: z.array(z.string().max(80)).max(8).default([]),
+  prototype_role: clip(120),
+  main_silicon: optionalClip(80),
+  secondary_ics: list(clip(80), 8).default([]),
   supply_voltage_min_v: z.number().min(0).max(60).nullable().optional(),
   supply_voltage_max_v: z.number().min(0).max(60).nullable().optional(),
-  logic_level_summary: z.string().max(80).nullable().optional(),
-  power_source_types: z.array(z.string().max(40)).max(6).default([]),
-  required_host_interfaces: z.array(z.string().max(40)).max(4).default([]),
+  logic_level_summary: optionalClip(80),
+  power_source_types: list(clip(40), 6).default([]),
+  required_host_interfaces: list(clip(40), 4).default([]),
   /** Power modules (chargers, regulators, battery packs) are not driven by the controller. */
   host_requirement: z.enum(['standalone', 'host_required', 'optional_host']).optional(),
   pins: z
@@ -80,8 +172,8 @@ export const factsSchema = z.object({
         name: z.string().regex(pinNameRe, 'pin names are short silkscreen labels'),
         signal_class: z.enum(SIGNAL_CLASSES),
         direction: z.enum(DIRECTIONS),
-        voltage_domain: z.string().max(12).nullable().optional(),
-        functions: z.array(z.string().max(24)).max(12).default([]),
+        voltage_domain: optionalClip(12),
+        functions: list(clip(24), 12).default([]),
       }))
     )
     .min(2)
@@ -101,9 +193,9 @@ export const factsSchema = z.object({
   interfaces: z
     .array(
       z.object({
-        type: z.string().max(20),
-        role: z.string().max(20).nullable().optional(),
-        addresses: z.array(z.string().max(8)).max(8).default([]),
+        type: clip(20),
+        role: optionalClip(20),
+        addresses: list(clip(8), 8).default([]),
         sda: z.string().nullable().optional(),
         scl: z.string().nullable().optional(),
         sck: z.string().nullable().optional(),
@@ -116,8 +208,8 @@ export const factsSchema = z.object({
     )
     .max(8)
     .default([]),
-  required_accessories: z.array(z.string().max(120)).max(4).default([]),
-  notes: z.array(z.string().max(240)).max(4).default([]),
+  required_accessories: list(clip(120), 4).default([]),
+  notes: list(clip(240), 4).default([]),
   facts_source: z.enum(['vendor_page', 'model_knowledge']),
 });
 
@@ -381,10 +473,12 @@ async function extractFacts(sessionId: string, product: z.infer<typeof productSc
       userPrompt,
       sessionId,
       jsonMode: true,
-      maxTokens: 4096,
+      // A 40-pin controller with functions per pin overran 4096 tokens: the JSON was cut off and
+      // read as nothing ("(: Required)"), so the Pico could never be sourced.
+      maxTokens: 12000,
     });
   const evaluate = (content: string) => {
-    const parsed = factsSchema.safeParse(safeParseJson(content));
+    const parsed = factsSchema.safeParse(normaliseFacts(safeParseJson(content)));
     if (!parsed.success) return { problems: parsed.error.issues.slice(0, 8).map((i) => `${i.path.join('.')}: ${i.message}`) };
     const problems = checkFacts(parsed.data);
     return problems.length === 0 ? { facts: parsed.data, problems } : { problems };

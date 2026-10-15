@@ -65,6 +65,22 @@ describe('prototype resolver contract', () => {
     expect(resolverOutputSchema.parse(valid).suggestedRefinements).toEqual([]);
   });
 
+  it('trims long prose instead of rejecting the selection (dev failure, 2026-10-15)', () => {
+    const out = resolverOutputSchema.parse({
+      ...valid,
+      notes: 'n'.repeat(900),
+      understanding: 'u'.repeat(900),
+      gaps: [{ category: 'Storage', need: 'x'.repeat(300), suggestion: 's'.repeat(400) }],
+      suggestedRefinements: Array.from({ length: 9 }, (_, i) => `Refinement ${i} `.repeat(8)),
+    });
+    expect(out.notes).toHaveLength(600);
+    expect(out.understanding).toHaveLength(600);
+    expect(out.gaps[0]!.suggestion).toHaveLength(200);
+    expect(out.suggestedRefinements).toHaveLength(6);
+    expect(out.suggestedRefinements.every((r) => r.length <= 60)).toBe(true);
+    expect(validateResolverOutput(out, byId)).toEqual([]);
+  });
+
   it('accepts a valid selection', () => {
     expect(validateResolverOutput(resolverOutputSchema.parse(valid), byId)).toEqual([]);
   });

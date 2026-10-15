@@ -24,9 +24,12 @@ import {
  * channel beside the board first when the pin faces sideways), runs along the track and climbs to
  * the other anchor. Channels get one lane per net, ordered so escapes from one board never cross.
  * Output is absolute geometry the frontend and the SVG exporter draw directly over the library art.
+ *
+ * A bench too wide for one backbone wraps into stacked bands (layout v3): each band has its own
+ * rows and tracks; a net with pads in several bands gets a track in each, same name and colour.
  */
 
-export const LAYOUT_VERSION = 2;
+export const LAYOUT_VERSION = 3;
 
 /** Per-class shades: tracks of one class (e.g. SDA / SCL) get neighbouring but distinct colours. */
 export const NET_SHADES: Record<NetClass | 'cable', string[]> = {
@@ -179,7 +182,31 @@ interface LaneRequest {
   sortKey: number;
 }
 
+/** Clear space between one band's lowest escape and the next band's highest. */
+const BAND_GAP = 72;
+/** A bench narrower than this stays on one backbone. */
+const SINGLE_BAND_MAX_WIDTH = 1800;
+/** Wider benches wrap into the band count whose width:height is closest to this (landscape canvas). */
+const TARGET_RATIO = 1.3;
+const MAX_BANDS = 6;
+
+/**
+ * Lays the bench out on one backbone, or, when that gets too wide, wraps it into stacked bands
+ * (each band: a top row, its own tracks, a bottom row) so the drawing grows down as well as across.
+ */
 export function layoutPrototype(input: LayoutInput): ModuleDiagram {
+  let best = layoutBands(input, 1);
+  if (best.width <= SINGLE_BAND_MAX_WIDTH) return best;
+  const score = (d: ModuleDiagram) => Math.abs(Math.log(d.width / d.height / TARGET_RATIO));
+  for (let k = 2; k <= MAX_BANDS; k++) {
+    const next = layoutBands(input, k);
+    if (score(next) < score(best)) best = next;
+    if ((next.bands ?? 1) < k) break; // fewer board groups than bands: nothing left to split
+  }
+  return best;
+}
+
+function layoutBands(input: LayoutInput, bandCount: number): ModuleDiagram {
   const controller = input.instances.find((i) => i.isController) ?? null;
   const peripherals = input.instances.filter((i) => i !== controller);
   const visible = input.connections.filter((c) => c.state === 'drawn' || c.state === 'blocked' || (c.state === 'proposed' && input.drawProposed));
@@ -218,7 +245,6 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     label: string;
     color: string;
     y: number;
-    connectionIds: string[];
     allDashed: boolean;
     allBlocked: boolean;
   }
@@ -227,14 +253,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
   for (const c of visible) {
     const id = c.kind === 'cable' ? `cable:${c.id}` : `net:${c.netIds[0] ?? c.id}`;
     trackOfConnection.set(c.id, id);
-    const existing = tracks.get(id);
-    const dashed = c.state !== 'drawn';
-    if (existing) {
-      existing.connectionIds.push(c.id);
-      existing.allDashed = existing.allDashed && dashed;
-      existing.allBlocked = existing.allBlocked && c.state === 'blocked';
-      continue;
-    }
+    if (tracks.has(id)) continue;
     const net = c.kind === 'wire' ? netById.get(c.netIds[0] ?? '') : undefined;
     tracks.set(id, {
       id,
@@ -244,9 +263,8 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
       label: c.kind === 'cable' ? 'STEMMA QT' : (net?.name ?? c.netIds[0] ?? c.id),
       color: '',
       y: 0,
-      connectionIds: [c.id],
-      allDashed: dashed,
-      allBlocked: c.state === 'blocked',
+      allDashed: true,
+      allBlocked: true,
     });
   }
   const orderedTracks = [...tracks.values()].sort(
@@ -255,6 +273,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
       a.label.localeCompare(b.label, 'en', { numeric: true }) ||
       a.id.localeCompare(b.id)
   );
+  const baseOrder = new Map(orderedTracks.map((t, k) => [t.id, k]));
   const shadeIndex = new Map<string, number>();
   for (const t of orderedTracks) {
     const k = shadeIndex.get(t.netClass) ?? 0;
@@ -263,22 +282,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     shadeIndex.set(t.netClass, k + 1);
   }
 
-  // Endpoints per instance (an anchor on one track is one tap, however many connections share it).
-  const endpointsOf = new Map<string, Endpoint[]>();
-  const addEndpoint = (e: Endpoint) => {
-    const list = endpointsOf.get(e.instanceId) ?? [];
-    if (!list.some((x) => x.anchorId === e.anchorId && x.trackId === e.trackId)) list.push(e);
-    endpointsOf.set(e.instanceId, list);
-  };
-  for (const c of visible) {
-    const trackId = trackOfConnection.get(c.id)!;
-    addEndpoint({ instanceId: c.from.instanceId, anchorId: c.from.anchorId, trackId });
-    addEndpoint({ instanceId: c.to.instanceId, anchorId: c.to.anchorId, trackId });
-  }
-
-  // --- rows: boards whose pins face up hang under the backbone, everything else sits on it ---------
-  const rowOf = new Map<string, Row>();
-  if (controller) rowOf.set(controller.instanceId, 'top');
+  // --- which side of the controller each board belongs on, and which board hosts it ----------------
   const sideVote = new Map<string, number>(); // < 0: left of the controller, > 0: right
   const hostOf = new Map<string, string>();
   for (const c of input.connections) {
@@ -299,6 +303,86 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     if (v !== 0 || depth > 16 || !hostOf.has(id)) return v;
     return voteOf(hostOf.get(id)!, depth + 1);
   };
+
+  // --- bands: boards are grouped with the boards they host (a cable chain never splits) -----------
+  const rootOf = (id: string): string => {
+    let cur = id;
+    for (let d = 0; d < 16 && hostOf.has(cur); d++) cur = hostOf.get(cur)!;
+    return cur;
+  };
+  const groups = new Map<string, LayoutInstance[]>();
+  for (const p of peripherals) {
+    const r = rootOf(p.instanceId);
+    groups.set(r, [...(groups.get(r) ?? []), p]);
+  }
+  const groupList = [...groups.values()];
+  const spanOf = (list: LayoutInstance[]) => list.reduce((n, i) => n + contentSize(i).width + MIN_GAP, 0);
+  // The controller also needs a channel lane beside it for most of its wired pins.
+  const controllerPins = controller
+    ? new Set(visible.flatMap((c) => [c.from, c.to].filter((e) => e.instanceId === controller.instanceId).map((e) => e.anchorId))).size
+    : 0;
+  const controllerSpan = controller ? spanOf([controller]) + controllerPins * LANE_PITCH : 0;
+  const bandsWanted = Math.max(1, Math.min(bandCount, groupList.length + (controller ? 1 : 0)));
+  const perBand = (controllerSpan + groupList.reduce((n, g) => n + spanOf(g), 0)) / bandsWanted || 1;
+  const bandOf = new Map<string, number>();
+  if (controller) bandOf.set(controller.instanceId, 0);
+  let acc = controllerSpan;
+  for (const g of groupList) {
+    const w = spanOf(g);
+    const band = Math.min(bandsWanted - 1, Math.floor((acc + w / 2) / perBand));
+    for (const i of g) bandOf.set(i.instanceId, band);
+    acc += w;
+  }
+  const usedBands = [...new Set(bandOf.values())].sort((a, b) => a - b);
+  for (const [id, b] of bandOf) bandOf.set(id, usedBands.indexOf(b));
+  const bands = Math.max(1, usedBands.length);
+  const bandOfInst = (id: string) => bandOf.get(id) ?? 0;
+
+  // A cable between two bands is drawn as a track in each; numbered so the two halves pair up.
+  let crossCables = 0;
+  for (const c of visible) {
+    if (c.kind !== 'cable' || bandOfInst(c.from.instanceId) === bandOfInst(c.to.instanceId)) continue;
+    tracks.get(trackOfConnection.get(c.id)!)!.label = `STEMMA QT ${++crossCables}`;
+  }
+
+  // --- band tracks: a net gets a track in every band that has one of its pads ----------------------
+  interface BandTrack extends Track {
+    band: number;
+    baseId: string;
+  }
+  const bandTracks = new Map<string, BandTrack>();
+  const bandTrackId = (band: number, baseId: string) => {
+    const id = `${band}~${baseId}`;
+    if (!bandTracks.has(id)) bandTracks.set(id, { ...tracks.get(baseId)!, id, y: 0, band, baseId });
+    return id;
+  };
+
+  // Endpoints per instance (an anchor on one track is one tap, however many connections share it).
+  const endpointsOf = new Map<string, Endpoint[]>();
+  const endTracks = new Map<string, { from: string; to: string }>();
+  const addEndpoint = (e: Endpoint) => {
+    const list = endpointsOf.get(e.instanceId) ?? [];
+    if (!list.some((x) => x.anchorId === e.anchorId && x.trackId === e.trackId)) list.push(e);
+    endpointsOf.set(e.instanceId, list);
+  };
+  for (const c of visible) {
+    const baseId = trackOfConnection.get(c.id)!;
+    const from = bandTrackId(bandOfInst(c.from.instanceId), baseId);
+    const to = bandTrackId(bandOfInst(c.to.instanceId), baseId);
+    endTracks.set(c.id, { from, to });
+    for (const id of new Set([from, to, baseId])) {
+      const t = id === baseId ? tracks.get(id)! : bandTracks.get(id)!;
+      t.allDashed = t.allDashed && c.state !== 'drawn';
+      t.allBlocked = t.allBlocked && c.state === 'blocked';
+    }
+    addEndpoint({ instanceId: c.from.instanceId, anchorId: c.from.anchorId, trackId: from });
+    addEndpoint({ instanceId: c.to.instanceId, anchorId: c.to.anchorId, trackId: to });
+  }
+
+  // --- rows: boards whose pins face up hang under their band's tracks, everything else sits on them -
+  const rk = (band: number, row: Row) => `${band}|${row}`;
+  const rowOf = new Map<string, Row>();
+  if (controller) rowOf.set(controller.instanceId, 'top');
   const unplaced: LayoutInstance[] = [];
   for (const p of peripherals) {
     const eps = endpointsOf.get(p.instanceId) ?? [];
@@ -309,30 +393,39 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     const up = eps.filter((e) => anchorEdge(p, e.anchorId) === 'top').length;
     rowOf.set(p.instanceId, up > eps.length - up ? 'bottom' : 'top');
   }
-  const rowWidth = (row: Row) =>
-    input.instances.filter((i) => rowOf.get(i.instanceId) === row).reduce((n, i) => n + contentSize(i).width + MIN_GAP, 0);
-  for (const p of unplaced) rowOf.set(p.instanceId, rowWidth('top') <= rowWidth('bottom') + 240 ? 'top' : 'bottom');
+  const rowWidth = (band: number, row: Row) =>
+    input.instances.filter((i) => bandOfInst(i.instanceId) === band && rowOf.get(i.instanceId) === row).reduce((n, i) => n + contentSize(i).width + MIN_GAP, 0);
+  for (const p of unplaced) {
+    const band = bandOfInst(p.instanceId);
+    rowOf.set(p.instanceId, rowWidth(band, 'top') <= rowWidth(band, 'bottom') + 240 ? 'top' : 'bottom');
+  }
 
-  const rowList = (row: Row): LayoutInstance[] => {
-    const members = peripherals.filter((p) => rowOf.get(p.instanceId) === row);
-    const left = members.filter((p) => voteOf(p.instanceId) < 0);
-    const right = members.filter((p) => voteOf(p.instanceId) > 0);
-    const neutral = members.filter((p) => voteOf(p.instanceId) === 0);
-    // Neutral boards balance the two sides of the controller.
-    for (const p of neutral) (left.length <= right.length ? left : right).push(p);
-    const sorted = (list: LayoutInstance[]) => list; // composition order is already meaningful
-    if (row === 'top' && controller) return [...sorted(left), controller, ...sorted(right)];
-    return [...sorted(left), ...sorted(right)];
-  };
-  const rows: Record<Row, LayoutInstance[]> = { top: rowList('top'), bottom: rowList('bottom') };
+  const rows = new Map<string, LayoutInstance[]>();
+  for (let band = 0; band < bands; band++) {
+    for (const row of ['top', 'bottom'] as Row[]) {
+      const members = peripherals.filter((p) => bandOfInst(p.instanceId) === band && rowOf.get(p.instanceId) === row);
+      const left = members.filter((p) => voteOf(p.instanceId) < 0);
+      const right = members.filter((p) => voteOf(p.instanceId) > 0);
+      const neutral = members.filter((p) => voteOf(p.instanceId) === 0);
+      // Neutral boards balance the two sides of the controller. Composition order is kept.
+      for (const p of neutral) (left.length <= right.length ? left : right).push(p);
+      rows.set(rk(band, row), band === 0 && row === 'top' && controller ? [...left, controller, ...right] : [...left, ...right]);
+    }
+  }
+  const keyOf = (inst: LayoutInstance) => rk(bandOfInst(inst.instanceId), rowOf.get(inst.instanceId)!);
 
   // --- channel lanes: which gap and which side of it each sideways escape uses ---------------------
-  const laneRequests: Record<Row, LaneRequest[]> = { top: [], bottom: [] };
-  /** Around-the-board escapes (pins facing away from the backbone): depth per anchor. */
+  const laneRequests = new Map<string, LaneRequest[]>();
+  /** Around-the-board escapes (pins facing away from the tracks): depth per anchor. */
   const aroundDepth = new Map<string, number>();
+  /** Deepest around-the-board escape per row (count of levels), for the space between bands. */
+  const aroundLevels = new Map<string, number>();
   const epKey = (instanceId: string, anchorId: string, trackId: string) => `${instanceId}|${anchorId}|${trackId}`;
-  for (const row of ['top', 'bottom'] as Row[]) {
-    rows[row].forEach((inst, index) => {
+  for (const [key, list] of rows) {
+    const row = key.endsWith('|top') ? 'top' : 'bottom';
+    const requests: LaneRequest[] = [];
+    laneRequests.set(key, requests);
+    list.forEach((inst, index) => {
       const { width } = artSize(inst);
       const eps = endpointsOf.get(inst.instanceId) ?? [];
       const away: Edge = row === 'top' ? 'top' : 'bottom';
@@ -342,7 +435,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
         const edge = anchorEdge(inst, ep.anchorId);
         if (!a || !edge) continue;
         if (edge === 'left' || edge === 'right') {
-          laneRequests[row].push({
+          requests.push({
             gap: edge === 'left' ? index : index + 1,
             portion: edge === 'left' ? 'R' : 'L',
             trackId: ep.trackId,
@@ -361,16 +454,18 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
           .sort((p, q) => p.dist - q.dist)
           .forEach((r, depth) => {
             aroundDepth.set(epKey(r.ep.instanceId, r.ep.anchorId, r.ep.trackId), depth);
-            laneRequests[row].push({ gap: r.gap, portion: r.portion, trackId: r.ep.trackId, sortKey: -1e6 - depth });
+            aroundLevels.set(key, Math.max(aroundLevels.get(key) ?? 0, depth + 1));
+            requests.push({ gap: r.gap, portion: r.portion, trackId: r.ep.trackId, sortKey: -1e6 - depth });
           });
       }
     });
   }
-  /** lanes[row][gap] = { L: trackIds outer→inner, R: trackIds outer→inner } */
-  const lanesOf = (row: Row) => {
-    const out: Array<{ L: string[]; R: string[] }> = Array.from({ length: rows[row].length + 1 }, () => ({ L: [], R: [] }));
+  /** lanes[key][gap] = { L: trackIds outer→inner, R: trackIds outer→inner } */
+  const lanes = new Map<string, Array<{ L: string[]; R: string[] }>>();
+  for (const [key, list] of rows) {
+    const out: Array<{ L: string[]; R: string[] }> = Array.from({ length: list.length + 1 }, () => ({ L: [], R: [] }));
     const best = new Map<string, LaneRequest>();
-    for (const r of laneRequests[row]) {
+    for (const r of laneRequests.get(key)!) {
       const k = `${r.gap}|${r.portion}|${r.trackId}`;
       const cur = best.get(k);
       if (!cur || r.sortKey < cur.sortKey) best.set(k, r);
@@ -378,57 +473,70 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     for (const r of [...best.values()].sort((a, b) => a.sortKey - b.sortKey || a.trackId.localeCompare(b.trackId))) {
       out[r.gap]![r.portion].push(r.trackId);
     }
-    return out;
-  };
-  const lanes = { top: lanesOf('top'), bottom: lanesOf('bottom') };
+    lanes.set(key, out);
+  }
 
   // --- horizontal placement --------------------------------------------------------------------------
   const pillW = Math.max(0, ...orderedTracks.map((t) => t.label.length * PILL.charW + 2 * PILL.padX));
   const trackStart = PAD + pillW;
   const boxes = new Map<string, Box>(); // content boxes
-  const laneX = new Map<string, number>(); // `${row}|${gap}|${portion}|${trackId}` -> x
+  const laneX = new Map<string, number>(); // `${key}|${gap}|${portion}|${trackId}` -> x
   const gapWidth = (g: { L: string[]; R: string[] }, edgeGap: boolean) => {
     const n = g.L.length + g.R.length;
     if (n === 0) return edgeGap ? PILL.gap + 20 : MIN_GAP;
     return Math.max(edgeGap ? 0 : MIN_GAP, 2 * LANE_MARGIN + (n - 1) * LANE_PITCH + (g.L.length > 0 && g.R.length > 0 ? LANE_PITCH : 0));
   };
-  const placeRow = (row: Row): number => {
+  const rightOf = new Map<string, number>();
+  for (const [key, list] of rows) {
     let x = trackStart;
-    const list = rows[row];
+    const rowLanes = lanes.get(key)!;
     list.forEach((inst, i) => {
-      const g = lanes[row][i]!;
+      const g = rowLanes[i]!;
       const w = gapWidth(g, i === 0);
-      g.L.forEach((t, k) => laneX.set(`${row}|${i}|L|${t}`, x + LANE_MARGIN + (g.L.length - 1 - k) * LANE_PITCH));
-      g.R.forEach((t, k) => laneX.set(`${row}|${i}|R|${t}`, x + w - LANE_MARGIN - (g.R.length - 1 - k) * LANE_PITCH));
+      g.L.forEach((t, k) => laneX.set(`${key}|${i}|L|${t}`, x + LANE_MARGIN + (g.L.length - 1 - k) * LANE_PITCH));
+      g.R.forEach((t, k) => laneX.set(`${key}|${i}|R|${t}`, x + w - LANE_MARGIN - (g.R.length - 1 - k) * LANE_PITCH));
       x += w;
       const size = contentSize(inst);
       boxes.set(inst.instanceId, { x, y: 0, ...size });
       x += size.width;
     });
-    const last = lanes[row][list.length]!;
+    const last = rowLanes[list.length]!;
     if (list.length > 0 && last.L.length > 0) {
-      last.L.forEach((t, k) => laneX.set(`${row}|${list.length}|L|${t}`, x + LANE_MARGIN + (last.L.length - 1 - k) * LANE_PITCH));
+      last.L.forEach((t, k) => laneX.set(`${key}|${list.length}|L|${t}`, x + LANE_MARGIN + (last.L.length - 1 - k) * LANE_PITCH));
       x += 2 * LANE_MARGIN + (last.L.length - 1) * LANE_PITCH;
     }
-    return x;
-  };
-  const topRight = placeRow('top');
-  const bottomBoardsRight = placeRow('bottom');
-
-  // --- vertical placement: top row bottom-aligned on the backbone, bottom row hangs under it --------
-  const topRowH = Math.max(0, ...rows.top.map((i) => contentSize(i).height));
-  for (const inst of rows.top) {
-    const b = boxes.get(inst.instanceId)!;
-    b.y = CONTENT_TOP + topRowH - b.height;
+    rightOf.set(key, x);
   }
-  const firstTrackY = CONTENT_TOP + topRowH + (rows.top.length > 0 ? ROW_GAP : 0);
-  orderedTracks.forEach((t, k) => (t.y = firstTrackY + k * TRACK_PITCH));
-  const lastTrackY = orderedTracks.length > 0 ? firstTrackY + (orderedTracks.length - 1) * TRACK_PITCH : firstTrackY - ROW_GAP;
-  const bottomRowY = lastTrackY + ROW_GAP;
-  for (const inst of rows.bottom) boxes.get(inst.instanceId)!.y = bottomRowY;
+
+  // --- vertical placement, band by band: top row bottom-aligned on the band's tracks, bottom row
+  // hangs under them; the next band starts below the deepest escape -------------------------------
+  const escapeOf = (key: string) => {
+    const n = aroundLevels.get(key) ?? 0;
+    return n > 0 ? ESCAPE + (n - 1) * ESCAPE_STEP : 0;
+  };
+  let cursor = CONTENT_TOP;
+  let bottomRowY = CONTENT_TOP;
+  let lastTrackY = CONTENT_TOP;
+  for (let band = 0; band < bands; band++) {
+    const top = rows.get(rk(band, 'top'))!;
+    const bottom = rows.get(rk(band, 'bottom'))!;
+    if (band > 0) cursor += escapeOf(rk(band, 'top'));
+    const topH = Math.max(0, ...top.map((i) => contentSize(i).height));
+    for (const inst of top) {
+      const b = boxes.get(inst.instanceId)!;
+      b.y = cursor + topH - b.height;
+    }
+    const firstTrackY = cursor + topH + (top.length > 0 ? ROW_GAP : 0);
+    const own = [...bandTracks.values()].filter((t) => t.band === band).sort((a, b) => baseOrder.get(a.baseId)! - baseOrder.get(b.baseId)!);
+    own.forEach((t, k) => (t.y = firstTrackY + k * TRACK_PITCH));
+    lastTrackY = own.length > 0 ? firstTrackY + (own.length - 1) * TRACK_PITCH : firstTrackY - ROW_GAP;
+    bottomRowY = lastTrackY + ROW_GAP;
+    for (const inst of bottom) boxes.get(inst.instanceId)!.y = bottomRowY;
+    const bottomH = Math.max(0, ...bottom.map((i) => contentSize(i).height));
+    cursor = (bottom.length > 0 ? bottomRowY + bottomH + escapeOf(rk(band, 'bottom')) : lastTrackY) + BAND_GAP;
+  }
 
   // --- legs: anchor -> track tap ---------------------------------------------------------------------
-  const rowIndex = (inst: LayoutInstance) => rows[rowOf.get(inst.instanceId)!].indexOf(inst);
   const absAnchor = (instanceId: string, anchorId: string) => {
     const inst = instById.get(instanceId);
     const box = boxes.get(instanceId);
@@ -442,14 +550,15 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     const key = epKey(instanceId, anchorId, trackId);
     if (legCache.has(key)) return legCache.get(key)!;
     const P = absAnchor(instanceId, anchorId);
-    const track = tracks.get(trackId)!;
+    const track = bandTracks.get(trackId)!;
     let leg: Point[] | null = null;
     if (P) {
       const row = rowOf.get(instanceId)!;
-      const index = rowIndex(P.inst);
+      const rowKey = keyOf(P.inst);
+      const index = rows.get(rowKey)!.indexOf(P.inst);
       const T = track.y;
       const toward: Edge = row === 'top' ? 'bottom' : 'top';
-      const lane = (gap: number, portion: 'L' | 'R') => laneX.get(`${row}|${gap}|${portion}|${trackId}`);
+      const lane = (gap: number, portion: 'L' | 'R') => laneX.get(`${rowKey}|${gap}|${portion}|${trackId}`);
       if (P.edge === toward) {
         leg = [[P.x, P.y], [P.x, T]];
       } else if (P.edge === 'left' || P.edge === 'right') {
@@ -468,20 +577,20 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     return leg;
   };
 
-  // --- wires (one polyline per connection) and buses (one per track) -------------------------------
+  // --- wires (one polyline per connection) and buses (one per band track) --------------------------
   const wires: DiagramWire[] = [];
   const busTaps = new Map<string, DiagramBus['taps']>();
   for (const c of visible) {
-    const trackId = trackOfConnection.get(c.id)!;
-    const track = tracks.get(trackId)!;
-    const a = legOf(c.from.instanceId, c.from.anchorId, trackId);
-    const b = legOf(c.to.instanceId, c.to.anchorId, trackId);
+    const ends = endTracks.get(c.id)!;
+    const track = bandTracks.get(ends.from)!;
+    const a = legOf(c.from.instanceId, c.from.anchorId, ends.from);
+    const b = legOf(c.to.instanceId, c.to.anchorId, ends.to);
     if (!a || !b) continue;
     const dashed = c.state !== 'drawn';
     const blocked = c.state === 'blocked';
-    for (const [end, leg] of [
-      [c.from, a],
-      [c.to, b],
+    for (const [end, leg, trackId] of [
+      [c.from, a, ends.from],
+      [c.to, b, ends.to],
     ] as const) {
       const taps = busTaps.get(trackId) ?? [];
       const existing = taps.find((t) => t.instanceId === end.instanceId && t.anchorId === end.anchorId);
@@ -494,6 +603,8 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
       }
       busTaps.set(trackId, taps);
     }
+    // Across bands the wire follows its track to the start of each band (the tracks share a name).
+    const bridge: Point[] = ends.from === ends.to ? [] : [[trackStart, a[a.length - 1]![1]], [trackStart, b[b.length - 1]![1]]];
     wires.push({
       connectionId: c.id,
       kind: c.kind,
@@ -503,16 +614,24 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
       strokeWidth: c.kind === 'cable' ? 5 : track.netClass === 'power' || track.netClass === 'ground' ? 2.6 : 2.2,
       dashed,
       ...(blocked ? { blocked } : {}),
-      points: dedupe([...a, ...[...b].reverse()]),
-      busId: trackId,
+      points: dedupe([...a, ...bridge, ...[...b].reverse()]),
+      busId: ends.from,
     });
   }
-  const buses: DiagramBus[] = orderedTracks
+  const tapsPerBase = new Map<string, number>();
+  for (const [id, taps] of busTaps) {
+    const baseId = bandTracks.get(id)!.baseId;
+    tapsPerBase.set(baseId, (tapsPerBase.get(baseId) ?? 0) + taps.length);
+  }
+  const baseOfBus = new Map<string, string>();
+  const buses: DiagramBus[] = [...bandTracks.values()]
     .filter((t) => (busTaps.get(t.id) ?? []).length > 0)
+    .sort((a, b) => a.band - b.band || baseOrder.get(a.baseId)! - baseOrder.get(b.baseId)!)
     .map((t) => {
       const taps = busTaps.get(t.id)!.sort((p, q) => p.x - q.x);
+      baseOfBus.set(t.id, t.baseId);
       return {
-        busId: t.id,
+        busId: bands === 1 ? t.baseId : t.id,
         netId: t.netId,
         kind: t.kind,
         netClass: t.netClass,
@@ -525,40 +644,55 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
         labelWidth: r1(pillW),
         dashed: t.allDashed,
         ...(t.allBlocked ? { blocked: true } : {}),
-        shared: taps.length > 2,
+        shared: (tapsPerBase.get(t.baseId) ?? 0) > 2,
         taps,
       };
     });
+  if (bands === 1) for (const w of wires) w.busId = baseOfBus.get(w.busId!) ?? w.busId;
   const junctions: ModuleDiagram['junctions'] = buses.flatMap((b) => b.taps.map((t) => ({ x: r1(t.x), y: b.y, netId: b.netId, color: b.color })));
 
-  // --- bottom row extras: needs with no module, then the legend card -------------------------------
-  let cursor = Math.max(bottomBoardsRight, trackStart) + (rows.bottom.length > 0 ? MIN_GAP : PILL.gap + 20);
+  // --- last band's bottom row extras: needs with no module, then the legend card -------------------
+  const lastBand = bands - 1;
+  const bottomBoardsRight = rightOf.get(rk(lastBand, 'bottom')) ?? trackStart;
+  const lastBottomCount = rows.get(rk(lastBand, 'bottom'))!.length;
+  let gapCursor = Math.max(bottomBoardsRight, trackStart) + (lastBottomCount > 0 ? MIN_GAP : PILL.gap + 20);
   const gapBoxes = input.gaps.map((g) => {
     const box = {
       gapId: g.gapId,
-      x: r1(cursor),
+      x: r1(gapCursor),
       y: r1(bottomRowY),
       width: GAP_CARD.width,
       height: GAP_CARD.height,
       title: g.category.toUpperCase(),
       subtitle: `${g.need} — no module in library`,
     };
-    cursor += GAP_CARD.width + 24;
+    gapCursor += GAP_CARD.width + 24;
     return box;
   });
 
-  const perTrack = buses.length <= 8;
+  // One legend row per net (or per class), however many bands its tracks appear in.
+  const legendBuses = orderedTracks
+    .filter((t) => tapsPerBase.has(t.id))
+    .map((t) => ({ track: t }));
+  const perTrack = legendBuses.length <= 8;
   const legendRows: NonNullable<ModuleDiagram['legendCard']>['rows'] = perTrack
-    ? buses.map((b) => ({ label: b.label, color: b.color, detail: describe(b.netClass, b.label, b.shared), dashed: b.dashed, ...(b.blocked ? { blocked: true } : {}), netId: b.netId }))
-    : CLASS_ORDER.filter((cls) => buses.some((b) => b.netClass === cls)).map((cls) => {
-        const of = buses.filter((b) => b.netClass === cls);
-        const names = of.filter((b) => b.kind === 'net').map((b) => b.label);
+    ? legendBuses.map(({ track: t }) => ({
+        label: t.label,
+        color: t.color,
+        detail: describe(t.netClass, t.label, (tapsPerBase.get(t.id) ?? 0) > 2),
+        dashed: t.allDashed,
+        ...(t.allBlocked ? { blocked: true } : {}),
+        netId: t.netId,
+      }))
+    : CLASS_ORDER.filter((cls) => legendBuses.some((l) => l.track.netClass === cls)).map((cls) => {
+        const of = legendBuses.filter((l) => l.track.netClass === cls).map((l) => l.track);
+        const names = of.filter((t) => t.kind === 'net').map((t) => t.label);
         return {
           label: LEGEND_LABELS[cls],
           color: of[0]!.color,
           detail: cls === 'cable' ? `${of.length} cable${of.length === 1 ? '' : 's'}` : names.join(', '),
-          dashed: of.every((b) => b.dashed),
-          ...(of.every((b) => b.blocked) ? { blocked: true } : {}),
+          dashed: of.every((t) => t.allDashed),
+          ...(of.every((t) => t.allBlocked) ? { blocked: true } : {}),
           netId: null,
         };
       });
@@ -609,19 +743,28 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
     });
   const bottomY = bottomRowY + shift;
   const contentRight = Math.max(
-    topRight,
-    bottomBoardsRight,
-    cursor - 24,
+    ...rightOf.values(),
+    gapCursor - 24,
     ...buses.map((b) => b.x2 + 24),
     ...allPoints.map((p) => p[0])
   );
-  const legendX = Math.max(cursor, contentRight - legendW);
+  const legendX = Math.max(gapCursor, contentRight - legendW);
   const legendCard =
     legendRows.length > 0
-      ? { x: r1(legendX), y: r1(bottomY), width: r1(legendW), height: r1(legendH), title: 'Legend', caption: perTrack ? 'Nets & buses' : 'Net classes', rows: legendRows, dashedNote: anyDashed, ...(anyBlocked ? { blockedNote: true } : {}) }
+      ? {
+          x: r1(legendX),
+          y: r1(bottomY),
+          width: r1(legendW),
+          height: r1(legendH),
+          title: 'Legend',
+          caption: bands > 1 ? 'Tracks with the same name are one net' : perTrack ? 'Nets & buses' : 'Net classes',
+          rows: legendRows,
+          dashedNote: anyDashed,
+          ...(anyBlocked ? { blockedNote: true } : {}),
+        }
       : null;
   const bottomExtent = Math.max(
-    bottomY + (rows.bottom.length > 0 ? Math.max(...rows.bottom.map((i) => contentSize(i).height)) : 0),
+    bottomY + (lastBottomCount > 0 ? Math.max(...rows.get(rk(lastBand, 'bottom'))!.map((i) => contentSize(i).height)) : 0),
     ...gapBoxes.map((g) => g.y + g.height),
     legendCard ? legendCard.y + legendCard.height : 0,
     ...allPoints.map((p) => p[1]),
@@ -637,6 +780,7 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
 
   return {
     layoutVersion: LAYOUT_VERSION,
+    bands,
     width,
     height,
     modules,

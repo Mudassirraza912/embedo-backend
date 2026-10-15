@@ -9,12 +9,16 @@ import { runSessionPipeline } from '../modules/sessions/pipeline/dispatch.js';
 import { SessionType, sessionTypeOf } from '../modules/sessions/session-type.js';
 import { guestQuotaService } from '../modules/limits/guest-quota.service.js';
 
+import type { ApplyMode } from '../modules/sessions/version.service.js';
+
 export const AI_PIPELINE_QUEUE_NAME = 'ai-pipeline';
 
 export interface AiPipelineJobData {
   sessionId: string;
   forceGenerate?: boolean;
   iterationNotes?: string;
+  /** `manual`: a revision is saved as a proposal awaiting approval instead of a version. */
+  applyMode?: ApplyMode;
   /** For logs and the queue dashboard only: the pipeline dispatches on the session's stored type. */
   type?: SessionType;
   ipAddress?: string;
@@ -118,6 +122,7 @@ export const createAiPipelineWorker = () => {
         return await runSessionPipeline(job.data.sessionId, {
           forceGenerate: job.data.forceGenerate,
           iterationNotes: job.data.iterationNotes,
+          applyMode: job.data.applyMode,
         });
       } catch (err: unknown) {
         // Rule #8: do not blanket-retry. Only provider rate limits / timeouts / 5xx, and the
