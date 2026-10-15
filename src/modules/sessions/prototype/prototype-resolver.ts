@@ -71,9 +71,10 @@ export const resolverOutputSchema = z.object({
         links: z.array(linkSchema).max(8).default([]),
       })
     )
-    .max(16)
+    // A 20-module brief (dev, 2026-10-15) needs room: modules and gaps up to 24 each.
+    .max(24)
     .default([]),
-  gaps: capped(z.object({ category: clip(40).default('Interface'), need: clip(200), suggestion: clip(200).default('') }), 10).default([]),
+  gaps: capped(z.object({ category: clip(40).default('Interface'), need: clip(200), suggestion: clip(200).default('') }), 24).default([]),
   notes: clip(600).default(''),
   /** Quick-refinement chips: short next steps for this bench, shown under the version card. */
   suggestedRefinements: capped(clip(60), 6).default([]),
