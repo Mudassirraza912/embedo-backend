@@ -28,6 +28,9 @@ const make = (
   suggestedFix: string | null = null
 ): CompatibilityResult => ({ ruleType, status, message, suggestedFix, instanceIds, pinIds });
 
+const NOT_AN_ACCESSORY =
+  /\b(micro ?controller|mcu|host\b|controller (?:board|with)|wiring|wires?\b|twisted[- ]pair|bus cable|power supply|supply capable|logic level|level shifter|uart|i2c|spi\b|gpio)/i;
+
 const accessoryName = (value: unknown): string =>
   typeof value === 'string'
     ? value
@@ -254,9 +257,12 @@ export function evaluateCompatibility(controller: AllocInstance, allPeripherals:
   }
 
   // dependency_presence — only required_accessories are enforced; related_modules never are.
+  // Sourced records sometimes list what the board connects to as an "accessory" ("a microcontroller
+  // with a UART", "CAN bus wiring", "5 V supply"): the bench and the other checks cover those.
   for (const instance of [controller, ...peripherals]) {
     for (const accessory of instance.entity.record.dependencies.required_accessories) {
       const name = accessoryName(accessory);
+      if (NOT_AN_ACCESSORY.test(name)) continue;
       out.push(
         make(
           'dependency_presence',

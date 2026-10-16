@@ -10,7 +10,8 @@ import { assemblePrototype, externalSupplyVoltsOf } from '../../src/modules/sess
 import { functionsFromName } from '../../src/modules/sessions/prototype/prototype-board.js';
 import { withProtocolGroups } from '../../src/modules/sessions/prototype/prototype-layout.js';
 import { placeholderEntity, placeholderKindFor, withPlaceholderEntities } from '../../src/modules/sessions/prototype/prototype-placeholders.js';
-import { linkInterfacesOf } from '../../src/modules/sessions/prototype/prototype-resolver.js';
+import { isControllerGap, linkInterfacesOf, validateResolverOutput, resolverOutputSchema } from '../../src/modules/sessions/prototype/prototype-resolver.js';
+import { FIXTURE_IDS, loadFixtureEntity } from './prototype-fixtures.js';
 import { PrototypeArchitecture, PrototypeComposition } from '../../src/modules/sessions/prototype/prototype.types.js';
 
 /**
@@ -174,6 +175,18 @@ describe('20-module industrial IoT brief (prod regression, 2026-10-15)', () => {
       host_requirement: 'optional_host',
       pins: [power('VIN', 'power_in', 'VIN'), GND, power('5V', 'power_out', '5V'), power('3V3', 'power_out', '3V3')],
       connectors: [{ ref: 'J1', kind: 'header', pins: ['VIN', 'GND', '5V', '3V3'] }],
+    });
+    await add('HWP-5V-REG', {
+      product_name: 'Pololu 5V, 5A Step-Down Voltage Regulator D24V50F5',
+      vendor: 'Pololu',
+      functional_categories: ['Power'],
+      prototype_role: 'Regulator',
+      supply_voltage_min_v: 6,
+      supply_voltage_max_v: 38,
+      power_source_types: ['DC input'],
+      host_requirement: 'optional_host',
+      pins: [power('VIN', 'power_in', 'VIN'), GND, power('VOUT', 'power_out', '5V')],
+      connectors: [{ ref: 'J1', kind: 'header', pins: ['VIN', 'GND', 'VOUT'] }],
     });
     await add('HWP-SHT31', i2cSensor('SHT31-D Temperature & Humidity Sensor', '0x44', '3V or 5V compliant', true));
     await add('HWP-SCD41', i2cSensor('SCD41 CO2 Sensor', '0x62', '3.3V or 5V', true));
@@ -368,5 +381,88 @@ describe('20-module industrial IoT brief (prod regression, 2026-10-15)', () => {
     expect(externalSupplyVoltsOf('Power supply module with 12V input, 5V and 3.3V outputs')).toBe(12);
     expect(externalSupplyVoltsOf('powered from 24 V')).toBe(24);
     expect(externalSupplyVoltsOf('a 3.3V sensor')).toBeNull();
+  });
+
+  it('dev run 2026-10-16: 3-5 V sensors take the controller 3.3 V rail when the regulator only gives 5 V', () => {
+    const c = composition('HWP-NUCLEO-FULL');
+    c.modules[0] = { instanceId: 'psu1', hardwareEntityId: 'HWP-5V-REG', role: 'Power', links: [] };
+    const p = assemblePrototype(c, entities, { svgBasePath: '/x', projectName: 'x', understanding: '', notes: '', externalSupplyVolts: 12 });
+    const rail3v3 = netOf(p, '3V3')!.members.map((m) => `${m.instanceId}.${m.pinName}`);
+    expect(rail3v3).toEqual(expect.arrayContaining(['mcu.3V3', 'sht31_1.VIN', 'veml7700_1.VIN', 'imu1.3V3']));
+    expect(netOf(p, '5V')!.members.map((m) => m.instanceId)).toEqual(expect.arrayContaining(['psu1', 'pms5003_1']));
+    expect(netOf(p, '5V')!.members.map((m) => m.instanceId)).not.toContain('sht31_1');
+    expect(netOf(p, '12V')!.members.map((m) => m.instanceId).sort()).toEqual(['dcin', 'psu1']);
+  });
+
+  it('dev run 2026-10-16: one UART instance serves one device, even when it is offered on several pin pairs', async () => {
+    const pico = await loadFixtureEntity(FIXTURE_IDS.pico);
+    const p = assemblePrototype(
+      {
+        kind: 'prototype_composition',
+        controller: { instanceId: 'mcu', hardwareEntityId: pico.hardwareEntityId },
+        modules: [],
+        gaps: [
+          { category: 'Connectivity', need: 'GPS receiver (UART)', suggestion: '', interface: 'UART' },
+          { category: 'Connectivity', need: 'Bluetooth LE module (UART)', suggestion: '', interface: 'UART' },
+          { category: 'Sensing', need: 'Ultrasonic sensor (UART)', suggestion: '', interface: 'UART' },
+        ],
+      },
+      new Map([[pico.hardwareEntityId, pico]]),
+      { svgBasePath: '/x', projectName: 'x', understanding: '', notes: '' }
+    );
+    const uartNets = p.nets.filter((n) => n.class === 'uart');
+    for (const n of uartNets) expect(n.members.filter((m) => m.instanceId !== 'mcu')).toHaveLength(1);
+    expect(new Set(uartNets.map((n) => n.name.split('_')[0])).size).toBe(uartNets.length / 2);
+    // The Pico has two UARTs: the third device is told so, once.
+    const noUart = p.compatibility.results.filter((r) => /no free UART/.test(r.message));
+    expect(noUart).toHaveLength(1);
+    expect(p.compatibility.results.filter((r) => r.ruleType === 'signal_direction_conflict' && r.status === 'BLOCKER')).toEqual([]);
+  });
+
+  it('dev run 2026-10-16: a CANopen / Modbus sensor is a bus device even when its suggestion mentions a transceiver', () => {
+    expect(placeholderKindFor({ category: 'Sensing', need: 'Industrial CANopen vibration sensor module', suggestion: 'any CANopen sensor with an on-board CAN transceiver', interface: 'CAN' })).toBe('CAN');
+    expect(placeholderKindFor({ category: 'Sensing', need: 'Industrial RS-485 Modbus gas detection sensor module', suggestion: 'RS-485 transceiver built in', interface: 'RS485' })).toBe('RS485');
+    expect(placeholderKindFor({ category: 'Connectivity', need: 'RS-485 transceiver module for Modbus RTU', suggestion: '', interface: 'RS485' })).toBe('RS485XCVR');
+  });
+
+  it('dev run 2026-10-16: a named controller that is not in the library is a Processing gap, not a substitute', () => {
+    const lib = new Map([['HWP-IMU', entities.get('HWP-IMU')!]]);
+    const out = resolverOutputSchema.parse({
+      isPrototypeRequest: true,
+      controller: null,
+      modules: [{ instanceId: 'imu1', hardwareEntityId: 'HWP-IMU', role: 'IMU', links: [{ interface: 'SPI' }] }],
+      gaps: [{ category: 'Processing', need: 'STM32H7 Nucleo-144 development board', interface: 'NONE' }],
+    });
+    expect(validateResolverOutput(out, lib)).toEqual([]);
+    expect(isControllerGap(out.gaps[0]!)).toBe(true);
+    expect(validateResolverOutput({ ...out, gaps: [] }, lib).join(' ')).toMatch(/no controller/);
+  });
+
+  it('dev run 2026-10-16: "accessories" that are really the host, wiring or a supply raise no warning', async () => {
+    const xcvr = await sourced('HWP-CANX', {
+      product_name: 'Waveshare SN65HVD230 CAN Board',
+      vendor: 'Waveshare',
+      functional_categories: ['Connectivity'],
+      prototype_role: 'CAN transceiver',
+      supply_voltage_min_v: 3.3,
+      supply_voltage_max_v: 3.3,
+      logic_level_summary: '3.3V',
+      host_requirement: 'host_required',
+      pins: [power('3V3', 'power_in', '3V3'), GND, data('CTX', 'input'), data('CRX', 'output'), pin('CANH', 'other', 'bidirectional'), pin('CANL', 'other', 'bidirectional')],
+      connectors: [{ ref: 'J1', kind: 'header', pins: ['3V3', 'GND', 'CTX', 'CRX', 'CANH', 'CANL'] }],
+      interfaces: [{ type: 'CAN', role: 'transceiver', tx: 'CTX', rx: 'CRX' }],
+      required_accessories: ['MCU or controller with CAN peripheral', 'CAN bus wiring to CANH/CANL', '120 ohm termination resistor'],
+    });
+    const lib = new Map(entities);
+    lib.set('HWP-CANX', xcvr);
+    const p = assemblePrototype(
+      { kind: 'prototype_composition', controller: { instanceId: 'mcu', hardwareEntityId: 'HWP-NUCLEO-FULL' }, modules: [{ instanceId: 'can1', hardwareEntityId: 'HWP-CANX', role: 'CAN', links: [{ interface: 'CAN' }] }], gaps: [] },
+      lib,
+      { svgBasePath: '/x', projectName: 'x', understanding: '', notes: '' }
+    );
+    const deps = p.compatibility.results.filter((r) => r.ruleType === 'dependency_presence').map((r) => r.message);
+    expect(deps).toEqual(['Waveshare SN65HVD230 CAN Board requires 120 ohm termination resistor.']);
+    // CTX/CRX are found by name: the transceiver is on FDCAN1.
+    expect(netOf(p, 'CAN1_TX')!.members.map((m) => m.pinName).sort()).toEqual(['CTX', 'PD1']);
   });
 });

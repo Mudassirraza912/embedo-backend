@@ -19,7 +19,7 @@ const RESOLVER_SYSTEM_PROMPT = `You are the Embedo Prototype resolver. You choos
 RULES
 1. Use only hardwareEntityIds listed in LIBRARY. Never invent a module, part number, SKU or id.
 2. Do NOT assign controller pins. Link each module to the controller at the interface level (I2C, SPI, UART, GPIO, ANALOG, PWM, CAN, RS485). A deterministic allocator chooses the exact pins, contacts and power rails afterwards. CAN and RS485 are field buses: link the transceiver AND every CAN / RS-485 device with "CAN" or "RS485"; the allocator wires the transceiver to the controller and joins all of them on one differential pair.
-3. Exactly one controller (a board marked controller=yes), unless nothing can be built. Its instanceId is "mcu".
+3. Exactly one controller (a board marked controller=yes), unless nothing can be built. Its instanceId is "mcu". When the engineer names a specific controller (e.g. "STM32H7", "ESP32-S3", "RP2040") and LIBRARY has no controller with that chip, set controller to null and add a gap {"category": "Processing", "need": "<the named controller board>", "interface": "NONE"}: it will be sourced. Never substitute a different controller for one the engineer named, unless SUBSTITUTE below allows it.
 4. Each other module gets an instanceId of its role plus a number: "bme1", "gps1", "imu2". Two of the same board are two modules.
 5. Pick a link interface the module actually lists. Prefer I2C (one shared bus) for several sensors; prefer the STEMMA QT / Qwiic variant when it exists. For GPIO, ANALOG or PWM links, name the module's own pin in "pinName", spelled exactly as in LIBRARY.
 6. If a needed capability has no suitable module in LIBRARY, add it to "gaps". Never substitute something unsuitable, and never pretend a gap is covered. When the engineer lists specific modules, every listed module that is not in LIBRARY is its OWN gap (never merge several into one category): "need" names that module as the engineer wrote it (e.g. "LIS3MDL magnetometer (SPI)"), and "interface" says how it connects (I2C|SPI|UART|GPIO|ANALOG|PWM|CAN|RS485, or NONE). Each gap is drawn as a labelled placeholder block wired on that bus, so the bench shows every requested module. Modules + gaps together must cover every module the engineer asked for, once each.
@@ -247,6 +247,10 @@ export function stripPowerLinks(output: ResolverOutput, catalogue: Map<string, L
   return dropped;
 }
 
+/** A gap asking for the controller itself (a named controller the library does not have). */
+export const isControllerGap = (gap: { category: string; need: string }): boolean =>
+  /processing/i.test(gap.category) || /\b(controller|mcu|microcontroller|nucleo|dev(?:elopment)? board)\b/i.test(gap.need);
+
 /** Semantic checks Zod cannot express: every id, interface and pin must exist in the catalogue. */
 export function validateResolverOutput(output: ResolverOutput, catalogue: Map<string, LibraryEntity>): string[] {
   const problems: string[] = [];
@@ -256,8 +260,8 @@ export function validateResolverOutput(output: ResolverOutput, catalogue: Map<st
     const mcu = catalogue.get(output.controller.hardwareEntityId);
     if (!mcu) problems.push(`controller ${output.controller.hardwareEntityId} is not in LIBRARY`);
     else if (!mcu.isController) problems.push(`${output.controller.hardwareEntityId} is not a controller (controller=no)`);
-  } else if (output.modules.length > 0) {
-    problems.push('modules were chosen but no controller: pick exactly one controller=yes board');
+  } else if (output.modules.length > 0 && !output.gaps.some(isControllerGap)) {
+    problems.push('modules were chosen but no controller: pick exactly one controller=yes board, or add a Processing gap naming the controller to source');
   }
 
   const seen = new Set<string>(['mcu']);
@@ -292,6 +296,8 @@ export interface ResolverInput {
   current: PrototypeComposition | null;
   /** The current bench's boards, nets and open checks (describeBench), so corrections read the real wiring. */
   currentBench?: string | null;
+  /** Set when a named controller could not be found: the resolver may pick the closest one and must say so. */
+  allowSubstituteController?: boolean;
   sessionId: string;
 }
 
@@ -326,6 +332,9 @@ export async function resolvePrototype(input: ResolverInput): Promise<ResolverRe
     input.current ? `CURRENT DESIGN:\n${describeCurrentDesign(input.current)}\n` : null,
     input.current && input.currentBench ? `CURRENT WIRING (read-only, produced by the allocator from the records):\n${input.currentBench}\n` : null,
     `REQUEST:\n${input.requestText}`,
+    input.allowSubstituteController
+      ? '\nSUBSTITUTE: the controller the engineer named could not be found or sourced. Choose the LIBRARY controller closest to it (buses, UART/CAN count, logic level), and say in "notes" that it stands in for the named one.'
+      : null,
   ]
     .filter((line) => line !== null)
     .join('\n');

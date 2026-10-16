@@ -7,7 +7,7 @@ import { hardwareLibraryService } from '../../hardware/hardware-library.service.
 import { persistNewVersion, proposalCardText, proposeVersion } from '../version.service.js';
 import { GENERATION_HOLD_MESSAGE } from '../pipeline/sufficiency-gate.js';
 import { NonRetryablePipelineError, PipelineExecutionOptions, PipelineExecutionResult } from '../pipeline/orchestrator.js';
-import { catalogueLine, PrototypeResolverError, RESOLVER_TASK_CASE, resolvePrototype, retrieveCatalogue } from './prototype-resolver.js';
+import { catalogueLine, isControllerGap, PrototypeResolverError, RESOLVER_TASK_CASE, resolvePrototype, retrieveCatalogue } from './prototype-resolver.js';
 import { SOURCING_TASK_CASE, sourceHardware, SourcingResult } from '../../hardware/discovery/hardware-sourcer.js';
 import { assemblePrototype, externalSupplyVoltsOf } from './prototype-assembler.js';
 import { filterAppliedSuggestions, getAppliedChangeLineage } from '../pipeline/refinement-history.js';
@@ -120,7 +120,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       ? [currentComposition.controller?.hardwareEntityId, ...currentComposition.modules.map((m) => m.hardwareEntityId)].filter((id): id is string => Boolean(id))
       : [];
     const retrievalText = `${requestText}\n${turns.slice(-4).map((t) => t.content).join('\n')}`;
-    const resolve = async () => {
+    const resolve = async (allowSubstituteController = false) => {
       const catalogue = await retrieveCatalogue(library, retrievalText, keepIds);
       emitSessionEvent.aiCallStarted(sessionId, RESOLVER_TASK_CASE);
       const resolved = await resolvePrototype({
@@ -129,6 +129,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
         catalogue,
         current: currentComposition,
         currentBench: current ? describeBench(current) : null,
+        allowSubstituteController,
         sessionId,
       });
       emitSessionEvent.aiCallCompleted(sessionId, { taskCase: RESOLVER_TASK_CASE, schemaPass: true, latencyMs: resolved.latencyMs });
@@ -180,6 +181,15 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       library = [...library, ...roundResult.entities.filter((e) => !library.some((l) => l.hardwareEntityId === e.hardwareEntityId))];
       output = await resolve();
     }
+
+    // The named controller could not be sourced: build on the closest controller the library has
+    // (the resolver says so in its notes) rather than nothing at all.
+    if (output && output.isPrototypeRequest && !output.controller && library.some((e) => e.isController)) {
+      log.info('Named controller not found or sourced; resolving with the closest library controller');
+      output = await resolve(true);
+    }
+    // Once a controller is chosen, a gap asking for the controller is not a missing module.
+    if (output?.controller) output.gaps = output.gaps.filter((g) => !isControllerGap(g) || g.category.toLowerCase() !== 'processing');
 
     if (!output) {
       const notPrototype = Boolean(sourcing && !sourcing.isPrototypeRequest);

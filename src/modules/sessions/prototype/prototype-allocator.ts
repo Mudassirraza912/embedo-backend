@@ -250,11 +250,19 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     return candidates.map((pin, i) => ({ pin, cost: busCost(pin) + i / 10_000 })).sort((a, b) => a.cost - b.cost)[0]?.pin ?? null;
   };
 
+  /**
+   * Point-to-point peripherals (a UART, a CAN controller) serve one device each. A controller often
+   * offers the same instance on several pin pairs (the Pico's UART0 on GP0/1, GP12/13, GP16/17);
+   * taking it twice put three devices on one UART (dev, 2026-10-16: "UART0_RX has 3 outputs").
+   */
+  const claimedInstances = new Set<string>();
+  const instanceKey = (family: string, instance: number | null) => `${family}:${instance ?? '-'}`;
+
   /** Lowest-numbered bus instance whose role pins are all free; instance number keeps a bus on one peripheral block. */
   const pickBus = (family: 'I2C' | 'SPI' | 'UART' | 'CAN', roles: Record<string, string[]>, optionalRoles: string[] = []) => {
     const instances = new Set<number | null>();
     for (const pin of mcu.record.pins) for (const f of mcu.functionsOf(pin)) if (f.family === family) instances.add(f.instance);
-    const ordered = [...instances].sort((a, b) => (a ?? -1) - (b ?? -1));
+    const ordered = [...instances].sort((a, b) => (a ?? -1) - (b ?? -1)).filter((i) => !claimedInstances.has(instanceKey(family, i)));
     for (const instance of ordered) {
       const chosen: Record<string, HardwarePin> = {};
       const taken = new Set<string>();
@@ -511,18 +519,21 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     for (const details of mcu.interfaceDetails('UART')) {
       const tx = mcu.pinFromDetail(details, 'tx_pin_id');
       const rx = mcu.pinFromDetail(details, 'rx_pin_id');
+      const instance = tx ? (mcu.functionsOf(tx).find((f) => f.family === 'UART')?.instance ?? null) : null;
+      if (claimedInstances.has(instanceKey('UART', instance))) continue;
       if (tx && rx && !usedMcuSignalPins.has(tx.pin_id) && !usedMcuSignalPins.has(rx.pin_id) && mcu.isWireable(tx.pin_id) && mcu.isWireable(rx.pin_id)) {
-        bus = { instance: mcu.functionsOf(tx).find((f) => f.family === 'UART')?.instance ?? null, pins: { tx, rx } };
+        bus = { instance, pins: { tx, rx } };
         break;
       }
     }
     bus ??= pickBus('UART', { tx: ['TX'], rx: ['RX'] });
-    if (!bus) {
+    if (!bus && !claimedInstances.has(instanceKey('UART', null))) {
       const byName = (names: string[]) => names.flatMap((n) => mcu.pinsByName(n)).find((p) => !usedMcuSignalPins.has(p.pin_id) && mcu.isWireable(p.pin_id)) ?? null;
       const tx = byName(['TX', 'TXD', 'TX0']);
       const rx = byName(['RX', 'RXD', 'RX0']);
       if (tx && rx) bus = { instance: null, pins: { tx, rx } };
     }
+    if (bus) claimedInstances.add(instanceKey('UART', bus.instance));
     return bus;
   };
   /** How many UARTs the record shows, for an honest "no free UART" message. */
@@ -647,7 +658,9 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
           bus = { instance: mcu.functionsOf(mTx).find((f) => f.family === 'CAN')?.instance ?? null, pins: { tx: mTx, rx: mRx } };
         }
       }
+      if (bus && claimedInstances.has(instanceKey('CAN', bus.instance))) bus = null;
       bus ??= pickBus('CAN', { tx: ['TX'], rx: ['RX'] });
+      if (bus) claimedInstances.add(instanceKey('CAN', bus.instance));
       if (!bus) {
         const hasCan = mcu.record.pins.some((pin) => hasFunction(pin, 'CAN')) || mcu.record.interfaces.interfaces.some((i) => /CAN/i.test(i.type));
         results.push(
@@ -1091,7 +1104,11 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       continue;
     }
 
-    const source = pickSource(supplyOutputs, range) ?? pickSource(controllerSources, range);
+    // The rail closest to the controller's logic level wins, a bench supply before the controller's
+    // own pin at the same voltage: a 3-5 V sensor on a 3.3 V controller runs from 3.3 V, so its
+    // I/O matches the controller (the tester's 2026-10-15 report: sensors fed 5 V by the regulator
+    // while the controller's 3.3 V rail sat unused).
+    const source = pickSource([...supplyOutputs, ...controllerSources], range);
     if (!source) {
       const offered = [...supplyOutputs, ...controllerSources];
       results.push(

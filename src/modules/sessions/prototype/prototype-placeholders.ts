@@ -79,7 +79,9 @@ const RS485_TEXT = /rs-?485|modbus/i;
 export function placeholderKindFor(gap: { category: string; need: string; suggestion: string; interface?: string | null }): PlaceholderKind {
   const text = `${gap.need} ${gap.suggestion}`;
   const iface = (gap.interface ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const transceiver = TRANSCEIVER.test(text);
+  // What the need itself is: a CANopen sensor whose suggestion mentions its transceiver is still a
+  // device on the bus, not a transceiver (dev, 2026-10-16).
+  const transceiver = TRANSCEIVER.test(gap.need) && !/sensor|meter|detector|probe|actuator|valve|drive\b/i.test(gap.need);
   if (iface === 'CAN' || (!iface && CAN_TEXT.test(text))) return transceiver ? 'CANXCVR' : 'CAN';
   if (iface === 'RS485' || iface === 'MODBUS' || (!iface && RS485_TEXT.test(text))) return transceiver ? 'RS485XCVR' : 'RS485';
   if (iface === 'I2C' || iface === 'SPI' || iface === 'UART' || iface === 'GPIO' || iface === 'ANALOG' || iface === 'PWM') return iface;
