@@ -63,31 +63,35 @@ export function safeParseOrRepairJson(raw: string): unknown {
     }
 
     try {
-      const parsed = JSON.parse(repaired + closing) as Record<string, any>;
+      const parsed = JSON.parse(repaired + closing) as Record<string, unknown>;
       // Prune any partial array tail objects (e.g. incomplete node, edge, or bom item cut off mid-stream)
       if (parsed && typeof parsed === 'object') {
-        if (Array.isArray(parsed.bom) && parsed.bom.length > 0) {
-          const lastBom = parsed.bom[parsed.bom.length - 1];
+        const bom = parsed.bom;
+        if (Array.isArray(bom) && bom.length > 0) {
+          const lastBom = bom[bom.length - 1] as Record<string, unknown> | null | undefined;
           if (!lastBom || typeof lastBom !== 'object' || !lastBom.partNumber || !lastBom.manufacturer || !lastBom.category || !lastBom.description) {
-            parsed.bom.pop();
+            bom.pop();
           }
         }
-        if (Array.isArray(parsed.nodes) && parsed.nodes.length > 0) {
-          const lastNode = parsed.nodes[parsed.nodes.length - 1];
+        const nodes = parsed.nodes;
+        if (Array.isArray(nodes) && nodes.length > 0) {
+          const lastNode = nodes[nodes.length - 1] as Record<string, unknown> | null | undefined;
           if (!lastNode || typeof lastNode !== 'object' || !lastNode.id || !lastNode.label || !lastNode.category || !lastNode.partNumber) {
-            parsed.nodes.pop();
+            nodes.pop();
           }
         }
-        if (Array.isArray(parsed.edges) && parsed.edges.length > 0) {
-          const lastEdge = parsed.edges[parsed.edges.length - 1];
+        const edges = parsed.edges;
+        if (Array.isArray(edges) && edges.length > 0) {
+          const lastEdge = edges[edges.length - 1] as Record<string, unknown> | null | undefined;
           if (!lastEdge || typeof lastEdge !== 'object' || !lastEdge.from || !lastEdge.to || !lastEdge.type) {
-            parsed.edges.pop();
+            edges.pop();
           }
         }
-        if (Array.isArray(parsed.powerRails) && parsed.powerRails.length > 0) {
-          const lastRail = parsed.powerRails[parsed.powerRails.length - 1];
+        const powerRails = parsed.powerRails;
+        if (Array.isArray(powerRails) && powerRails.length > 0) {
+          const lastRail = powerRails[powerRails.length - 1] as Record<string, unknown> | null | undefined;
           if (!lastRail || typeof lastRail !== 'object' || !lastRail.name || typeof lastRail.voltageV !== 'number' || !lastRail.source) {
-            parsed.powerRails.pop();
+            powerRails.pop();
           }
         }
       }
