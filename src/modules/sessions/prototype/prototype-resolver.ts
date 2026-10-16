@@ -20,6 +20,7 @@ RULES
 1. Use only hardwareEntityIds listed in LIBRARY. Never invent a module, part number, SKU or id.
 2. Do NOT assign controller pins. Link each module to the controller at the interface level (I2C, SPI, UART, GPIO, ANALOG, PWM, CAN, RS485). A deterministic allocator chooses the exact pins, contacts and power rails afterwards. CAN and RS485 are field buses: link the transceiver AND every CAN / RS-485 device with "CAN" or "RS485"; the allocator wires the transceiver to the controller and joins all of them on one differential pair.
 3. Exactly one controller (a board marked controller=yes), unless nothing can be built. Its instanceId is "mcu". When the engineer names a specific controller (e.g. "STM32H7", "ESP32-S3", "RP2040") and LIBRARY has no controller with that chip, set controller to null and add a gap {"category": "Processing", "need": "<the named controller board>", "interface": "NONE"}: it will be sourced. Never substitute a different controller for one the engineer named, unless SUBSTITUTE below allows it.
+A controller board (controller=yes) is never one of the "modules", not even to supply power: its own 3V3/5V pins are used by the allocator anyway.
 4. Each other module gets an instanceId of its role plus a number: "bme1", "gps1", "imu2". Two of the same board are two modules.
 5. Pick a link interface the module actually lists. Prefer I2C (one shared bus) for several sensors; prefer the STEMMA QT / Qwiic variant when it exists. For GPIO, ANALOG or PWM links, name the module's own pin in "pinName", spelled exactly as in LIBRARY.
 6. If a needed capability has no suitable module in LIBRARY, add it to "gaps". Never substitute something unsuitable, and never pretend a gap is covered. When the engineer lists specific modules, every listed module that is not in LIBRARY is its OWN gap (never merge several into one category): "need" names that module as the engineer wrote it (e.g. "LIS3MDL magnetometer (SPI)"), and "interface" says how it connects (I2C|SPI|UART|GPIO|ANALOG|PWM|CAN|RS485, or NONE). Each gap is drawn as a labelled placeholder block wired on that bus, so the bench shows every requested module. Modules + gaps together must cover every module the engineer asked for, once each. When the engineer asks for an exact number of modules, place exactly that many blocks: one board (or one gap) per listed module, never two boards for one listed module, and never a gap for a module a placed board already fills.
@@ -289,6 +290,41 @@ export function validateResolverOutput(output: ResolverOutput, catalogue: Map<st
   return problems;
 }
 
+/**
+ * Deterministic repair of a selection that parsed but failed validation: modules that are not in
+ * the library, or are controllers, become gaps (drawn as placeholders); links the board does not
+ * offer, or GPIO/ANALOG/PWM links naming no real pin, are dropped; duplicate instance ids are
+ * renumbered. A controller that is not one is dropped (the pipeline then sources or substitutes).
+ */
+export function repairResolverOutput(output: ResolverOutput, catalogue: Map<string, LibraryEntity>): ResolverOutput {
+  const out: ResolverOutput = { ...output, modules: [], gaps: [...output.gaps] };
+  if (output.controller) {
+    const mcu = catalogue.get(output.controller.hardwareEntityId);
+    if (!mcu || !mcu.isController) out.controller = null;
+  }
+  const seen = new Set<string>(['mcu']);
+  for (const mod of output.modules) {
+    const entity = catalogue.get(mod.hardwareEntityId);
+    if (!entity || entity.isController) {
+      // Never silently lose a requested module: it stays as a gap (a Power gap is dropped later
+      // when the bench already has a supply board).
+      const power = /power|regulat|supply|buck|boost/i.test(`${mod.role} ${mod.instanceId}`);
+      out.gaps.push({ category: power ? 'Power' : 'Interface', need: (mod.role || mod.instanceId).slice(0, 200), suggestion: '', interface: power ? 'NONE' : (mod.links[0]?.interface ?? null) });
+      continue;
+    }
+    const offered = linkInterfacesOf(entity);
+    const pinNames = new Set(entity.record.pins.map((p) => p.pin_name.toUpperCase()));
+    const links = mod.links.filter(
+      (l) => offered.has(l.interface) && (!['GPIO', 'ANALOG', 'PWM'].includes(l.interface) || (l.pinName && pinNames.has(l.pinName.toUpperCase())))
+    );
+    let instanceId = mod.instanceId;
+    for (let n = 2; seen.has(instanceId); n++) instanceId = `${mod.instanceId.slice(0, 20)}_${n}`;
+    seen.add(instanceId);
+    out.modules.push({ ...mod, instanceId, links });
+  }
+  return out;
+}
+
 export interface ResolverInput {
   requestText: string;
   history: Array<{ role: 'user' | 'assistant'; content: string }>;
@@ -355,7 +391,7 @@ export async function resolvePrototype(input: ResolverInput): Promise<ResolverRe
     });
 
   const hasController = input.catalogue.some((e) => e.isController);
-  const evaluate = (content: string): { output?: ResolverOutput; problems: string[] } => {
+  const evaluate = (content: string): { output?: ResolverOutput; parsed?: ResolverOutput; problems: string[] } => {
     const parsed = resolverOutputSchema.safeParse(safeParseJson(content));
     if (!parsed.success) {
       return { problems: parsed.error.issues.slice(0, 8).map((i) => `${i.path.join('.') || 'root'}: ${i.message}`) };
@@ -370,7 +406,7 @@ export async function resolvePrototype(input: ResolverInput): Promise<ResolverRe
     const dropped = stripPowerLinks(parsed.data, byId);
     if (dropped > 0) logger.info({ sessionId: input.sessionId, dropped }, 'Prototype resolver linked power pins; dropped (power is wired from the records)');
     const problems = validateResolverOutput(parsed.data, byId);
-    return problems.length === 0 ? { output: parsed.data, problems } : { problems };
+    return problems.length === 0 ? { output: parsed.data, problems } : { parsed: parsed.data, problems };
   };
 
   let result = await runOnce();
@@ -387,6 +423,14 @@ export async function resolvePrototype(input: ResolverInput): Promise<ResolverRe
     verdict = evaluate(result.content);
     if (!verdict.output) {
       await aiRouterService.markSchemaResult(result.aiCallId, false, verdict.problems.join('; '));
+      // A selection that parses but names one wrong module or link is repaired, not thrown away:
+      // the bad module becomes a gap (a placeholder) and the rest of the bench is built (dev
+      // 2026-10-16: the controller placed twice, as "pwr1", failed a whole 20-module run).
+      const repaired = verdict.parsed ? repairResolverOutput(verdict.parsed, byId) : null;
+      if (repaired && validateResolverOutput(repaired, byId).length === 0) {
+        logger.warn({ sessionId: input.sessionId, problems: verdict.problems }, 'Prototype resolver output repaired after two invalid answers');
+        return { output: repaired, latencyMs };
+      }
       throw new PrototypeResolverError(`Prototype resolver returned an invalid selection twice: ${verdict.problems.join('; ')}`);
     }
   }

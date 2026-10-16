@@ -10,7 +10,7 @@ import { assemblePrototype, externalSupplyVoltsOf } from '../../src/modules/sess
 import { functionsFromName } from '../../src/modules/sessions/prototype/prototype-board.js';
 import { withProtocolGroups } from '../../src/modules/sessions/prototype/prototype-layout.js';
 import { placeholderEntity, placeholderKindFor, withPlaceholderEntities } from '../../src/modules/sessions/prototype/prototype-placeholders.js';
-import { isControllerGap, linkInterfacesOf, validateResolverOutput, resolverOutputSchema } from '../../src/modules/sessions/prototype/prototype-resolver.js';
+import { isControllerGap, linkInterfacesOf, repairResolverOutput, validateResolverOutput, resolverOutputSchema } from '../../src/modules/sessions/prototype/prototype-resolver.js';
 import { FIXTURE_IDS, loadFixtureEntity } from './prototype-fixtures.js';
 import { PrototypeArchitecture, PrototypeComposition } from '../../src/modules/sessions/prototype/prototype.types.js';
 
@@ -464,5 +464,28 @@ describe('20-module industrial IoT brief (prod regression, 2026-10-15)', () => {
     expect(deps).toEqual(['Waveshare SN65HVD230 CAN Board requires 120 ohm termination resistor.']);
     // CTX/CRX are found by name: the transceiver is on FDCAN1.
     expect(netOf(p, 'CAN1_TX')!.members.map((m) => m.pinName).sort()).toEqual(['CTX', 'PD1']);
+  });
+
+  it('dev run 2026-10-16: a selection naming the controller as a module is repaired, not a failed run', () => {
+    const lib = new Map([...entities].filter(([id]) => ['HWP-NUCLEO-FULL', 'HWP-IMU', 'HWP-SHT31'].includes(id)));
+    const out = resolverOutputSchema.parse({
+      isPrototypeRequest: true,
+      controller: { hardwareEntityId: 'HWP-NUCLEO-FULL', role: 'main' },
+      modules: [
+        { instanceId: 'pwr1', hardwareEntityId: 'HWP-NUCLEO-FULL', role: 'Power supply 12V to 5V and 3.3V', links: [] },
+        { instanceId: 'imu1', hardwareEntityId: 'HWP-IMU', role: 'IMU', links: [{ interface: 'SPI' }, { interface: 'UART' }] },
+        { instanceId: 'x1', hardwareEntityId: 'HWP-NOT-THERE', role: 'GPS receiver', links: [{ interface: 'UART' }] },
+      ],
+    });
+    expect(validateResolverOutput(out, lib).length).toBeGreaterThan(0);
+    const fixed = repairResolverOutput(out, lib);
+    expect(validateResolverOutput(fixed, lib)).toEqual([]);
+    expect(fixed.controller?.hardwareEntityId).toBe('HWP-NUCLEO-FULL');
+    expect(fixed.modules.map((m) => m.instanceId)).toEqual(['imu1']);
+    expect(fixed.modules[0]!.links).toEqual([{ interface: 'SPI' }]);
+    expect(fixed.gaps.map((g) => [g.category, g.need, g.interface])).toEqual([
+      ['Power', 'Power supply 12V to 5V and 3.3V', 'NONE'],
+      ['Interface', 'GPS receiver', 'UART'],
+    ]);
   });
 });
