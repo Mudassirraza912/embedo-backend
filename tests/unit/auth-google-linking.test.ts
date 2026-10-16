@@ -1,4 +1,4 @@
-import { describe, it, expect, jest, afterEach } from '@jest/globals';
+import { describe, it, expect, jest, afterEach, beforeAll, afterAll } from '@jest/globals';
 import request from 'supertest';
 import { createApp } from '../../src/app.js';
 import { prisma } from '../../src/db/prisma.js';
@@ -6,6 +6,14 @@ import { env } from '../../src/config/env.js';
 
 describe('Auth Google Account Linking Flow', () => {
   const app = createApp();
+  // Google sign-in fails closed without a client id (503); CI and local runs have none configured.
+  const configured = env.GOOGLE_CLIENT_ID;
+  beforeAll(() => {
+    (env as { GOOGLE_CLIENT_ID?: string }).GOOGLE_CLIENT_ID = configured || 'mock-client-id';
+  });
+  afterAll(() => {
+    (env as { GOOGLE_CLIENT_ID?: string }).GOOGLE_CLIENT_ID = configured;
+  });
 
   afterEach(() => {
     jest.restoreAllMocks();
