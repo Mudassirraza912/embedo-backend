@@ -237,7 +237,17 @@ CRITICAL HARDWARE RULES:
       * Infineon PROFET+2 smart high-side switches (e.g. BTS7008-2EPA, BTS7004-1EPP) integrate charge pumps, short-circuit, overtemperature, current sensing (IS pin), and active inductive voltage clamping (Vds(cl) ≈ 42V).
       * The 12V automotive battery input must be protected with an automotive-rated transient TVS (e.g. SMCJ36CA) and the logic power supply buck regulator stepping 12V to 3.3V must be rated for at least 40V–60V (e.g. LMR14030-Q1 or TPS54340-Q1).
       * For repetitive PWM switching, specify external freewheeling Schottky diodes (e.g. SS54 / V10P10) across the solenoid coils to prevent excessive silicon thermal dissipation from the internal active clamp.
-22. Architecture Scope, Granularity & Token Economy (MANDATORY):
+22. High-Voltage E-Bike & Industrial Battery Step-Down (48V to 84V+ Bus):
+    - In 72V/84V nominal e-bike or heavy battery systems (fully charged 20S Li-Ion reaches 84V–88V+):
+      * Standard 60V buck regulators (e.g. LMR16030, TPS54360, LM2596HV) will suffer immediate overvoltage breakdown!
+      * NEVER use series Zener dropping or lossy linear pre-regulators to drop 84V into a 60V buck under operating load currents (>100 mA) as thermal dissipation causes runaway.
+      * MANDATE a true 100V-rated wide-input synchronous buck regulator (e.g. Texas Instruments LM5164-Q1 [100V, 1A] or LM5017 [100V, 600 mA]) paired with a 100V peak transient TVS diode (e.g. SMCJ90A or SMCJ100A).
+23. Bidirectional AC Switched Bus Termination (RS-485 / CAN Bus):
+    - In multi-node RS-485 or CAN networks requiring software-controlled or switchable 120 Ω bus termination:
+      * Differential signals swing symmetrically positive and negative relative to bus lines (A vs B).
+      * NEVER use a single N-channel MOSFET (such as 2N7002 or BSS138) to switch the 120 Ω termination resistor directly! The MOSFET's intrinsic body diode conducts whenever the line voltage dips below source/drain, severely clipping differential RS-485/CAN logic levels and corrupting data packets.
+      * MANDATE a bidirectional Solid-State Relay (PhotoMOS / Opto-MOSFET, e.g. Panasonic AQY212GS, IXYS CPC1017N) or an ultra-miniature telecommunication signal relay (e.g. Kemet EC2-3NU, Omron G6K-2F). Bidirectional PhotoMOS uses dual back-to-back MOSFETs to block both AC polarities when OFF, presenting zero body diode clipping and >100 MΩ OFF isolation.
+24. Architecture Scope, Granularity & Token Economy (MANDATORY):
     - Synthesize a clean functional block diagram containing primary ICs and major functional subsystems (typically 7 to 12 nodes total, e.g. Power Input/Protection, Primary Buck/Boost Regulator, Isolated DC-DC if isolated, MCU/Controller, Analog Front-End / Sensors, Transceiver/Radio, Actuation/Switches, UI/Indicators).
     - DO NOT decompose individual jellybean passive components (0402 bypass capacitors, pull-up resistors, burden resistors, voltage divider resistors) or individual TVS diodes into separate standalone graph nodes. Integrate them into the matching functional block's description or BOM.
     - Node rationale: EXACTLY 1-2 concise sentences (<= 30 words). Focus directly on part selection and key electrical justification.

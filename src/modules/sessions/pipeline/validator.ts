@@ -814,6 +814,114 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
     });
   }
 
+  // 15. High-Voltage E-Bike & Industrial Battery Step-Down (72V–84V Bus)
+  // Fully charged 20S Li-Ion battery reaches 84V–88V. Standard 60V bucks (LMR16030, TPS54360, LM2596HV)
+  // will suffer catastrophic overvoltage breakdown. Zener dropping tricks dissipate excessive power.
+  // Mandate true 100V synchronous buck (TI LM5164-Q1 or LM5017) and 100V TVS (SMCJ90A / SMCJ100A).
+  const isHighVoltageBus =
+    /\b(72v|84v|80v|e-bike|ebike|20s\s*li)\b/i.test(
+      `${graph.projectMeta.name} ${graph.projectMeta.tagline} ${(graph.engineeringDecisions ?? []).join(' ')}`
+    ) ||
+    graph.powerRails.some((r) => r.voltageV >= 72) ||
+    graph.nodes.some((n) => n.category === 'power' && /\b(72v|84v|80v)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`));
+
+  if (isHighVoltageBus) {
+    const UNDER_100V_BUCKS = /\b(lmr16030|tps54360|lmr14030|tps54340|tps54202|tps54331|tps54302|ap63203|mp2307|lm2596|aoz1282)/i;
+    const underVoltageBuck = graph.nodes.find(
+      (n) => n.category === 'power' && (UNDER_100V_BUCKS.test(n.partNumber ?? '') || UNDER_100V_BUCKS.test(n.label))
+    );
+
+    if (underVoltageBuck) {
+      const oldPart = underVoltageBuck.partNumber || underVoltageBuck.label;
+      underVoltageBuck.partNumber = 'LM5164QDDARQ1';
+      underVoltageBuck.label = 'LM5164-Q1';
+      underVoltageBuck.sublabel = '100V 1A Synchronous Buck';
+      underVoltageBuck.manufacturer = 'Texas Instruments';
+      underVoltageBuck.rationale =
+        '100V wide-Vin synchronous step-down regulator operating up to 100V continuous input (ideal for 72V/84V e-bike bus peaking at 84V) with ultra-low 10µA quiescent current, eliminating overvoltage breakdown and lossy zener droppers.';
+
+      for (const item of graph.bom || []) {
+        if (UNDER_100V_BUCKS.test(item.partNumber) || UNDER_100V_BUCKS.test(item.description)) {
+          item.partNumber = 'LM5164QDDARQ1';
+          item.manufacturer = 'Texas Instruments';
+          item.category = 'Power Management';
+          item.description = 'Synchronous Buck Converter 100V 1A SO PowerPAD-8';
+          item.unitCostUsd = 1.95;
+        }
+      }
+
+      const has100vTvs = (graph.bom || []).some((b) => /\b(smcj90|smcj100|100v\s*tvs)\b/i.test(`${b.partNumber} ${b.description}`));
+      if (!has100vTvs) {
+        graph.bom.push({
+          partNumber: 'SMCJ90A',
+          manufacturer: 'Littelfuse',
+          category: 'Circuit Protection',
+          description: 'TVS Diode 1500W 90V Unidirectional SMC (84V E-bike input clamp)',
+          qty: 1,
+          unitCostUsd: 0.55,
+        });
+      }
+
+      issues.push({
+        severity: 'warning',
+        code: 'EBIKE_BUCK_VOLTAGE_INSUFFICIENT',
+        message: `In an 84V e-bike / high-voltage battery system, buck regulator '${oldPart}' rated for <= 60V will suffer catastrophic overvoltage destruction. Auto-upgraded to 100V-rated LM5164-Q1 synchronous buck converter with 100V TVS surge clamping.`,
+        nodeId: underVoltageBuck.id,
+      });
+    }
+  }
+
+  // 16. RS-485 / CAN Switched Termination Bidirectionality
+  // Differential bus signals (A/B) swing positive and negative. Switching a 120 Ω termination resistor
+  // with a single discrete N-channel MOSFET (2N7002, BSS138) causes the intrinsic body diode to clip
+  // negative differential swings, corrupting bus packets.
+  // Mandate a bidirectional Solid-State Relay (PhotoMOS, e.g. AQY212GS) or telecom signal relay (EC2-3NU).
+  const isTerminationSwitch = (text: string) =>
+    /\b(terminat|120\s*ohm|120r|bus[-\s]?switch)\b/i.test(text);
+
+  const mosfetTerminationNode = graph.nodes.find(
+    (n) =>
+      /\b(2n7002|bss138|fdn337|mosfet|n-ch)\b/i.test(`${n.partNumber ?? ''} ${n.label} ${n.sublabel ?? ''}`) &&
+      isTerminationSwitch(`${n.id} ${n.label} ${n.sublabel ?? ''} ${n.rationale ?? ''}`)
+  );
+
+  const bomMosfetTermination = (graph.bom || []).find(
+    (b) =>
+      /\b(2n7002|bss138|mosfet)\b/i.test(`${b.partNumber} ${b.description}`) &&
+      isTerminationSwitch(`${b.description}`)
+  );
+
+  if (mosfetTerminationNode || bomMosfetTermination) {
+    if (mosfetTerminationNode) {
+      mosfetTerminationNode.partNumber = 'AQY212GS';
+      mosfetTerminationNode.label = 'AQY212GS';
+      mosfetTerminationNode.sublabel = 'Bidirectional PhotoMOS SSR';
+      mosfetTerminationNode.manufacturer = 'Panasonic';
+      mosfetTerminationNode.rationale =
+        'Optically isolated bidirectional Solid-State Relay (PhotoMOS, 60V 500mA AC/DC) providing true bipolar 120Ω bus termination switching without body diode conduction clipping differential RS-485 signals.';
+    }
+
+    for (const item of graph.bom || []) {
+      if (
+        /\b(2n7002|bss138|mosfet)\b/i.test(`${item.partNumber} ${item.description}`) &&
+        isTerminationSwitch(`${item.description}`)
+      ) {
+        item.partNumber = 'AQY212GS';
+        item.manufacturer = 'Panasonic';
+        item.category = 'Relays';
+        item.description = 'Solid State Relay PhotoMOS 60V 500mA SOP-4 (Bidirectional RS-485 Termination Switch)';
+        item.unitCostUsd = 1.45;
+      }
+    }
+
+    issues.push({
+      severity: 'warning',
+      code: 'RS485_TERMINATION_SWITCH_CLIPPING',
+      message: 'Using a single N-channel MOSFET for RS-485 120 Ω bus termination switching causes its parasitic body diode to conduct on differential signal reversals, clipping data lines. Auto-upgraded to Panasonic AQY212GS bidirectional PhotoMOS solid-state relay.',
+      nodeId: mosfetTerminationNode?.id,
+    });
+  }
+
   const repairedGraph: CanonicalDesignGraph = { ...graph, edges: validEdges };
   const hasCriticalErrors = issues.some((i) => i.severity === 'error');
 

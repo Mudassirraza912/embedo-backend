@@ -729,4 +729,142 @@ describe('Hardware Validator & Auto-Repairer', () => {
     expect(rail?.consumers.includes('ad8232')).toBe(false);
     expect(rail?.consumers.includes('ads1292')).toBe(true);
   });
+
+  it('should auto-repair 60V buck to 100V LM5164-Q1 for 84V e-bike system', () => {
+    const ebikeGraph: CanonicalDesignGraph = {
+      projectMeta: {
+        name: '84V E-Bike Step-Down Module',
+        tagline: '84V 20S Li-Ion battery step-down to 5V and 3.3V',
+        controller: 'STM32G030',
+      },
+      controller: {
+        partNumber: 'STM32G030F6P6',
+        manufacturer: 'STMicroelectronics',
+        rationale: 'System MCU',
+      },
+      nodes: [
+        {
+          id: 'buck_reg',
+          label: 'LMR16030',
+          sublabel: '60V Step-Down Converter',
+          category: 'power',
+          partNumber: 'LMR16030SDDA',
+        },
+        {
+          id: 'mcu',
+          label: 'STM32G030',
+          sublabel: 'MCU',
+          category: 'control',
+          partNumber: 'STM32G030F6P6',
+        },
+      ],
+      edges: [{ from: 'buck_reg', to: 'mcu', label: '3.3V', type: 'power' }],
+      powerRails: [
+        {
+          name: '84V_BATTERY',
+          voltageV: 84,
+          source: 'battery',
+          consumers: ['buck_reg'],
+        },
+        {
+          name: '3.3V',
+          voltageV: 3.3,
+          source: 'buck_reg',
+          consumers: ['mcu'],
+        },
+      ],
+      bom: [
+        {
+          partNumber: 'LMR16030SDDA',
+          manufacturer: 'Texas Instruments',
+          category: 'Power Management',
+          description: 'Step-Down Converter 60V 3A SO PowerPAD-8',
+          qty: 1,
+        },
+      ],
+    };
+
+    const report = validateAndRepairDesignGraph(ebikeGraph);
+    expect(report.issues.some((i) => i.code === 'EBIKE_BUCK_VOLTAGE_INSUFFICIENT')).toBe(true);
+    const buckNode = report.repairedGraph.nodes.find((n) => n.id === 'buck_reg');
+    expect(buckNode?.partNumber).toBe('LM5164QDDARQ1');
+    expect(buckNode?.label).toBe('LM5164-Q1');
+    expect(report.repairedGraph.bom.some((b) => b.partNumber === 'LM5164QDDARQ1')).toBe(true);
+    expect(report.repairedGraph.bom.some((b) => b.partNumber === 'SMCJ90A')).toBe(true);
+  });
+
+  it('should auto-repair single N-channel MOSFET for RS-485 termination switch to AQY212GS PhotoMOS SSR', () => {
+    const rs485Graph: CanonicalDesignGraph = {
+      projectMeta: {
+        name: '500m RS-485 Node with Switched Termination',
+        tagline: 'Industrial isolated RS-485 sensor node with software-switchable 120 ohm termination',
+        controller: 'STM32G031',
+      },
+      controller: {
+        partNumber: 'STM32G031K8T6',
+        manufacturer: 'STMicroelectronics',
+        rationale: 'Node MCU',
+      },
+      nodes: [
+        {
+          id: 'rs485_phy',
+          label: 'ISO1410',
+          sublabel: 'Isolated RS-485 Transceiver',
+          category: 'communication',
+          partNumber: 'ISO1410BDWR',
+        },
+        {
+          id: 'term_switch',
+          label: '2N7002',
+          sublabel: 'Termination Switch',
+          category: 'control',
+          partNumber: '2N7002',
+          rationale: 'MOSFET switch to enable 120 ohm bus termination under MCU control',
+        },
+        {
+          id: 'mcu',
+          label: 'STM32G031',
+          sublabel: 'MCU',
+          category: 'control',
+          partNumber: 'STM32G031K8T6',
+        },
+      ],
+      edges: [
+        { from: 'mcu', to: 'rs485_phy', label: 'UART', type: 'uart' },
+        { from: 'mcu', to: 'term_switch', label: 'GPIO', type: 'gpio' },
+      ],
+      powerRails: [
+        {
+          name: '3.3V',
+          voltageV: 3.3,
+          source: 'regulator',
+          consumers: ['mcu', 'rs485_phy'],
+        },
+      ],
+      bom: [
+        {
+          partNumber: 'ISO1410BDWR',
+          manufacturer: 'Texas Instruments',
+          category: 'Interface',
+          description: 'Isolated RS-485 Transceiver 500kbps',
+          qty: 1,
+        },
+        {
+          partNumber: '2N7002',
+          manufacturer: 'onsemi',
+          category: 'Transistors',
+          description: 'N-Channel MOSFET 60V 115mA (120 Ohm Bus Termination Switch)',
+          qty: 1,
+        },
+      ],
+    };
+
+    const report = validateAndRepairDesignGraph(rs485Graph);
+    expect(report.issues.some((i) => i.code === 'RS485_TERMINATION_SWITCH_CLIPPING')).toBe(true);
+    const switchNode = report.repairedGraph.nodes.find((n) => n.id === 'term_switch');
+    expect(switchNode?.partNumber).toBe('AQY212GS');
+    expect(switchNode?.label).toBe('AQY212GS');
+    expect(report.repairedGraph.bom.some((b) => b.partNumber === 'AQY212GS')).toBe(true);
+    expect(report.repairedGraph.bom.some((b) => b.partNumber === '2N7002')).toBe(false);
+  });
 });
