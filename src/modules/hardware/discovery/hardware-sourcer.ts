@@ -288,7 +288,7 @@ RULES
 3. connectors: group pins as they sit on the board. kind "header" for 2.54 mm rows (list pins in physical order), "stemma_qt" for a STEMMA QT / Qwiic JST-SH socket (pins exactly [GND, <power pin>, <SDA pin>, <SCL pin>]), "screw_terminal" for screw blocks. Controllers: one header per board edge ("left" / "right"); modules: usually one header on "bottom".
 4. signal_class: power | ground | data | control | debug | analog | other. direction: input | output | bidirectional | power_in | power_out | ground. A module's supply input is power_in; a regulator output (e.g. 3Vo) is power_out; relay contacts are "other"/"bidirectional".
 5. voltage_domain: "3V3", "5V", "VIN" (follows the supply) or null. Never guess.
-6. For a controller (is_controller true), give each GPIO pin its function tokens in this exact format: GPIOn, I2C0_SDA, I2C0_SCL, SPI0_SCK, SPI0_TX (MOSI), SPI0_RX (MISO), SPI0_CSN, UART0_TX, UART0_RX, CAN1_TX, CAN1_RX, PWM3_A, ADC1. Use the silkscreen name as the pin name (e.g. "PB7", "GP4", "D14") and put bus roles in functions, never in the name. Cover EVERY I2C, SPI, UART/USART and CAN/FDCAN instance the board breaks out on its headers, each with its own instance number; when the board has more header pins than you can list (80 max), list the pins of every bus instance first. Never list boot/strapping/USB/flash pins as plain GPIO — give them a token such as STRAPPING, BOOT or USB_DP.
+6. For a controller (is_controller true), give each GPIO pin its function tokens in this exact format: GPIOn, I2C0_SDA, I2C0_SCL, SPI0_SCK, SPI0_TX (MOSI), SPI0_RX (MISO), SPI0_CSN, UART0_TX, UART0_RX, CAN1_TX, CAN1_RX, PWM3_A, ADC1. Use the silkscreen name as the pin name (e.g. "PB7", "GP4", "D14") and put bus roles in functions, never in the name. Cover EVERY I2C, SPI, UART/USART and CAN/FDCAN instance the board breaks out on its headers, each with its own instance number; when the board has more than 80 header pins (e.g. a Nucleo-144), list at most 80: power and ground, then the pins of every bus instance, then GPIOs, and put only those in connectors. Keep functions short (bus tokens only, no alternate-function lists). Never list boot/strapping/USB/flash pins as plain GPIO — give them a token such as STRAPPING, BOOT or USB_DP.
 7. interfaces: list each bus the board offers with the pin NAMES it uses (sda/scl, sck/mosi/miso/cs, tx/rx) and I2C addresses ("0x76"). A module's I2C role is "target"; a controller's is "controller". For a controller ALWAYS name the default (silkscreened) pins of its I2C, SPI and UART. A CAN transceiver is type "CAN" (tx = its TXD/CTX input, rx = its RXD/CRX output; pins CANH/CANL); an RS-485 transceiver is type "RS485" (tx = DI, rx = RO; pins A/B, DE, RE).
 12. required_accessories: only physical parts the buyer must add that are not on the bench (antenna, battery, thermocouple probe, microSD card, special cable). Never the controller, a host, wiring, a power supply or a bus.
 10. host_requirement: "standalone" for controllers; "host_required" for sensors, displays, drivers and anything the controller talks to; "optional_host" for power modules (chargers, regulators, battery boards) that work on their own.
@@ -407,6 +407,23 @@ export function checkFacts(f: SourcedFacts): string[] {
     for (const key of ['sda', 'scl', 'sck', 'mosi', 'miso', 'cs', 'tx', 'rx'] as const) {
       const v = i[key];
       if (v && !names.has(v.toUpperCase())) problems.push(`${i.type} ${key} pin ${v} does not exist`);
+    }
+  }
+  // A module's bus must say which pins carry it, or the allocator cannot wire it (dev 2026-10-16: a
+  // JSN-SR04T listed "UART" but its TX/RX were only TRIG/ECHO, so it stayed unwired).
+  if (!f.is_controller) {
+    const has = (re: RegExp) => [...names].some((n) => re.test(n));
+    const busPins: Array<[RegExp, Array<'sda' | 'scl' | 'sck' | 'mosi' | 'tx' | 'rx'>, RegExp[]]> = [
+      [/I2C|STEMMA|QWIIC/i, ['sda', 'scl'], [/^(SDA|SDI)\d*$/, /^(SCL|SCK)\d*$/]],
+      [/^SPI$/i, ['sck', 'mosi'], [/^(SCK|SCLK|CLK)$/, /^(MOSI|SDI|DIN|COPI)$/]],
+      [/UART|SERIAL/i, ['tx', 'rx'], [/^(TX|TXD|TXO)\d*$/, /^(RX|RXD|RXI)\d*$/]],
+    ];
+    for (const i of f.interfaces) {
+      for (const [type, keys, fallback] of busPins) {
+        if (!type.test(i.type)) continue;
+        const named = keys.every((k) => typeof i[k] === 'string' && i[k]);
+        if (!named && !fallback.every(has)) problems.push(`the ${i.type} interface does not name its ${keys.join('/')} pins: set "${keys.join('" and "')}" to the pin names that carry them`);
+      }
     }
   }
   return problems;

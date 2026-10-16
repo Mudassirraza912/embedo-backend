@@ -408,3 +408,24 @@ describe('large controller pinouts (dev 2026-10-16: every STM32H7 Nucleo extract
     expect(Math.max(...f.connectors.map((c) => c.pins.length))).toBeLessThanOrEqual(48);
   });
 });
+
+describe('module buses must name their pins (dev 2026-10-16: a JSN-SR04T "UART" with only TRIG/ECHO)', () => {
+  const base = {
+    product_name: 'UART Ultrasonic Distance Sensor - JSN-SR04T',
+    vendor: 'Adafruit',
+    is_controller: false,
+    functional_categories: ['Sensing'],
+    prototype_role: 'Distance',
+    connectors: [{ ref: 'J1', kind: 'header', pins: ['VCC', 'GND', 'TRIG', 'ECHO'] }],
+    facts_source: 'model_knowledge',
+  };
+  const pins = ['VCC', 'GND', 'TRIG', 'ECHO'];
+  it('asks again when a UART names no TX/RX and no pin is called TX/RX', () => {
+    const f = factsSchema.parse(normaliseFacts({ ...base, pins, interfaces: [{ type: 'UART' }] }));
+    expect(checkFacts(f).join(' ')).toMatch(/UART interface does not name its tx\/rx pins/);
+  });
+  it('accepts it once the interface names the pins', () => {
+    const f = factsSchema.parse(normaliseFacts({ ...base, pins, interfaces: [{ type: 'UART', tx: 'ECHO', rx: 'TRIG' }] }));
+    expect(checkFacts(f)).toEqual([]);
+  });
+});
