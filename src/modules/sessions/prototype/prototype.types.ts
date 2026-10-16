@@ -13,10 +13,11 @@
 
 export const PROTOTYPE_SCHEMA_VERSION = '1.0';
 
-export const LINK_INTERFACES = ['I2C', 'SPI', 'UART', 'GPIO', 'ANALOG', 'PWM'] as const;
+/** CAN and RS485 are field buses: a transceiver links them to the controller, devices share the pair. */
+export const LINK_INTERFACES = ['I2C', 'SPI', 'UART', 'GPIO', 'ANALOG', 'PWM', 'CAN', 'RS485'] as const;
 export type LinkInterface = (typeof LINK_INTERFACES)[number];
 
-export type NetClass = 'power' | 'ground' | 'i2c' | 'spi' | 'uart' | 'gpio' | 'analog' | 'pwm';
+export type NetClass = 'power' | 'ground' | 'i2c' | 'spi' | 'uart' | 'can' | 'rs485' | 'gpio' | 'analog' | 'pwm';
 export type RuleStatus = 'PASS' | 'WARNING' | 'BLOCKER' | 'UNKNOWN';
 /** drawn = shown as a wire; proposed = mapping shown but a board awaits wiring review; blocked = a rule failed. */
 export type ConnectionState = 'drawn' | 'proposed' | 'blocked';
@@ -39,6 +40,11 @@ export interface PrototypeInstance {
   assetReadiness: string;
   scope: string;
   svg: PrototypeSvgRef | null;
+  /**
+   * Set when the block stands in for a module the library does not have (a gap): generic pins on
+   * the right bus, so the protocol design is complete, but no real part. Since 2026-10-16.
+   */
+  placeholder?: { kind: string; gapId: string; need: string; suggestion: string } | null;
 }
 
 export interface NetMember {
@@ -79,6 +85,10 @@ export interface PrototypeGap {
   category: string;
   need: string;
   suggestion: string;
+  /** How the missing module would connect (resolver's answer, else read from the text). */
+  interface?: string | null;
+  /** The placeholder block drawn for this gap, when one is. */
+  instanceId?: string | null;
 }
 
 export interface CompatibilityResult {
@@ -285,7 +295,7 @@ export interface PrototypeComposition {
     role: string;
     links: Array<{ interface: LinkInterface; pinName?: string | null; purpose?: string | null }>;
   }>;
-  gaps: Array<{ category: string; need: string; suggestion: string }>;
+  gaps: Array<{ category: string; need: string; suggestion: string; interface?: string | null }>;
 }
 
 export const isPrototypeArchitecture = (value: unknown): value is PrototypeArchitecture =>

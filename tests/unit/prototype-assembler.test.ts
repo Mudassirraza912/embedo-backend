@@ -6,6 +6,7 @@ import { PrototypeComposition } from '../../src/modules/sessions/prototype/proto
 import { LibraryEntity } from '../../src/modules/hardware/hardware-library.service.js';
 import { renderBenchArt } from '../../src/modules/hardware/bench-art.js';
 import { FIXTURE_IDS, loadFixtureEntity } from './prototype-fixtures.js';
+import { withPlaceholderEntities } from '../../src/modules/sessions/prototype/prototype-placeholders.js';
 
 describe('prototype payload: module diagram, pin list and hardware library', () => {
   let entities: Map<string, LibraryEntity>;
@@ -34,20 +35,27 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
   it('produces all three sections from the same composition', () => {
     const p = assemblePrototype(composition, entities, options);
     expect(p.kind).toBe('prototype');
-    expect(p.instances.map((i) => i.instanceId)).toEqual(['mcu', 'bme1', 'gps1', 'sd1']);
+    // The gap (an OLED the library lacks) is a placeholder block on the I2C bus.
+    expect(p.instances.map((i) => i.instanceId)).toEqual(['mcu', 'bme1', 'gps1', 'sd1', 'ssd1306_1']);
+    expect(p.instances[4]).toMatchObject({ hardwareEntityId: 'PLACEHOLDER-I2C-ssd1306_1', label: 'show readings', placeholder: { kind: 'I2C', gapId: 'g1' } });
+    expect(p.instances[4]!.svg?.url).toBe('/api/v1/hardware/entities/PLACEHOLDER-I2C-ssd1306_1/bench.svg?name=show%20readings');
     // The diagram draws bench art rendered from the record; the library entry keeps the library asset.
     expect(p.instances[0]!.svg?.url).toBe('/api/v1/hardware/entities/HW-FX01/bench.svg?controller=1');
     expect(p.hardwareLibrary.entries[0]!.svg?.url).toBe('/api/v1/hardware/entities/HW-FX01/svg');
-    expect(p.moduleDiagram.modules).toHaveLength(4);
-    expect(p.moduleDiagram.gapBoxes).toHaveLength(1);
+    expect(p.moduleDiagram.modules).toHaveLength(5);
+    expect(p.moduleDiagram.gapBoxes).toHaveLength(0);
     expect(p.hardwareLibrary.entries.map((e) => e.hardwareEntityId)).toEqual(['HW-FX01', 'HW-FX03', 'HW-FX04', 'HW-FX05']);
-    expect(p.gaps[0]).toMatchObject({ gapId: 'g1', category: 'Display/UI' });
+    expect(p.gaps[0]).toMatchObject({ gapId: 'g1', category: 'Display/UI', interface: 'I2C', instanceId: 'ssd1306_1' });
+    expect(p.nets.find((n) => n.name === 'I2C0_SDA')!.members.map((m) => m.instanceId)).toContain('ssd1306_1');
+    // Placeholders are never library records.
+    expect(p.hardwareLibrary.entries.some((e) => e.hardwareEntityId.startsWith('PLACEHOLDER-'))).toBe(false);
   });
 
   it('lists every contact of every placed module, wired or not', () => {
     const p = assemblePrototype(composition, entities, options);
-    const contacts = ['HW-FX01', 'HW-FX03', 'HW-FX04', 'HW-FX05']
-      .map((id) => entities.get(id)!.record.connectors.reduce((n, c) => n + c.contacts.length, 0))
+    const all = withPlaceholderEntities(entities, p.instances);
+    const contacts = ['HW-FX01', 'HW-FX03', 'HW-FX04', 'HW-FX05', 'PLACEHOLDER-I2C-ssd1306_1']
+      .map((id) => all.get(id)!.record.connectors.reduce((n, c) => n + c.contacts.length, 0))
       .reduce((a, b) => a + b, 0);
     expect(p.pinList.rows).toHaveLength(contacts);
     expect(p.pinList.summary.rows).toBe(contacts);
@@ -65,7 +73,8 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
     const p = assemblePrototype(composition, entities, options);
     const placed = new Map(p.moduleDiagram.modules.map((m) => [m.instanceId, m]));
     const instanceOf = (instanceId: string) => p.instances.find((i) => i.instanceId === instanceId)!;
-    const artOf = (instanceId: string) => renderBenchArt(entities.get(instanceOf(instanceId).hardwareEntityId)!.record, instanceOf(instanceId).isController);
+    const all = withPlaceholderEntities(entities, p.instances);
+    const artOf = (instanceId: string) => renderBenchArt(all.get(instanceOf(instanceId).hardwareEntityId)!.record, instanceOf(instanceId).isController);
     expect(p.moduleDiagram.wires.length).toBe(p.connections.length);
     for (const wire of p.moduleDiagram.wires) {
       const connection = p.connections.find((c) => c.id === wire.connectionId)!;
@@ -101,7 +110,7 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
     expect(d.buses![0]!.netClass).toBe('power');
     expect(new Set(d.buses!.map((b) => b.y)).size).toBe(d.buses!.length);
     const gnd = d.buses!.find((b) => b.label === 'GND')!;
-    expect(gnd.taps.map((t) => t.instanceId).sort()).toEqual(['bme1', 'gps1', 'mcu', 'sd1']);
+    expect(gnd.taps.map((t) => t.instanceId).sort()).toEqual(['bme1', 'gps1', 'mcu', 'sd1', 'ssd1306_1']);
     expect(gnd.shared).toBe(true);
     for (const b of d.buses!) {
       for (const t of b.taps) {
@@ -160,7 +169,8 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
       entities,
       options
     );
-    const artwork = new Map(p.instances.map((i) => [i.instanceId, renderBenchArt(entities.get(i.hardwareEntityId)!.record, i.isController).svg]));
+    const all = withPlaceholderEntities(entities, p.instances);
+    const artwork = new Map(p.instances.map((i) => [i.instanceId, renderBenchArt(all.get(i.hardwareEntityId)!.record, i.isController).svg]));
     const svg = renderPrototypeSvg(p, artwork);
     expect(svg.startsWith('<svg')).toBe(true);
     expect(svg).toContain('id="bme1-a-HW-FX03-JP1-1"');

@@ -24,9 +24,59 @@ export interface ParsedFunction {
 }
 
 export function parseFunction(token: string): ParsedFunction | null {
-  const match = FUNCTION_TOKEN.exec(token.trim().toUpperCase());
+  const match = FUNCTION_TOKEN.exec(normaliseToken(token));
   if (!match) return null;
   return { family: match[1]!, instance: match[2] !== undefined ? Number(match[2]) : null, role: match[3] ?? null };
+}
+
+/** Vendor spellings of the same peripheral: USART2_TX / LPUART1_TX → UART, FDCAN1_RX → CAN, I2C_1_SDA → I2C1_SDA. */
+function normaliseToken(token: string): string {
+  return token
+    .trim()
+    .toUpperCase()
+    .replace(/^(?:LP)?US?ART/, 'UART')
+    .replace(/^FDCAN/, 'CAN')
+    .replace(/^(I2C|SPI|UART|CAN|PWM|ADC|I2S)_(\d+)(?=_|$)/, '$1$2');
+}
+
+/** Bare silkscreen names and the bus role they carry ("SDA1" → I2C1 SDA, "TX" → UART TX). */
+const BARE_NAMES: Array<[RegExp, string, string]> = [
+  [/^SDA(\d*)$/, 'I2C', 'SDA'],
+  [/^SCL(\d*)$/, 'I2C', 'SCL'],
+  [/^(?:SCK|SCLK)(\d*)$/, 'SPI', 'SCK'],
+  [/^(?:MOSI|COPI)(\d*)$/, 'SPI', 'MOSI'],
+  [/^(?:MISO|CIPO)(\d*)$/, 'SPI', 'MISO'],
+  [/^(?:CS|SS|NSS)(\d*)$/, 'SPI', 'CS'],
+  [/^(?:TX|TXD)(\d*)$/, 'UART', 'TX'],
+  [/^(?:RX|RXD)(\d*)$/, 'UART', 'RX'],
+  [/^CAN(\d*)_?TX$/, 'CAN', 'TX'],
+  [/^CAN(\d*)_?RX$/, 'CAN', 'RX'],
+];
+
+/**
+ * Bus functions read from a pin's silkscreen name, for records that list no function tokens (AI-
+ * sourced controllers often name the pin "I2C0_SDA" or "D14/SDA" and leave functions empty: on prod,
+ * 2026-10-15, an STM32H7 Nucleo with pins named I2C0_SDA/SPI0_SCK/UART0_TX was reported as having
+ * "no free I2C bus", so nothing was wired). Every part of a compound name counts: "D14/SDA",
+ * "PB7 (I2C1_SDA)", "GP4 SDA".
+ */
+export function functionsFromName(name: string): ParsedFunction[] {
+  const out: ParsedFunction[] = [];
+  for (const part of name.toUpperCase().split(/[\s/,()|]+/).filter(Boolean)) {
+    const token = parseFunction(part);
+    if (token && token.role) {
+      out.push(token);
+      continue;
+    }
+    for (const [re, family, role] of BARE_NAMES) {
+      const m = re.exec(part);
+      if (m) {
+        out.push({ family, instance: m[1] ? Number(m[1]) : null, role });
+        break;
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -148,8 +198,10 @@ export class Board {
       .filter((p): p is { connector: HardwareConnector; anchorId: string } => p.anchorId !== null);
   }
 
+  /** Bus functions of a pin: its function tokens, else what its silkscreen name says. */
   functionsOf(pin: HardwarePin): ParsedFunction[] {
-    return pin.functions.map(parseFunction).filter((f): f is ParsedFunction => f !== null);
+    const listed = pin.functions.map(parseFunction).filter((f): f is ParsedFunction => f !== null);
+    return listed.some((f) => f.role !== null) ? listed : [...listed, ...functionsFromName(pin.pin_name)];
   }
 
   /** Board logic level: the most common numeric voltage domain on its data pins, else 3.3 V. */
