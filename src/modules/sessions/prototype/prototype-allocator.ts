@@ -1,6 +1,7 @@
 import { HardwarePin } from '../../hardware/hardware.schema.js';
 import { LibraryEntity } from '../../hardware/hardware-library.service.js';
 import { Board, ContactRef, isReservedForSignal, parseVolts } from './prototype-board.js';
+import { isPlaceholderEntity } from './prototype-placeholders.js';
 import {
   CompatibilityResult,
   LinkInterface,
@@ -225,8 +226,32 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
   const isGpioCapable = (pin: HardwarePin) =>
     pin.signal_class === 'data' || pin.signal_class === 'analog' || pin.functions.some((f) => /^GPIO/i.test(f));
 
+  /**
+   * A free pin for a plain signal (chip select, GPIO, DE/RE), keeping bus-capable pins for the buses
+   * that need them: a pin the board labels as its UART/I2C/SPI/CAN, or that can carry one, is taken
+   * last (seen 2026-10-15: an IMU chip select landed on the controller's only UART TX). Among equals,
+   * digital pins before analog-capable ones, then record order.
+   */
+  const labelledBusPins = new Set(
+    mcu.record.interfaces.interfaces.flatMap((i) =>
+      Object.entries(i.details as Record<string, unknown>)
+        .filter(([k, v]) => /_pin_id$/.test(k) && typeof v === 'string')
+        .map(([, v]) => v as string)
+    )
+  );
+  const busCost = (pin: HardwarePin) =>
+    (labelledBusPins.has(pin.pin_id) ? 10 : 0) +
+    mcu.functionsOf(pin).filter((f) => f.role !== null && ['I2C', 'SPI', 'UART', 'CAN'].includes(f.family)).length +
+    (pin.signal_class === 'analog' ? 0.5 : 0);
+  const freeGeneralPin = (predicate: (pin: HardwarePin) => boolean): HardwarePin | null => {
+    const candidates = mcu.record.pins.filter(
+      (pin) => !usedMcuSignalPins.has(pin.pin_id) && !isReservedForSignal(pin) && mcu.isHeaderWireable(pin.pin_id) && predicate(pin)
+    );
+    return candidates.map((pin, i) => ({ pin, cost: busCost(pin) + i / 10_000 })).sort((a, b) => a.cost - b.cost)[0]?.pin ?? null;
+  };
+
   /** Lowest-numbered bus instance whose role pins are all free; instance number keeps a bus on one peripheral block. */
-  const pickBus = (family: 'I2C' | 'SPI' | 'UART', roles: Record<string, string[]>, optionalRoles: string[] = []) => {
+  const pickBus = (family: 'I2C' | 'SPI' | 'UART' | 'CAN', roles: Record<string, string[]>, optionalRoles: string[] = []) => {
     const instances = new Set<number | null>();
     for (const pin of mcu.record.pins) for (const f of mcu.functionsOf(pin)) if (f.family === family) instances.add(f.instance);
     const ordered = [...instances].sort((a, b) => (a ?? -1) - (b ?? -1));
@@ -480,18 +505,8 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
   }
 
   // --- UART: point to point, one controller UART per device, TX crossed to RX -------------------
-  const uartPeripherals = peripherals.filter((p) => p.links.some((l) => l.interface === 'UART'));
-  for (const p of uartPeripherals) {
-    const board = boards.get(p.instanceId)!;
-    const details = board.interfaceDetails('UART')[0] ?? {};
-    const pTx = board.pinFromDetail(details, 'tx_pin_id') ?? PERIPHERAL_NAMES.tx.flatMap((n) => board.pinsByName(n))[0] ?? null;
-    const pRx = board.pinFromDetail(details, 'rx_pin_id') ?? PERIPHERAL_NAMES.rx.flatMap((n) => board.pinsByName(n))[0] ?? null;
-    if (!pTx || !pRx) {
-      results.push(result('protocol_compatibility', 'BLOCKER', `${board.label} lists UART but its TX/RX pins are not identified in the record.`, [p.instanceId]));
-      continue;
-    }
-    require(p.instanceId, pTx, pRx);
-    // The board's labelled UART (record details) first, then any free TX/RX-capable pair.
+  /** The board's labelled UART (record details) first, then any free TX/RX-capable pair. */
+  const takeUart = (): { instance: number | null; pins: Record<string, HardwarePin> } | null => {
     let bus: { instance: number | null; pins: Record<string, HardwarePin> } | null = null;
     for (const details of mcu.interfaceDetails('UART')) {
       const tx = mcu.pinFromDetail(details, 'tx_pin_id');
@@ -503,15 +518,42 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     }
     bus ??= pickBus('UART', { tx: ['TX'], rx: ['RX'] });
     if (!bus) {
-      const named = (names: string[]) => names.flatMap((n) => mcu.pinsByName(n)).find((p) => !usedMcuSignalPins.has(p.pin_id) && mcu.isWireable(p.pin_id)) ?? null;
-      const tx = named(['TX', 'TXD', 'TX0']);
-      const rx = named(['RX', 'RXD', 'RX0']);
+      const byName = (names: string[]) => names.flatMap((n) => mcu.pinsByName(n)).find((p) => !usedMcuSignalPins.has(p.pin_id) && mcu.isWireable(p.pin_id)) ?? null;
+      const tx = byName(['TX', 'TXD', 'TX0']);
+      const rx = byName(['RX', 'RXD', 'RX0']);
       if (tx && rx) bus = { instance: null, pins: { tx, rx } };
     }
+    return bus;
+  };
+  /** How many UARTs the record shows, for an honest "no free UART" message. */
+  const uartCount = () => {
+    const instances = new Set<string>();
+    for (const pin of mcu.record.pins) for (const f of mcu.functionsOf(pin)) if (f.family === 'UART') instances.add(String(f.instance));
+    return instances.size;
+  };
+  const noFreeUart = (board: Board, p: AllocInstance, pins: string[]) =>
+    result(
+      'required_host_interface',
+      'BLOCKER',
+      `${mcu.label} has no free UART for ${board.label}${uartCount() > 0 ? ` (its record lists ${uartCount()} UART${uartCount() === 1 ? '' : 's'}, all in use)` : ''}.`,
+      [mcu.instanceId, p.instanceId],
+      pins,
+      'Use a controller with more UARTs, or move a module to I2C.'
+    );
+  const uartPeripherals = peripherals.filter((p) => p.links.some((l) => l.interface === 'UART'));
+  for (const p of uartPeripherals) {
+    const board = boards.get(p.instanceId)!;
+    const details = board.interfaceDetails('UART')[0] ?? {};
+    const pTx = board.pinFromDetail(details, 'tx_pin_id') ?? PERIPHERAL_NAMES.tx.flatMap((n) => board.pinsByName(n))[0] ?? null;
+    const pRx = board.pinFromDetail(details, 'rx_pin_id') ?? PERIPHERAL_NAMES.rx.flatMap((n) => board.pinsByName(n))[0] ?? null;
+    if (!pTx || !pRx) {
+      results.push(result('protocol_compatibility', 'BLOCKER', `${board.label} lists UART but its TX/RX pins are not identified in the record.`, [p.instanceId]));
+      continue;
+    }
+    require(p.instanceId, pTx, pRx);
+    const bus = takeUart();
     if (!bus) {
-      results.push(
-        result('required_host_interface', 'BLOCKER', `${mcu.label} has no free UART for ${board.label}.`, [mcu.instanceId, p.instanceId], [pTx.pin_id, pRx.pin_id], 'Use a controller with another UART, or move a module to I2C.')
-      );
+      results.push(noFreeUart(board, p, [pTx.pin_id, pRx.pin_id]));
       continue;
     }
     const mTx = bus.pins['tx']!;
@@ -525,6 +567,179 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     nets.add(`${name}_RX`, 'uart', claim(mcu, mRx, true));
     nets.add(`${name}_RX`, 'uart', claim(board, pTx, true));
     linked.get(p.instanceId)!.add('UART');
+  }
+
+  // --- field buses: CAN and RS-485 ---------------------------------------------------------------
+  // A transceiver links the controller (CAN TX/RX, or a UART + a direction line for RS-485) to a
+  // differential pair; every device on the bus joins that pair (multidrop). Pins are matched by the
+  // record's interface details, else by their usual silkscreen names.
+  const namedPin = (board: Board, re: RegExp): HardwarePin | null =>
+    board.record.pins.find((pin) => !isPowerPin(pin) && re.test(pin.pin_name.trim().toUpperCase())) ?? null;
+  const detailOr = (board: Board, type: string, key: string, re: RegExp): HardwarePin | null =>
+    board.interfaceDetails(type).map((d) => board.pinFromDetail(d, key)).find(Boolean) ?? namedPin(board, re);
+
+  interface FieldMember {
+    p: AllocInstance;
+    board: Board;
+    hi: HardwarePin;
+    lo: HardwarePin;
+  }
+  /** Joins every member's pair onto one bus; members count as linked once a transceiver reaches the controller. */
+  const joinFieldBus = (family: 'CAN' | 'RS485', members: FieldMember[], transceiversWired: number, netNames: [string, string]) => {
+    const cls: NetClass = family === 'CAN' ? 'can' : 'rs485';
+    if (members.length >= 2 || (members.length === 1 && transceiversWired > 0)) {
+      for (const m of members) {
+        nets.add(netNames[0], cls, claim(m.board, m.hi, true));
+        nets.add(netNames[1], cls, claim(m.board, m.lo, true));
+        require(m.p.instanceId, m.hi, m.lo);
+        if (transceiversWired > 0) linked.get(m.p.instanceId)!.add(family);
+      }
+    }
+    if (members.length >= 2 && transceiversWired > 0) {
+      results.push(
+        result(
+          'protocol_compatibility',
+          'PASS',
+          `${family === 'CAN' ? 'CAN' : 'RS-485'} bus: ${members.map((m) => m.board.label).join(', ')} share ${netNames.join(' / ')} (multidrop). Terminate both ends of the bus with 120 Ω.`,
+          members.map((m) => m.p.instanceId)
+        )
+      );
+    }
+  };
+  const needsTransceiver = (family: string, devices: AllocInstance[], fix: string) =>
+    result(
+      'required_host_interface',
+      'BLOCKER',
+      `${devices.map((d) => boards.get(d.instanceId)!.label).join(', ')} ${devices.length === 1 ? 'needs' : 'need'} ${family === 'CAN' ? 'a CAN' : 'an RS-485'} transceiver wired to ${mcu.label}.`,
+      [mcu.instanceId, ...devices.map((d) => d.instanceId)],
+      [],
+      fix
+    );
+
+  // CAN
+  const canPeripherals = peripherals.filter((p) => p.links.some((l) => l.interface === 'CAN'));
+  if (canPeripherals.length > 0) {
+    const field: FieldMember[] = [];
+    const devices: AllocInstance[] = [];
+    let wired = 0;
+    for (const p of canPeripherals) {
+      const board = boards.get(p.instanceId)!;
+      const hi = namedPin(board, /^CAN[_-]?H(?:I|IGH)?$/);
+      const lo = namedPin(board, /^CAN[_-]?L(?:O|OW)?$/);
+      const tx = detailOr(board, 'CAN', 'tx_pin_id', /^(?:TXD|CTX|CANTX|CAN_TX|TX|D)$/);
+      const rx = detailOr(board, 'CAN', 'rx_pin_id', /^(?:RXD|CRX|CANRX|CAN_RX|RX|R)$/);
+      if (!hi || !lo) {
+        results.push(result('protocol_compatibility', 'BLOCKER', `${board.label} lists CAN but its CANH/CANL pins are not identified in the record.`, [p.instanceId]));
+        continue;
+      }
+      field.push({ p, board, hi, lo });
+      if (!tx || !rx) {
+        devices.push(p);
+        continue;
+      }
+      // A transceiver: the controller's CAN controller drives TXD and reads RXD.
+      require(p.instanceId, tx, rx);
+      let bus: { instance: number | null; pins: Record<string, HardwarePin> } | null = null;
+      for (const details of mcu.interfaceDetails('CAN')) {
+        const mTx = mcu.pinFromDetail(details, 'tx_pin_id');
+        const mRx = mcu.pinFromDetail(details, 'rx_pin_id');
+        if (!bus && mTx && mRx && !usedMcuSignalPins.has(mTx.pin_id) && !usedMcuSignalPins.has(mRx.pin_id)) {
+          bus = { instance: mcu.functionsOf(mTx).find((f) => f.family === 'CAN')?.instance ?? null, pins: { tx: mTx, rx: mRx } };
+        }
+      }
+      bus ??= pickBus('CAN', { tx: ['TX'], rx: ['RX'] });
+      if (!bus) {
+        const hasCan = mcu.record.pins.some((pin) => hasFunction(pin, 'CAN')) || mcu.record.interfaces.interfaces.some((i) => /CAN/i.test(i.type));
+        results.push(
+          hasCan
+            ? result('required_host_interface', 'BLOCKER', `${mcu.label} has no free CAN controller for ${board.label}.`, [mcu.instanceId, p.instanceId], [tx.pin_id, rx.pin_id])
+            : result(
+                'required_host_interface',
+                'UNKNOWN',
+                `${mcu.label}'s record lists no CAN controller pins (CAN TX/RX), so ${board.label} could not be wired to it.`,
+                [mcu.instanceId, p.instanceId],
+                [tx.pin_id, rx.pin_id],
+                'Check the controller pinout for its CAN/FDCAN pins, or use an SPI CAN controller (e.g. MCP2515) instead of a bare transceiver.'
+              )
+        );
+        continue;
+      }
+      const mTx = bus.pins['tx']!;
+      const mRx = bus.pins['rx']!;
+      usedMcuSignalPins.add(mTx.pin_id);
+      usedMcuSignalPins.add(mRx.pin_id);
+      const name = bus.instance !== null ? `CAN${bus.instance}` : 'CAN';
+      nets.add(`${name}_TX`, 'can', claim(mcu, mTx, true));
+      nets.add(`${name}_TX`, 'can', claim(board, tx, true));
+      nets.add(`${name}_RX`, 'can', claim(mcu, mRx, true));
+      nets.add(`${name}_RX`, 'can', claim(board, rx, true));
+      linked.get(p.instanceId)!.add('CAN');
+      wired += 1;
+    }
+    if (devices.length > 0 && wired === 0) results.push(needsTransceiver('CAN', devices, 'Add a 3.3 V CAN transceiver (e.g. SN65HVD230) between the controller and the bus.'));
+    joinFieldBus('CAN', field, wired, ['CAN_H', 'CAN_L']);
+  }
+
+  // RS-485
+  const rs485Peripherals = peripherals.filter((p) => p.links.some((l) => l.interface === 'RS485'));
+  if (rs485Peripherals.length > 0) {
+    const field: FieldMember[] = [];
+    const devices: AllocInstance[] = [];
+    let wired = 0;
+    for (const p of rs485Peripherals) {
+      const board = boards.get(p.instanceId)!;
+      const hi = namedPin(board, /^(?:A|A\+|D\+|RS485[_-]?A|485[_-]?A|DATA\+|TR\+)$/);
+      const lo = namedPin(board, /^(?:B|B-|D-|RS485[_-]?B|485[_-]?B|DATA-|TR-)$/);
+      const di = detailOr(board, 'RS485', 'tx_pin_id', /^(?:DI|DIN|TXD|TX|TXI|TX-I|TX_I)$/);
+      const ro = detailOr(board, 'RS485', 'rx_pin_id', /^(?:RO|ROUT|RXD|RX|RXO|RX-O|RX_O)$/);
+      if (!hi || !lo) {
+        results.push(result('protocol_compatibility', 'BLOCKER', `${board.label} lists RS-485 but its A/B pins are not identified in the record.`, [p.instanceId]));
+        continue;
+      }
+      field.push({ p, board, hi, lo });
+      if (!di || !ro) {
+        devices.push(p);
+        continue;
+      }
+      // A transceiver: a controller UART (TX → DI, RO → RX) and one line for the driver direction.
+      require(p.instanceId, di, ro);
+      const bus = takeUart();
+      if (!bus) {
+        results.push(noFreeUart(board, p, [di.pin_id, ro.pin_id]));
+        continue;
+      }
+      const mTx = bus.pins['tx']!;
+      const mRx = bus.pins['rx']!;
+      usedMcuSignalPins.add(mTx.pin_id);
+      usedMcuSignalPins.add(mRx.pin_id);
+      const name = bus.instance !== null ? `UART${bus.instance}` : 'UART';
+      nets.add(`${name}_TX`, 'uart', claim(mcu, mTx, true));
+      nets.add(`${name}_TX`, 'uart', claim(board, di, true));
+      nets.add(`${name}_RX`, 'uart', claim(mcu, mRx, true));
+      nets.add(`${name}_RX`, 'uart', claim(board, ro, true));
+      // Half duplex: DE and /RE share one controller line (high = transmit).
+      const de = namedPin(board, /^(?:DE|RTS|DE\/RE|DE_RE|TXEN|DIR)$/);
+      const re = namedPin(board, /^(?:RE|~RE|NRE|\/RE|RE_N|RE#)$/);
+      if (de || re) {
+        const dir = freeGeneralPin(isGpioCapable);
+        if (!dir) {
+          results.push(
+            result('required_host_interface', 'BLOCKER', `No free controller pin for ${board.label} driver enable.`, [mcu.instanceId, p.instanceId], [de?.pin_id, re?.pin_id].filter((x): x is string => Boolean(x)))
+          );
+        } else {
+          usedMcuSignalPins.add(dir.pin_id);
+          const netName = `${p.instanceId.toUpperCase()}_DE`;
+          nets.add(netName, 'rs485', claim(mcu, dir, true));
+          if (de) nets.add(netName, 'rs485', claim(board, de, true));
+          if (re) nets.add(netName, 'rs485', claim(board, re, true));
+          require(p.instanceId, de, re);
+        }
+      }
+      linked.get(p.instanceId)!.add('RS485');
+      wired += 1;
+    }
+    if (devices.length > 0 && wired === 0) results.push(needsTransceiver('RS485', devices, 'Add a 3.3 V RS-485 transceiver (e.g. MAX3485) between a controller UART and the bus.'));
+    joinFieldBus('RS485', field, wired, ['RS485_A', 'RS485_B']);
   }
 
   // --- SPI device lines (after UART so fixed-function pins are already claimed) -------------------
@@ -544,7 +759,7 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       const csPin =
         (spiBus.csHint && !usedMcuSignalPins.has(spiBus.csHint.pin_id) && !isReservedForSignal(spiBus.csHint) && mcu.isWireable(spiBus.csHint.pin_id)
           ? spiBus.csHint
-          : null) ?? freeSignalPin(isGpioCapable);
+          : null) ?? freeGeneralPin(isGpioCapable);
       if (!csPin) {
         results.push(result('required_host_interface', 'BLOCKER', `No free controller pin for ${board.label} chip select.`, [mcu.instanceId, p.instanceId], [pCs.pin_id]));
         continue;
@@ -586,7 +801,7 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
           : link.interface === 'PWM'
             ? (pin: HardwarePin) => hasFunction(pin, 'PWM')
             : isGpioCapable;
-      const mPin = freeSignalPin(capable);
+      const mPin = link.interface === 'GPIO' ? freeGeneralPin(capable) : freeSignalPin(capable);
       require(p.instanceId, pPin);
       if (!mPin) {
         results.push(
@@ -702,6 +917,14 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
         .join(' or ');
       const listed = s.board.record.electrical.power_source_types;
       peripheralRails.set(s.board.instanceId, null);
+      if (isPlaceholderEntity(s.board.entity)) {
+        // The bench's outside supply (e.g. a 12 V adapter), drawn so the first regulator's input is visible.
+        const v = Number(s.outputs[0]!.volts.toFixed(2));
+        results.push(
+          result('required_power_rail', 'WARNING', `${s.board.label} is the bench's outside supply: connect a ${v} V adapter or supply to it.`, [s.board.instanceId], [s.outputs[0]!.pin.pin_id])
+        );
+        continue;
+      }
       results.push(
         result(
           'required_power_rail',
@@ -757,6 +980,12 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
   for (const p of peripherals) {
     const board = boards.get(p.instanceId)!;
     if (supplyIds.has(p.instanceId)) continue;
+    // A placeholder has no known supply: only a common ground (for its signals), never a guessed rail.
+    if (isPlaceholderEntity(p.entity)) {
+      if (p.links.length > 0) joinGround(board);
+      peripheralRails.set(p.instanceId, null);
+      continue;
+    }
     if (poweredByCable.has(p.instanceId)) {
       const volts = poweredByCable.get(p.instanceId) ?? null;
       peripheralRails.set(p.instanceId, volts);

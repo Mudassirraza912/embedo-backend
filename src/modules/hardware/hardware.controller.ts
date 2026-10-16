@@ -4,6 +4,7 @@ import { AppError } from '../../common/errors/AppError.js';
 import { sessionsService } from '../sessions/sessions.service.js';
 import { hardwareLibraryService, LibraryEntity } from './hardware-library.service.js';
 import { renderBenchArt } from './bench-art.js';
+import { isPlaceholderId, placeholderEntity } from '../sessions/prototype/prototype-placeholders.js';
 
 /**
  * Read access to library boards for the Prototype UI (module artwork + record summary).
@@ -107,7 +108,10 @@ export class HardwareController {
   /** The board as drawn on the Prototype module diagram (bench art, rendered from the record). */
   getBenchSvg = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const entity = await loadVisible(req);
+      const id = req.params['id'] as string;
+      // A placeholder holds no data: anyone may draw one from its id and label.
+      const entity = isPlaceholderId(id) ? placeholderEntity(id, String(req.query['name'] ?? '')) : await loadVisible(req);
+      if (!entity) throw new AppError(404, 'NOT_FOUND', 'Hardware entity not found');
       const art = renderBenchArt(entity.record, req.query['controller'] === '1', req.query['theme'] === 'light' ? 'light' : 'dark');
       const etag = `"${art.hash.replace(/^sha256:/, '').slice(0, 64)}"`;
       res.setHeader('ETag', etag);

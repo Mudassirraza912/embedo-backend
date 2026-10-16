@@ -9,7 +9,7 @@ import { GENERATION_HOLD_MESSAGE } from '../pipeline/sufficiency-gate.js';
 import { NonRetryablePipelineError, PipelineExecutionOptions, PipelineExecutionResult } from '../pipeline/orchestrator.js';
 import { catalogueLine, PrototypeResolverError, RESOLVER_TASK_CASE, resolvePrototype, retrieveCatalogue } from './prototype-resolver.js';
 import { SOURCING_TASK_CASE, sourceHardware, SourcingResult } from '../../hardware/discovery/hardware-sourcer.js';
-import { assemblePrototype } from './prototype-assembler.js';
+import { assemblePrototype, externalSupplyVoltsOf } from './prototype-assembler.js';
 import { filterAppliedSuggestions, getAppliedChangeLineage } from '../pipeline/refinement-history.js';
 import { isPrototypeArchitecture, isPrototypeComposition, PrototypeArchitecture, PrototypeComposition } from './prototype.types.js';
 import { benchDiffView, describeBench, diffBenches } from './prototype-diff.js';
@@ -239,6 +239,9 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       projectName: session.title ?? 'Prototype',
       understanding: output.understanding,
       notes: output.notes,
+      // The outside supply the brief states ("12V input"), drawn feeding the bench's first regulator.
+      externalSupplyVolts: externalSupplyVoltsOf(`${session.intentText}
+${requestText}`),
     });
     const counts = payload.compatibility.counts;
     const cables = payload.connections.filter((c) => c.kind === 'cable').length;
@@ -373,7 +376,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
 
 /** Short, factual card text: what was placed, how it connects, and what is not in the library. */
 function summaryMessage(payload: PrototypeArchitecture, tag: string, sourcing: SourcingResult | null, changes: string[] = []): string {
-  const modules = payload.instances.filter((i) => !i.isController).map((i) => `${i.label} (${i.instanceId})`);
+  const modules = payload.instances.filter((i) => !i.isController && !i.placeholder).map((i) => `${i.label} (${i.instanceId})`);
   const cables = payload.connections.filter((c) => c.kind === 'cable').length;
   const wires = payload.connections.length - cables;
   const { summary } = payload.pinList;
@@ -387,7 +390,13 @@ function summaryMessage(payload: PrototypeArchitecture, tag: string, sourcing: S
     `- **Connections**: ${wires} jumper wire(s)${cables > 0 ? `, ${cables} STEMMA QT / Qwiic cable(s)` : ''}`,
     `- **Pin list**: ${summary.rows} contacts · ${summary.assigned + summary.proposed} connected · ${summary.blocking} blocking`,
     `- **Checks**: ${counts.PASS} passed · ${counts.BLOCKER} failed · ${counts.UNKNOWN} unverified · ${counts.WARNING} warning`,
-    payload.gaps.length > 0 ? `- **Not in library**: ${payload.gaps.map((g) => `${g.category} — ${g.need}`).join('; ')}` : null,
+    payload.gaps.some((g) => g.instanceId)
+      ? `- **Placeholders** (no matching module in the library yet; wired on their bus, power not wired): ${payload.gaps
+          .filter((g) => g.instanceId)
+          .map((g) => g.need)
+          .join('; ')}`
+      : null,
+    payload.gaps.some((g) => !g.instanceId) ? `- **Not in library**: ${payload.gaps.filter((g) => !g.instanceId).map((g) => `${g.category} — ${g.need}`).join('; ')}` : null,
     sourcing && sourcing.sourced.length > 0
       ? `- **Sourced for this project**: ${sourcing.sourced
           .map((b) => `${b.productName} (${b.factsSource === 'vendor_page' ? 'pinout read from the vendor page' : 'pinout from AI product knowledge — check it against the board'})`)

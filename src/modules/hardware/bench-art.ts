@@ -19,7 +19,7 @@ import { HardwareRecord } from './hardware.schema.js';
 export const BENCH_ART_VERSION = 'bench-2';
 
 type Edge = 'left' | 'right' | 'top' | 'bottom';
-export type BenchKind = 'mcu' | 'display' | 'relay' | 'gps' | 'storage' | 'sensor' | 'chip';
+export type BenchKind = 'mcu' | 'display' | 'relay' | 'gps' | 'storage' | 'sensor' | 'chip' | 'placeholder';
 
 export interface BenchArt {
   svg: string;
@@ -110,6 +110,8 @@ function fit(text: string, maxPx: number, size: number, mono = false): string {
 /** What to draw in the middle of the board. */
 export function benchKind(record: HardwareRecord, isController: boolean): BenchKind {
   const id = record.identity;
+  // A labelled stand-in for a module the library does not have (prototype-placeholders.ts).
+  if (id.group === 'Placeholder') return 'placeholder';
   const text = [id.product_name, id.group, ...(id.functional_categories ?? []), id.prototype_role ?? '', id.main_silicon ?? ''].join(' ').toLowerCase();
   if (isController || /controller board|main controller|microcontroller/.test(text)) return 'mcu';
   if (/oled|lcd|tft|display|e-?ink|e-?paper|screen/.test(text)) return 'display';
@@ -128,6 +130,7 @@ const FEATURE_SIZE: Record<BenchKind, [number, number]> = {
   storage: [140, 84],
   sensor: [110, 76],
   chip: [104, 76],
+  placeholder: [170, 64],
 };
 
 const stripParen = (s: string) => s.replace(/\s*\(.*\)\s*$/, '').trim();
@@ -196,10 +199,10 @@ function renderWithPalette(record: HardwareRecord, isController: boolean): Bench
   // --- text ----------------------------------------------------------------------------------------
   const id = record.identity;
   const silicon = stripParen(id.main_silicon ?? '');
-  const ifaces = [...new Set(record.interfaces.interfaces.map((i) => i.type.toUpperCase()).filter((t) => ['I2C', 'SPI', 'UART', 'I2S', 'CAN', 'USB'].includes(t)))]
-    .map((t) => (t === 'I2C' ? 'I²C' : t))
+  const ifaces = [...new Set(record.interfaces.interfaces.map((i) => i.type.toUpperCase()).filter((t) => ['I2C', 'SPI', 'UART', 'I2S', 'CAN', 'RS485', 'USB'].includes(t)))]
+    .map((t) => (t === 'I2C' ? 'I²C' : t === 'RS485' ? 'RS-485' : t))
     .slice(0, 2);
-  const subtitleParts = kind === 'mcu' ? [silicon, id.vendor] : [silicon, ...(ifaces.length > 0 ? ifaces : [id.vendor])];
+  const subtitleParts = kind === 'mcu' ? [silicon, id.vendor] : kind === 'placeholder' ? [silicon] : [silicon, ...(ifaces.length > 0 ? ifaces : [id.vendor])];
   const subtitle = subtitleParts.filter(Boolean).join(' · ');
   const title = id.product_name;
 
@@ -256,10 +259,14 @@ function renderWithPalette(record: HardwareRecord, isController: boolean): Bench
   // --- board -----------------------------------------------------------------------------------------
   out.push(`<g id="${g('board')}">`);
   out.push(`<rect x="${x0 - 3}" y="${y0 - 3}" width="${bw + 6}" height="${bh + 6}" rx="17" fill="none" stroke="${C.cyan}" stroke-opacity="0.07" stroke-width="6"/>`);
-  out.push(`<rect x="${x0}" y="${y0}" width="${bw}" height="${bh}" rx="14" fill="url(#${g('pcb')})" stroke="${C.edge}" stroke-opacity="0.75" stroke-width="1.6"/>`);
-  out.push(`<rect x="${x0}" y="${y0}" width="${bw}" height="${bh}" rx="14" fill="url(#${g('sheen')})"/>`);
+  const placeholder = kind === 'placeholder';
+  // A placeholder is not a board: dashed outline, no sheen, no mount holes.
+  out.push(
+    `<rect x="${x0}" y="${y0}" width="${bw}" height="${bh}" rx="14" fill="url(#${g('pcb')})" fill-opacity="${placeholder ? 0.55 : 1}" stroke="${C.edge}" stroke-opacity="${placeholder ? 0.95 : 0.75}" stroke-width="1.6"${placeholder ? ' stroke-dasharray="9 6"' : ''}/>`
+  );
+  if (!placeholder) out.push(`<rect x="${x0}" y="${y0}" width="${bw}" height="${bh}" rx="14" fill="url(#${g('sheen')})"/>`);
   out.push(`<rect x="${x0 + 6}" y="${y0 + 6}" width="${bw - 12}" height="${bh - 12}" rx="10" fill="none" stroke="${C.silk}" stroke-opacity="0.07"/>`);
-  for (const [hx, hy] of [
+  for (const [hx, hy] of placeholder ? [] : [
     [x0 + HOLE_IN, y0 + HOLE_IN],
     [x0 + bw - HOLE_IN, y0 + HOLE_IN],
     [x0 + HOLE_IN, y0 + bh - HOLE_IN],
@@ -437,6 +444,13 @@ function feature(kind: BenchKind, cx: number, cy: number, w: number, h: number, 
       out.push(`<rect x="${x + 12}" y="${y + 18}" width="${w - 24}" height="${h - 30}" rx="4" fill="#0E3F45" stroke="${C.silk}" stroke-opacity="0.3"/>`);
       for (let k = 0; k < 8; k++) out.push(`<rect x="${x + 22 + k * ((w - 44) / 8)}" y="${y + h - 26}" width="${(w - 44) / 8 - 4}" height="10" rx="1.5" fill="#D9B45A" fill-opacity="0.75"/>`);
       out.push(`<text x="${cx}" y="${y + 40}" fill="${C.chipText}" font-family="${MONO}" font-size="12" font-weight="700" text-anchor="middle">microSD</text>`);
+      break;
+    }
+    case 'placeholder': {
+      // No part chosen yet: an empty dashed footprint saying so, never a drawing of a real part.
+      out.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="none" stroke="${C.silk}" stroke-opacity="0.6" stroke-width="1.4" stroke-dasharray="5 4"/>`);
+      out.push(`<text x="${cx}" y="${cy - 3}" fill="${C.text}" font-family="${SANS}" font-size="12.5" font-weight="700" text-anchor="middle" letter-spacing="1.4">PLACEHOLDER</text>`);
+      out.push(`<text x="${cx}" y="${cy + 14}" fill="${C.sub}" font-family="${MONO}" font-size="10.5" text-anchor="middle">Choose a part</text>`);
       break;
     }
     case 'sensor': {

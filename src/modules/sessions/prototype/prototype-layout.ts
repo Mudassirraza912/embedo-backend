@@ -29,7 +29,7 @@ import {
  * rows and tracks; a net with pads in several bands gets a track in each, same name and colour.
  */
 
-export const LAYOUT_VERSION = 4;
+export const LAYOUT_VERSION = 5;
 
 /** Per-class shades: tracks of one class (e.g. SDA / SCL) get neighbouring but distinct colours. */
 export const NET_SHADES: Record<NetClass | 'cable', string[]> = {
@@ -38,6 +38,9 @@ export const NET_SHADES: Record<NetClass | 'cable', string[]> = {
   i2c: ['#20E6E0', '#9AF3EF'],
   spi: ['#7AA7FF', '#A88BFA', '#5ED3F3', '#C9B6FF'],
   uart: ['#4ADE80', '#B5E655'],
+  // Lemon and magenta: clear of the amber power rails and the blue SPI lines.
+  can: ['#FDE047', '#FACC15', '#FEF08A', '#EAB308'],
+  rs485: ['#F0ABFC', '#E879F9', '#D946EF'],
   gpio: ['#F472B6', '#FB7185', '#E879F9', '#FDA4AF'],
   analog: ['#B48EF5', '#D3B8FF'],
   pwm: ['#F58E6E', '#FFB199'],
@@ -47,7 +50,7 @@ export const NET_COLORS: Record<NetClass | 'cable', string> = Object.fromEntries
   Object.entries(NET_SHADES).map(([k, v]) => [k, v[0]!])
 ) as Record<NetClass | 'cable', string>;
 
-const CLASS_ORDER: Array<NetClass | 'cable'> = ['power', 'ground', 'i2c', 'spi', 'uart', 'gpio', 'analog', 'pwm', 'cable'];
+const CLASS_ORDER: Array<NetClass | 'cable'> = ['power', 'ground', 'i2c', 'spi', 'uart', 'can', 'rs485', 'gpio', 'analog', 'pwm', 'cable'];
 
 const LEGEND_LABELS: Record<NetClass | 'cable', string> = {
   power: 'Power',
@@ -55,6 +58,8 @@ const LEGEND_LABELS: Record<NetClass | 'cable', string> = {
   i2c: 'I²C',
   spi: 'SPI',
   uart: 'UART',
+  can: 'CAN',
+  rs485: 'RS-485',
   gpio: 'GPIO',
   analog: 'Analog',
   pwm: 'PWM',
@@ -80,6 +85,10 @@ export interface LayoutInstance {
   instanceId: string;
   label: string;
   isController: boolean;
+  /** The bench's outside supply (e.g. "12 V DC input"): drawn, but not counted as a module. */
+  outsideSupply?: boolean;
+  /** Protocol group for ordering boards (power, I2C, SPI, UART, CAN, RS-485, ...); boards of one group sit together. */
+  group?: string;
   width: number | null;
   height: number | null;
   anchors: Map<string, SvgAnchor>;
@@ -146,6 +155,11 @@ function describe(netClass: NetClass | 'cable', name: string, shared: boolean): 
   }
   if (netClass === 'ground') return `Ground${suffix}`;
   if (netClass === 'cable') return 'STEMMA QT / Qwiic cable';
+  if (netClass === 'can' && /CAN_?H/.test(n)) return `CAN bus high${suffix}`;
+  if (netClass === 'can' && /CAN_?L/.test(n)) return `CAN bus low${suffix}`;
+  if (netClass === 'can') return `${/TX/.test(n) ? 'CAN transmit' : /RX/.test(n) ? 'CAN receive' : 'CAN signal'}${suffix}`;
+  if (netClass === 'rs485' && /_DE$/.test(n)) return `RS-485 driver enable${suffix}`;
+  if (netClass === 'rs485') return `RS-485 line ${/_A$/.test(n) ? 'A' : 'B'}${suffix}`;
   const role = (
     [
       [/SDA/, 'I²C data'],
@@ -182,6 +196,9 @@ interface LaneRequest {
   sortKey: number;
 }
 
+/** Board order on the bench, by the protocol that links each board (see LayoutInstance.group). */
+export const GROUP_ORDER = ['power', 'i2c', 'spi', 'uart', 'can', 'rs485', 'gpio', 'analog', 'pwm', 'other'];
+
 /** Clear space between one band's lowest escape and the next band's highest. */
 const BAND_GAP = 72;
 /** Space between the track labels and the first riser, and after the last riser. */
@@ -196,7 +213,36 @@ const MAX_BANDS = 6;
  * Lays the bench out on one backbone, or, when that gets too wide, wraps it into stacked bands
  * (each band: a top row, its own tracks, a bottom row) so the drawing grows down as well as across.
  */
-export function layoutPrototype(input: LayoutInput): ModuleDiagram {
+/** "20 modules · 31 nets · 12 placeholders" (placeholders are blocks too; gaps without one are listed as gaps). */
+function summaryLine(input: LayoutInput, count: (n: number, word: string) => string): string {
+  const placeholders = input.gaps.filter((g) => g.instanceId).length;
+  const gaps = input.gaps.length - placeholders;
+  return [
+    count(input.instances.filter((i) => !i.outsideSupply).length, 'module'),
+    count(input.nets.length, 'net'),
+    placeholders > 0 ? count(placeholders, 'placeholder') : null,
+    gaps > 0 || placeholders === 0 ? count(gaps, 'gap') : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/**
+ * Protocol group of each board, read from the nets it is on: a field bus (RS-485, CAN) first, then
+ * I2C, SPI, UART, ...; a board on power nets only is "power". Explicit `group`s are kept.
+ */
+export function withProtocolGroups(instances: LayoutInstance[], nets: PrototypeNet[]): LayoutInstance[] {
+  const PICK = ['rs485', 'can', 'i2c', 'spi', 'uart', 'gpio', 'analog', 'pwm'];
+  return instances.map((inst) => {
+    if (inst.group || inst.isController) return inst;
+    const classes = new Set(nets.filter((n) => n.members.some((m) => m.instanceId === inst.instanceId)).map((n) => n.class as string));
+    const group = PICK.find((c) => classes.has(c)) ?? (classes.has('power') ? 'power' : 'other');
+    return { ...inst, group };
+  });
+}
+
+export function layoutPrototype(raw: LayoutInput): ModuleDiagram {
+  const input = { ...raw, instances: withProtocolGroups(raw.instances, raw.nets) };
   let best = layoutBands(input, 1);
   if (best.width <= SINGLE_BAND_MAX_WIDTH) return best;
   const score = (d: ModuleDiagram) => Math.abs(Math.log(d.width / d.height / TARGET_RATIO));
@@ -210,7 +256,16 @@ export function layoutPrototype(input: LayoutInput): ModuleDiagram {
 
 function layoutBands(input: LayoutInput, bandCount: number): ModuleDiagram {
   const controller = input.instances.find((i) => i.isController) ?? null;
-  const peripherals = input.instances.filter((i) => i !== controller);
+  // Boards of one protocol sit together (power, I2C, SPI, UART, CAN, RS-485, ...), composition order within.
+  const groupRank = (i: LayoutInstance) => {
+    const k = GROUP_ORDER.indexOf(i.group ?? '');
+    return k === -1 ? GROUP_ORDER.length : k;
+  };
+  const peripherals = input.instances
+    .filter((i) => i !== controller)
+    .map((inst, k) => ({ inst, k }))
+    .sort((a, b) => groupRank(a.inst) - groupRank(b.inst) || a.k - b.k)
+    .map(({ inst }) => inst);
   const visible = input.connections.filter((c) => c.state === 'drawn' || c.state === 'blocked' || (c.state === 'proposed' && input.drawProposed));
   const netById = new Map(input.nets.map((n) => [n.netId, n]));
   const instById = new Map(input.instances.map((i) => [i.instanceId, i]));
@@ -291,7 +346,10 @@ function layoutBands(input: LayoutInput, bandCount: number): ModuleDiagram {
     if (!controller) break;
     const ctrlEnd = [c.from, c.to].find((e) => e.instanceId === controller.instanceId);
     if (!ctrlEnd) {
-      hostOf.set(c.to.instanceId, c.from.instanceId);
+      // Only a cable chain ties boards together (a daisy-chained module hangs off its host). A
+      // shared power or bus wire does not: it used to pull a UART sensor fed by the regulator into
+      // the regulator's band, between the I2C sensors.
+      if (c.kind === 'cable') hostOf.set(c.to.instanceId, c.from.instanceId);
       continue;
     }
     const other = ctrlEnd === c.from ? c.to : c.from;
@@ -413,12 +471,21 @@ function layoutBands(input: LayoutInput, bandCount: number): ModuleDiagram {
   for (let band = 0; band < bands; band++) {
     for (const row of ['top', 'bottom'] as Row[]) {
       const members = peripherals.filter((p) => bandOfInst(p.instanceId) === band && rowOf.get(p.instanceId) === row);
-      const left = members.filter((p) => voteOf(p.instanceId) < 0);
-      const right = members.filter((p) => voteOf(p.instanceId) > 0);
-      const neutral = members.filter((p) => voteOf(p.instanceId) === 0);
-      // Neutral boards balance the two sides of the controller. Composition order is kept.
-      for (const p of neutral) (left.length <= right.length ? left : right).push(p);
-      rows.set(rk(band, row), band === 0 && row === 'top' && controller ? [...left, controller, ...right] : [...left, ...right]);
+      // A protocol group sits on one side of the controller: the side most of its boards' wires
+      // leave from, so a group never straddles the controller.
+      const groupVote = new Map<string, number>();
+      for (const p of members) groupVote.set(p.group ?? '', (groupVote.get(p.group ?? '') ?? 0) + Math.sign(voteOf(p.instanceId)));
+      const sideOf = (p: LayoutInstance) => groupVote.get(p.group ?? '') ?? 0;
+      const left = members.filter((p) => sideOf(p) < 0);
+      const right = members.filter((p) => sideOf(p) > 0);
+      const neutral = members.filter((p) => sideOf(p) === 0);
+      // Neutral boards balance the two sides of the controller, a protocol group at a time so a
+      // group never splits across the controller. Composition order is kept within a group.
+      const byGroup = new Map<string, LayoutInstance[]>();
+      for (const p of neutral) byGroup.set(p.group ?? '', [...(byGroup.get(p.group ?? '') ?? []), p]);
+      for (const list of byGroup.values()) (left.length <= right.length ? left : right).push(...list);
+      // Without the controller in the row there are no sides: protocol order, left to right.
+      rows.set(rk(band, row), band === 0 && row === 'top' && controller ? [...left, controller, ...right] : members);
     }
   }
   const keyOf = (inst: LayoutInstance) => rk(bandOfInst(inst.instanceId), rowOf.get(inst.instanceId)!);
@@ -691,7 +758,7 @@ function layoutBands(input: LayoutInput, bandCount: number): ModuleDiagram {
   const bottomBoardsRight = rightOf.get(rk(lastBand, 'bottom')) ?? trackStart;
   const lastBottomCount = rows.get(rk(lastBand, 'bottom'))!.length;
   let gapCursor = Math.max(bottomBoardsRight, trackStart) + (lastBottomCount > 0 ? MIN_GAP : PILL.gap + 20);
-  const gapBoxes = input.gaps.map((g) => {
+  const gapBoxes = input.gaps.filter((g) => !g.instanceId).map((g) => {
     const box = {
       gapId: g.gapId,
       x: r1(gapCursor),
@@ -830,7 +897,7 @@ function layoutBands(input: LayoutInput, bandCount: number): ModuleDiagram {
       title: 'Prototype Mode',
       subtitle: 'Design · Connect · Prototype',
       project: input.projectName ?? null,
-      summary: `${count(input.instances.length, 'module')} · ${count(input.nets.length, 'net')} · ${count(input.gaps.length, 'gap')}`,
+      summary: summaryLine(input, count),
       box: { x: HEADER.x, y: HEADER.y, width: r1(width - 2 * HEADER.x), height: HEADER.height },
     },
   };

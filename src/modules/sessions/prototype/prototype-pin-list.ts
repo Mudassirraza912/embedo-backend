@@ -52,8 +52,15 @@ function functionLabel(pin: HardwarePin, net: PrototypeNet | null): string {
       case 'spi':
         return `SPI ${suffix}`;
       case 'uart':
-        // Name the pin's own role: the net is named from the controller's side.
+        // Name the pin's own role: the net is named from the controller's side. A one-way pin says
+        // it by direction (an RS-485 transceiver's RO drives the controller's RX: its TX role).
+        if (pin.direction === 'output') return 'UART TX';
+        if (pin.direction === 'input') return 'UART RX';
         return /TX/i.test(pin.pin_name) || pin.functions.some((f) => /_TX$/i.test(f)) ? 'UART TX' : 'UART RX';
+      case 'can':
+        return `CAN ${suffix}`;
+      case 'rs485':
+        return /_DE$/.test(net.name) ? 'RS-485 DE/RE' : `RS-485 ${suffix}`;
       case 'analog':
         return 'ANALOG';
       case 'pwm':

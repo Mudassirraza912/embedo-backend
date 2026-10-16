@@ -2,6 +2,7 @@ import { HardwarePin } from '../../hardware/hardware.schema.js';
 import { Board, parseVolts } from './prototype-board.js';
 import { AllocationResult, AllocInstance } from './prototype-allocator.js';
 import { CompatibilityResult, RuleStatus } from './prototype.types.js';
+import { isPlaceholderEntity, placeholderKindOf } from './prototype-placeholders.js';
 
 /**
  * Composition-wide rules that need the finished net list (truth file §10, plan D5 step 5).
@@ -9,8 +10,14 @@ import { CompatibilityResult, RuleStatus } from './prototype.types.js';
  * UNKNOWN is a first-class outcome: a fact missing from a record is never treated as a pass.
  */
 
-const LEVEL_SHIFTED = /level.?shift|3\s*-\s*5\s*v|3\.3\s*-\s*5|5\s*v\s*tolerant/i;
-const SIGNAL_CLASSES = new Set(['i2c', 'spi', 'uart', 'gpio', 'analog', 'pwm']);
+/**
+ * Boards whose I/O works at 3.3 V and 5 V (on-board level shifting, or a regulator + shifter as on
+ * most Adafruit breakouts). Vendors write it many ways: "3-5V", "3.3V or 5V compatible", "3V or 5V
+ * compliant", "5V tolerant", "3.3V/5V logic" (the last ones were missed before 2026-10-16, so an
+ * SHT31-D and a VEML7700 failed a logic check their boards are built to pass).
+ */
+const LEVEL_SHIFTED = /level.?shift|\b3(?:\.3)?\s*v?\s*(?:-|–|to|or|and|\/)\s*5\s*v|5\s*v\s*(?:tolerant|compliant|compatible|safe)/i;
+const SIGNAL_CLASSES = new Set(['i2c', 'spi', 'uart', 'can', 'rs485', 'gpio', 'analog', 'pwm']);
 
 const make = (
   ruleType: string,
@@ -28,10 +35,15 @@ const accessoryName = (value: unknown): string =>
       ? String((value as Record<string, unknown>)['name'] ?? (value as Record<string, unknown>)['accessory'] ?? JSON.stringify(value))
       : String(value);
 
-export function evaluateCompatibility(controller: AllocInstance, peripherals: AllocInstance[], allocation: AllocationResult): CompatibilityResult[] {
+export function evaluateCompatibility(controller: AllocInstance, allPeripherals: AllocInstance[], allocation: AllocationResult): CompatibilityResult[] {
   const out: CompatibilityResult[] = [];
+  // Placeholders have generic pins and no facts: they are wired for the protocol design but never
+  // checked as if they were parts. One summary result says what they are.
+  // The outside supply ("12 V DC input") is drawn as a block but is not a missing module.
+  const placeholders = allPeripherals.filter((p) => isPlaceholderEntity(p.entity) && placeholderKindOf(p.entity.hardwareEntityId) !== 'DCIN');
+  const peripherals = allPeripherals.filter((p) => !isPlaceholderEntity(p.entity));
   const mcu = new Board(controller.instanceId, controller.entity);
-  const boards = new Map<string, Board>([[mcu.instanceId, mcu], ...peripherals.map((p) => [p.instanceId, new Board(p.instanceId, p.entity)] as const)]);
+  const boards = new Map<string, Board>([[mcu.instanceId, mcu], ...allPeripherals.map((p) => [p.instanceId, new Board(p.instanceId, p.entity)] as const)]);
   const pinOf = (instanceId: string, pinId: string): HardwarePin | undefined => boards.get(instanceId)?.pinsById.get(pinId);
 
   // bus_address_conflict — every I2C device on the shared bus needs its own address.
@@ -137,10 +149,16 @@ export function evaluateCompatibility(controller: AllocInstance, peripherals: Al
   }
 
   // required_host_interface — a host-dependent module that ended up with no data link is useless.
-  for (const p of peripherals) {
+  for (const p of allPeripherals) {
     const board = boards.get(p.instanceId)!;
     const links = allocation.linked.get(p.instanceId) ?? new Set();
     if (board.record.interfaces.host_requirement !== 'host_required') continue;
+    // The allocator already said why this module is not linked (no free UART, no transceiver, ...):
+    // one failure, reported once.
+    const explained = allocation.results.some(
+      (r) => (r.ruleType === 'required_host_interface' || r.ruleType === 'protocol_compatibility') && r.status !== 'PASS' && r.instanceIds.includes(p.instanceId)
+    );
+    if (links.size === 0 && explained) continue;
     if (links.size === 0) {
       const required = board.record.interfaces.required_host_interfaces;
       out.push(
@@ -163,7 +181,12 @@ export function evaluateCompatibility(controller: AllocInstance, peripherals: Al
     if (net.class === 'ground') continue;
     const directions = net.members.map((m) => ({ m, dir: pinOf(m.instanceId, m.pinId)?.direction }));
     const supplies = directions.filter((d) => d.dir === 'power_out');
-    const drivers = directions.filter((d) => d.dir === 'output');
+    // Shared bus lines are driven by one device at a time by design: SPI MISO (tri-state, chip
+    // select picks the driver), I2C (open drain), CAN and RS-485 pairs (bus arbitration / half
+    // duplex). Two outputs there are not a conflict (a 3-device SPI bus used to fail this check).
+    const sharedBus =
+      net.class === 'i2c' || net.class === 'can' || (net.class === 'rs485' && /^RS485_[AB]$/.test(net.name)) || (net.class === 'spi' && /(MISO|CIPO)$/i.test(net.name));
+    const drivers = sharedBus ? [] : directions.filter((d) => d.dir === 'output');
     if (supplies.length > 1 || drivers.length > 1) {
       const offenders = supplies.length > 1 ? supplies : drivers;
       out.push(
@@ -213,6 +236,21 @@ export function evaluateCompatibility(controller: AllocInstance, peripherals: Al
         )
       );
     }
+  }
+
+  if (placeholders.length > 0) {
+    out.push(
+      make(
+        'placeholder_module',
+        'WARNING',
+        `${placeholders.length} block${placeholders.length === 1 ? ' is a placeholder' : 's are placeholders'} (no matching module in the library): ${placeholders
+          .map((p) => p.entity.record.identity.product_name)
+          .join(', ')}. Their pins are generic and their power is not wired.`,
+        placeholders.map((p) => p.instanceId),
+        [],
+        'Choose a real module for each placeholder; its supply and pins are then wired and checked from its record.'
+      )
+    );
   }
 
   // dependency_presence — only required_accessories are enforced; related_modules never are.

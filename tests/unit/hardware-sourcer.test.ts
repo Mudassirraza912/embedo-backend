@@ -100,7 +100,11 @@ describe('hardware sourcing (vendor pages → private board + review queue)', ()
     const pico = await loadFixtureEntity(FIXTURE_IDS.pico);
     const result = allocatePins({ instanceId: 'mcu', entity: pico, links: [] }, [{ instanceId: 'relay1', entity: relay, links: [{ interface: 'GPIO', pinName: 'SIG' }] }]);
     const sig = result.nets.find((n) => n.name === 'RELAY1_SIG')!;
-    expect(sig.members.map((m) => m.pinId).sort()).toEqual(['HW-FX01:GP0', 'HWP-TEST0001:SIG']);
+    expect(sig.members.map((m) => m.pinId)).toContain('HWP-TEST0001:SIG');
+    // A plain GPIO line keeps off the controller's labelled bus pins (GP0 is the Pico's UART0 TX).
+    const mcuPin = sig.members.find((m) => m.instanceId === 'mcu')!.pinId;
+    const labelled = pico.record.interfaces.interfaces.flatMap((i) => Object.values(i.details as Record<string, unknown>));
+    expect(labelled).not.toContain(mcuPin);
     expect(result.nets.find((n) => n.name === '3V3')!.members.map((m) => m.pinId)).toContain('HWP-TEST0001:VIN');
     // The switched-load contacts are never wired to the controller.
     expect(result.nets.flatMap((n) => n.members).some((m) => /:(NO|COM|NC)$/.test(m.pinId))).toBe(false);

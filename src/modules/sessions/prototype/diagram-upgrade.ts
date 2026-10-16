@@ -4,6 +4,7 @@ import { hardwareLibraryService, LibraryEntity } from '../../hardware/hardware-l
 import { benchSvgRef } from './prototype-assembler.js';
 import { LAYOUT_VERSION, layoutPrototype } from './prototype-layout.js';
 import { isPrototypeArchitecture, PrototypeArchitecture } from './prototype.types.js';
+import { isPlaceholderId, withPlaceholderEntities } from './prototype-placeholders.js';
 
 /**
  * Prototype payloads are normalised when served (nothing is written back to the database):
@@ -22,13 +23,14 @@ const needsUpgrade = (value: unknown): value is PrototypeArchitecture =>
   (!Array.isArray(value.moduleDiagram.buses) || (value.moduleDiagram.layoutVersion ?? 0) < LAYOUT_VERSION);
 
 /** Redraws one payload with the current layout + bench art. Returns other values unchanged. */
-export function upgradeWithEntities<T>(value: T, entities: Map<string, LibraryEntity>): T {
+export function upgradeWithEntities<T>(value: T, libraryEntities: Map<string, LibraryEntity>): T {
   if (!needsUpgrade(value)) return value;
   const a = value;
+  const entities = withPlaceholderEntities(libraryEntities, a.instances);
   const svgBasePath = `${env.API_PREFIX}/hardware/entities`;
   const instances = a.instances.map((i) => {
     const entity = entities.get(i.hardwareEntityId);
-    return entity ? { ...i, svg: benchSvgRef(renderBenchArt(entity.record, i.isController), i.hardwareEntityId, i.isController, svgBasePath) } : i;
+    return entity ? { ...i, svg: benchSvgRef(renderBenchArt(entity.record, i.isController), i.hardwareEntityId, i.isController, svgBasePath, i.label) } : i;
   });
   const moduleDiagram = layoutPrototype({
     instances: a.instances.map((i) => {
@@ -44,6 +46,7 @@ export function upgradeWithEntities<T>(value: T, entities: Map<string, LibraryEn
         inset: art?.inset ?? 0,
         edges: art?.edges,
         badge: null,
+        outsideSupply: i.placeholder?.kind === 'DCIN',
       };
     }),
     nets: a.nets,
@@ -57,20 +60,20 @@ export function upgradeWithEntities<T>(value: T, entities: Map<string, LibraryEn
 
 /** Hardware ids an old-format payload needs, so many payloads can share one library read. */
 export function boardsToUpgrade(value: unknown): string[] {
-  return needsUpgrade(value) ? value.instances.map((i) => i.hardwareEntityId) : [];
+  return needsUpgrade(value) ? value.instances.map((i) => i.hardwareEntityId).filter((id) => !isPlaceholderId(id)) : [];
 }
 
 export async function upgradePrototypeDiagram<T>(value: T): Promise<T> {
   const scrubbed = scrubReviewState(value);
+  if (!needsUpgrade(scrubbed)) return scrubbed;
   const ids = boardsToUpgrade(scrubbed);
-  if (ids.length === 0) return scrubbed;
   return upgradeWithEntities(scrubbed, await hardwareLibraryService.getByIds(ids));
 }
 
 /** Upgrades many payloads with one library read. */
 export async function upgradePrototypeDiagrams<T>(values: T[]): Promise<T[]> {
   const ids = [...new Set(values.flatMap(boardsToUpgrade))];
-  if (ids.length === 0) return values.map(scrubReviewState);
+  if (!values.some((v) => needsUpgrade(v))) return values.map(scrubReviewState);
   const entities = await hardwareLibraryService.getByIds(ids);
   return values.map((v) => upgradeWithEntities(scrubReviewState(v), entities));
 }
