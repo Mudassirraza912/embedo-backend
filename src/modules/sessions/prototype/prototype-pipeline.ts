@@ -188,18 +188,9 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       log.info('Named controller not found or sourced; resolving with the closest library controller');
       output = await resolve(true);
     }
-    // Once a controller is chosen, a gap asking for the controller is not a missing module; once
-    // the bench has a supply board, a Power gap is not either (dev 2026-10-16: two regulators AND a
-    // "power supply module" placeholder, so a 20-module brief showed 22 blocks).
-    if (output?.controller) {
-      const hasSupply = output.modules.some((m) => {
-        const e = library.find((l) => l.hardwareEntityId === m.hardwareEntityId);
-        return e && e.record.interfaces.host_requirement !== 'host_required' && e.record.pins.some((p) => p.direction === 'power_out');
-      });
-      output.gaps = output.gaps.filter(
-        (g) => !(isControllerGap(g) && g.category.toLowerCase() === 'processing') && !(hasSupply && /^power$/i.test(g.category) && !/\b(battery|charger|solar)\b/i.test(g.need))
-      );
-    }
+    // Once a controller is chosen, a gap asking for the controller is not a missing module. (A Power
+    // gap covered by a supply board is dropped by the assembler, so stored sessions get it too.)
+    if (output?.controller) output.gaps = output.gaps.filter((g) => !(isControllerGap(g) && g.category.toLowerCase() === 'processing'));
 
     if (!output) {
       const notPrototype = Boolean(sourcing && !sourcing.isPrototypeRequest);

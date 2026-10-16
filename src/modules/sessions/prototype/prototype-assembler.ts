@@ -151,7 +151,15 @@ export function assemblePrototype(
   const allEntities = new Map(entities);
   const gaps: PrototypeGap[] = composition.gaps.map((g, i) => ({ gapId: `g${i + 1}`, category: g.category, need: g.need, suggestion: g.suggestion, interface: g.interface ?? null }));
   const placeholderModules: Array<{ instanceId: string; hardwareEntityId: string; role: string; links: ReturnType<typeof placeholderLinks>; kind: PlaceholderKind; gap: PrototypeGap }> = [];
+  // A Power gap is not a missing module once the bench has a supply board (dev 2026-10-16: two
+  // regulators AND a "power supply module" placeholder made a 20-module brief show 22 blocks).
+  const hasSupply = libraryModules.some((m) => {
+    const e = entities.get(m.hardwareEntityId)!;
+    return e.record.interfaces.host_requirement !== 'host_required' && e.record.pins.some((p) => p.direction === 'power_out');
+  });
+  const coveredPower = (g: PrototypeGap) => hasSupply && /^power$/i.test(g.category) && !/battery|charger|solar|ups\b/i.test(g.need);
   if (controllerEntity) {
+    for (let k = gaps.length - 1; k >= 0; k--) if (coveredPower(gaps[k]!)) gaps.splice(k, 1);
     for (const gap of gaps) {
       const kind = placeholderKindFor(gap);
       const instanceId = placeholderInstanceId(gap, kind, taken);
