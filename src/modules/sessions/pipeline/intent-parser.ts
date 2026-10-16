@@ -26,15 +26,15 @@ JSON Schema to return:
     "sensing": string[] | null, // e.g. ["temperature", "humidity", "co2", "imu", "gps"]
     "actuation": string[] | null, // e.g. ["motor", "relay", "solenoid", "haptic"]
     "connectivity": string[] | null, // e.g. ["ble", "wifi", "cellular_lte", "lora", "zigbee", "usb"]
-    "power": string[] | null, // e.g. ["lipo_battery", "usb_c", "solar", "mains_ac"]
+    "power": string[] | null, // e.g. ["aa_battery", "aaa_battery", "cr2032_coin", "lipo_battery", "usb_c", "solar", "mains_ac"]
     "storage": string[] | null, // e.g. ["microsd", "emmc", "flash_nor", "fram"]
     "ui": string[] | null, // e.g. ["oled_display", "rgb_leds", "buttons", "touchscreen"]
     "audio": string[] | null // e.g. ["pdm_microphone", "i2s_dac", "buzzer"]
   },
   "constraints": {
     "formFactor": string | null, // e.g. "wearable", "handheld", "compact", "din_rail"
-    "powerSource": string | null, // e.g. "rechargeable_lipo", "cr2032_coin", "usb_5v", "12v_dc"
-    "batteryLifeHours": number | null,
+    "powerSource": string | null, // e.g. "2x_aa_battery", "rechargeable_lipo", "cr2032_coin", "usb_5v", "12v_dc"
+    "batteryLifeHours": number | null, // convert years/months/days to total hours (e.g. 2 years = 17520)
     "environment": string | null, // e.g. "indoor", "outdoor_weatherproof", "high_temp"
     "costTargetUsd": number | null
   },
@@ -47,6 +47,7 @@ JSON Schema to return:
 }
 
 If a field is not stated by the user, use null (or an empty string for deviceType/purpose). Do not invent details.
+If primary batteries are specified (e.g. "2x AA batteries"), record powerSource as "2x_aa_battery" and power as ["aa_battery"] (never assume lipo_battery or add usb_c unless explicitly asked). Convert specified battery lifetimes into hours (e.g. "2 years" -> 17520).
 When conversation history contains an initial product brief and later answers to clarification questions, combine them into one intent. Treat the latest answer as a continuation of that brief, preserve earlier details that were not changed, and fill the fields the answer provides. Do not classify a hardware-related clarification answer as off-topic just because it is short.
 Output ONLY valid raw JSON. No markdown code blocks, no explanation text.`;
 
