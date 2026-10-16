@@ -291,15 +291,24 @@ export class AuthService {
       const byEmail = await prisma.user.findFirst({ where: { email, deletedAt: null } });
 
       if (byEmail) {
-        // Never silently link a Google identity onto a password account.
-        if (byEmail.hashedPassword) {
+        // If the user already has a password account and hasn't confirmed linking yet, prompt for confirmation.
+        if (byEmail.hashedPassword && !input.linkAccount) {
           throw new AppError(
             409,
-            'CONFLICT',
-            'An account with this email already exists using password login. Please sign in with your email and password.'
+            'ACCOUNT_LINK_REQUIRED',
+            'An account with this email already exists using password login. Would you like to link your Google account to it?',
+            { email }
           );
         }
-        await prisma.authIdentity.create({ data: { userId: byEmail.id, provider: 'google', providerUserId: googleSub } });
+
+        const existingIdentity = await prisma.authIdentity.findFirst({
+          where: { userId: byEmail.id, provider: 'google' },
+        });
+        if (!existingIdentity) {
+          await prisma.authIdentity.create({
+            data: { userId: byEmail.id, provider: 'google', providerUserId: googleSub },
+          });
+        }
         user = byEmail;
       } else {
         // New account: consent to data use must be explicit (same rule as email registration).

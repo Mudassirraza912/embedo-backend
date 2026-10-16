@@ -37,11 +37,33 @@ export function projectArchitecture(graph: CanonicalDesignGraph): ProjectedArchi
 
   // Derive power input description
   const powerNodes = graph.nodes.filter((n) => n.category === 'power');
-  const powerInputStr = powerNodes.find((n) => n.label.includes('9V') || n.label.includes('12V') || n.label.includes('24V'))
-    ? '9V – 24V DC Input'
-    : powerNodes.find((n) => n.id.includes('bat'))
-    ? '3.7V Li-Po / 5V USB-C'
-    : '5V USB-C / DC Input';
+  const batNode = powerNodes.find(
+    (n) => n.id.includes('bat') || n.label.toLowerCase().includes('battery') || n.label.toLowerCase().includes('cell')
+  );
+  const hasUsb = powerNodes.some((n) => n.id.includes('usb') || n.label.toLowerCase().includes('usb'));
+  const dcNode = powerNodes.find(
+    (n) => n.label.includes('9V') || n.label.includes('12V') || n.label.includes('24V') || n.label.toLowerCase().includes('dc')
+  );
+  const loopNode = powerNodes.find((n) => /\b(4[-\s]?20|loop|hart)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`));
+  const solarNode = powerNodes.find((n) => /\b(solar|pv|panel)\b/i.test(`${n.id} ${n.label}`));
+  const supercapNode = powerNodes.find((n) => /\b(supercap|supercapacitor|edlc)\b/i.test(`${n.id} ${n.label}`));
+
+  let powerInputStr = '5V USB-C / DC Input';
+  if (loopNode) {
+    powerInputStr = `${loopNode.label} (2-Wire 4–20 mA Loop-Powered)`;
+  } else if (solarNode && supercapNode) {
+    powerInputStr = `${solarNode.label} + ${supercapNode.label}`;
+  } else if (dcNode) {
+    powerInputStr = dcNode.label.includes('9V') || dcNode.label.includes('12V') || dcNode.label.includes('24V')
+      ? '9V – 24V DC Input'
+      : `${dcNode.label} Input`;
+  } else if (batNode && !hasUsb) {
+    powerInputStr = batNode.sublabel ? `${batNode.label} (${batNode.sublabel})` : batNode.label;
+  } else if (batNode && hasUsb) {
+    powerInputStr = `${batNode.sublabel || batNode.label} / 5V USB-C`;
+  } else if (powerNodes.length > 0) {
+    powerInputStr = powerNodes[0].label;
+  }
 
   // Derive outputs
   const outputNodes = graph.nodes.filter((n) => n.category === 'motor' || n.category === 'haptic' || n.category === 'ui');
@@ -215,54 +237,262 @@ function projectPowerTree(graph: CanonicalDesignGraph): ProjectedDiagram {
   const nodes: DiagramNode[] = [];
   const edges: DiagramEdge[] = [];
 
-  // 1. Power Source / Inputs
-  nodes.push({
-    id: 'vbus',
-    x: 50,
-    y: 50,
-    w: 170,
-    h: 70,
-    label: 'USB-C VBUS',
-    sublabel: '5V input',
-    category: 'power',
-  });
+  // 1. Identify actual power components from graph
+  const powerNodes = graph.nodes.filter((n) => n.category === 'power');
+  const chargerNode = powerNodes.find(
+    (n) => n.id.includes('charger') || n.label.toLowerCase().includes('charger') || n.id.includes('pmic')
+  );
+  const batteryNode = powerNodes.find(
+    (n) =>
+      (n.id.includes('bat') || n.label.toLowerCase().includes('battery') || n.label.toLowerCase().includes('cell')) &&
+      n !== chargerNode
+  );
+  const usbInputNode = powerNodes.find(
+    (n) =>
+      (n.id.includes('usb') || n.id.includes('vbus') || n.label.toLowerCase().includes('usb')) &&
+      n !== chargerNode &&
+      n !== batteryNode
+  );
+  const dcInputNode = powerNodes.find(
+    (n) =>
+      (n.id.includes('dc') || n.label.toLowerCase().includes('dc') || n.label.includes('9V') || n.label.includes('12V') || n.label.includes('24V')) &&
+      n !== chargerNode &&
+      n !== batteryNode &&
+      n !== usbInputNode
+  );
+  const loopNode = powerNodes.find((n) => /\b(4[-\s]?20|loop|hart)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`));
+  const solarNode = powerNodes.find((n) => /\b(solar|pv|panel)\b/i.test(`${n.id} ${n.label}`));
+  const supercapNode = powerNodes.find((n) => /\b(supercap|supercapacitor|edlc)\b/i.test(`${n.id} ${n.label}`));
+  const regulatorNode = powerNodes.find(
+    (n) =>
+      n !== chargerNode &&
+      n !== batteryNode &&
+      n !== usbInputNode &&
+      n !== dcInputNode &&
+      n !== solarNode &&
+      n !== supercapNode &&
+      n !== loopNode
+  );
 
-  nodes.push({
-    id: 'charger',
-    x: 50,
-    y: 170,
-    w: 170,
-    h: 80,
-    label: 'BQ25186',
-    sublabel: '1-cell charger',
-    category: 'power',
-  });
+  const primaryRail = graph.powerRails.find((r) => r.voltageV === 3.3) || graph.powerRails[0] || {
+    name: '3.3V',
+    voltageV: 3.3,
+    source: 'regulator',
+    consumers: [],
+  };
+  const railVoltageStr = `${primaryRail.voltageV ?? 3.3}V`;
 
-  nodes.push({
-    id: 'battery',
-    x: 270,
-    y: 170,
-    w: 160,
-    h: 80,
-    label: '1S Li-Po',
-    sublabel: '3.7V · 800mAh',
-    category: 'power',
-  });
+  // Determine Power Tree Topology
+  if (loopNode) {
+    // Case E: 2-Wire 4-20 mA Loop-Powered Architecture
+    nodes.push({
+      id: loopNode.id,
+      x: 50,
+      y: 90,
+      w: 180,
+      h: 80,
+      label: loopNode.label,
+      sublabel: loopNode.sublabel || '24V Loop Supply (<3.5mA)',
+      category: 'power',
+    });
 
-  nodes.push({
-    id: 'regulator',
-    x: 50,
-    y: 300,
-    w: 170,
-    h: 70,
-    label: 'AP63203WU-7',
-    sublabel: 'buck regulator',
-    category: 'power',
-  });
+    const reg = regulatorNode || powerNodes.find((n) => n.id !== loopNode.id);
+    if (reg) {
+      nodes.push({
+        id: reg.id,
+        x: 50,
+        y: 240,
+        w: 180,
+        h: 75,
+        label: reg.label,
+        sublabel: reg.sublabel || 'Loop Buck & DAC',
+        category: 'power',
+      });
+      edges.push({ from: loopNode.id, to: reg.id, label: '24V Loop', type: 'power' });
+      edges.push({ from: reg.id, to: 'rail', label: railVoltageStr, type: 'rail' });
+    } else {
+      edges.push({ from: loopNode.id, to: 'rail', label: railVoltageStr, type: 'rail' });
+    }
+  } else if (solarNode && supercapNode) {
+    // Case D: Solar + Supercapacitor Harvesting Architecture
+    nodes.push({
+      id: solarNode.id,
+      x: 50,
+      y: 50,
+      w: 170,
+      h: 70,
+      label: solarNode.label,
+      sublabel: solarNode.sublabel || '5V PV Input',
+      category: 'power',
+    });
+
+    const mppt = chargerNode || powerNodes.find((n) => /\b(mppt|harvest|charger|spv)\b/i.test(`${n.id} ${n.label}`)) || {
+      id: 'mppt',
+      label: 'SPV1040',
+      sublabel: 'Solar MPPT Charger',
+      category: 'power',
+    };
+    nodes.push({
+      id: mppt.id,
+      x: 50,
+      y: 160,
+      w: 170,
+      h: 75,
+      label: mppt.label,
+      sublabel: mppt.sublabel || 'MPPT boost charger',
+      category: 'power',
+    });
+
+    nodes.push({
+      id: supercapNode.id,
+      x: 270,
+      y: 160,
+      w: 160,
+      h: 75,
+      label: supercapNode.label,
+      sublabel: supercapNode.sublabel || '5.5V / 10F bank',
+      category: 'power',
+    });
+
+    const reg = regulatorNode || {
+      id: 'regulator',
+      label: 'TPS62840',
+      sublabel: 'Ultra-Low-Iq Buck',
+      category: 'power',
+    };
+    nodes.push({
+      id: reg.id,
+      x: 50,
+      y: 280,
+      w: 170,
+      h: 75,
+      label: reg.label,
+      sublabel: reg.sublabel || '3.3V step-down',
+      category: 'power',
+    });
+
+    edges.push({ from: solarNode.id, to: mppt.id, label: '5V PV', type: 'power' });
+    edges.push({ from: mppt.id, to: supercapNode.id, label: 'Charge', type: 'power' });
+    edges.push({ from: supercapNode.id, to: reg.id, label: 'VSUPERCAP', type: 'power' });
+    edges.push({ from: reg.id, to: 'rail', label: railVoltageStr, type: 'rail' });
+  } else if (batteryNode && !chargerNode && !usbInputNode) {
+    // Case A: Battery Only (e.g. 2x AA, AAA, CR2032, non-rechargeable)
+    nodes.push({
+      id: batteryNode.id,
+      x: 50,
+      y: 90,
+      w: 180,
+      h: 80,
+      label: batteryNode.label,
+      sublabel: batteryNode.sublabel || 'battery power',
+      category: 'power',
+    });
+
+    if (regulatorNode) {
+      nodes.push({
+        id: regulatorNode.id,
+        x: 50,
+        y: 240,
+        w: 180,
+        h: 75,
+        label: regulatorNode.label,
+        sublabel: regulatorNode.sublabel || 'voltage converter',
+        category: 'power',
+      });
+      const vbatLabel = batteryNode.sublabel?.includes('V') ? batteryNode.sublabel.split(' ')[0] : 'VBAT';
+      edges.push({ from: batteryNode.id, to: regulatorNode.id, label: vbatLabel || 'VBAT', type: 'power' });
+      edges.push({ from: regulatorNode.id, to: 'rail', label: railVoltageStr, type: 'rail' });
+    } else {
+      edges.push({ from: batteryNode.id, to: 'rail', label: railVoltageStr, type: 'rail' });
+    }
+  } else if (chargerNode || (usbInputNode && batteryNode)) {
+    // Case B: Rechargeable System with Charger (USB-C + Charger + LiPo)
+    const vbusId = usbInputNode?.id || 'vbus';
+    nodes.push({
+      id: vbusId,
+      x: 50,
+      y: 50,
+      w: 170,
+      h: 70,
+      label: usbInputNode?.label || 'USB-C VBUS',
+      sublabel: usbInputNode?.sublabel || '5V input',
+      category: 'power',
+    });
+
+    const cId = chargerNode?.id || 'charger';
+    nodes.push({
+      id: cId,
+      x: 50,
+      y: 170,
+      w: 170,
+      h: 80,
+      label: chargerNode?.label || 'BQ25186',
+      sublabel: chargerNode?.sublabel || '1-cell charger',
+      category: 'power',
+    });
+
+    const bId = batteryNode?.id || 'battery';
+    nodes.push({
+      id: bId,
+      x: 270,
+      y: 170,
+      w: 160,
+      h: 80,
+      label: batteryNode?.label || '1S Li-Po',
+      sublabel: batteryNode?.sublabel || '3.7V · 800mAh',
+      category: 'power',
+    });
+
+    const rId = regulatorNode?.id || 'regulator';
+    nodes.push({
+      id: rId,
+      x: 50,
+      y: 300,
+      w: 170,
+      h: 70,
+      label: regulatorNode?.label || 'AP63203WU-7',
+      sublabel: regulatorNode?.sublabel || 'buck regulator',
+      category: 'power',
+    });
+
+    edges.push({ from: vbusId, to: cId, label: '5V', type: 'power' });
+    edges.push({ from: cId, to: bId, label: 'charge', type: 'power' });
+    edges.push({ from: cId, to: rId, label: 'VSYS', type: 'power' });
+    edges.push({ from: rId, to: 'rail', label: railVoltageStr, type: 'rail' });
+  } else {
+    // Case C: DC or USB direct to regulator (no battery)
+    const inNode = dcInputNode || usbInputNode || powerNodes[0];
+    const inId = inNode?.id || 'vin';
+    nodes.push({
+      id: inId,
+      x: 50,
+      y: 90,
+      w: 180,
+      h: 75,
+      label: inNode?.label || 'DC Input',
+      sublabel: inNode?.sublabel || '5V / DC supply',
+      category: 'power',
+    });
+
+    const rId = regulatorNode?.id || 'regulator';
+    nodes.push({
+      id: rId,
+      x: 50,
+      y: 240,
+      w: 180,
+      h: 75,
+      label: regulatorNode?.label || 'Voltage Regulator',
+      sublabel: regulatorNode?.sublabel || 'step-down regulator',
+      category: 'power',
+    });
+
+    edges.push({ from: inId, to: rId, label: 'VIN', type: 'power' });
+    edges.push({ from: rId, to: 'rail', label: railVoltageStr, type: 'rail' });
+  }
 
   // 2. Load peripherals
   const loadNodes = graph.nodes.filter(
-    (n) => n.category !== 'power' && n.id !== 'vbus' && n.id !== 'charger' && n.id !== 'battery'
+    (n) => n.category !== 'power' && !nodes.some((pn) => pn.id === n.id)
   );
 
   const numLoads = Math.max(loadNodes.length, 4);
@@ -271,19 +501,13 @@ function projectPowerTree(graph: CanonicalDesignGraph): ProjectedDiagram {
   nodes.push({
     id: 'rail',
     x: 360,
-    y: 300,
+    y: 240,
     w: 30,
     h: railHeight,
-    label: '3.3V',
+    label: railVoltageStr,
     sublabel: 'rail',
     category: 'rail',
   });
-
-  // Base power edges
-  edges.push({ from: 'vbus', to: 'charger', label: '5V', type: 'power' });
-  edges.push({ from: 'charger', to: 'battery', label: 'charge', type: 'power' });
-  edges.push({ from: 'charger', to: 'regulator', label: 'VSYS', type: 'power' });
-  edges.push({ from: 'regulator', to: 'rail', label: '3.3V', type: 'rail' });
 
   // Grid layout for loads: 2 columns
   for (let i = 0; i < loadNodes.length; i++) {
@@ -292,7 +516,7 @@ function projectPowerTree(graph: CanonicalDesignGraph): ProjectedDiagram {
     const col = i % 2; // 0 = left load column (470), 1 = right load column (650)
     const row = Math.floor(i / 2);
     const x = col === 0 ? 470 : 650;
-    const y = 300 + row * 80;
+    const y = 240 + row * 80;
     const loadId = `load_${load.id}`;
 
     nodes.push({
@@ -309,7 +533,7 @@ function projectPowerTree(graph: CanonicalDesignGraph): ProjectedDiagram {
     edges.push({
       from: 'rail',
       to: loadId,
-      label: '3.3V',
+      label: railVoltageStr,
       type: 'rail',
     });
   }
@@ -361,19 +585,36 @@ function projectProtocolMap(graph: CanonicalDesignGraph): ProjectedDiagram {
     });
   }
 
-  // 2. USB-C on left
-  nodes.push({
-    id: 'usbc',
-    x: 60,
-    y: 300,
-    w: 170,
-    h: 70,
-    label: 'USB-C',
-    sublabel: 'native USB · flash + debug',
-    category: 'power',
-  });
-  if (mcuNode) {
-    edges.push({ from: 'usbc', to: mcuNode.id, label: 'USB', type: 'usb' });
+  // 2. Host / Programming interface on left
+  const hasUsb = graph.nodes.some((n) => n.id.includes('usb') || n.label.toLowerCase().includes('usb'));
+  if (hasUsb) {
+    nodes.push({
+      id: 'usbc',
+      x: 60,
+      y: 300,
+      w: 170,
+      h: 70,
+      label: 'USB-C',
+      sublabel: 'native USB · flash + debug',
+      category: 'power',
+    });
+    if (mcuNode) {
+      edges.push({ from: 'usbc', to: mcuNode.id, label: 'USB', type: 'usb' });
+    }
+  } else {
+    nodes.push({
+      id: 'debug_header',
+      x: 60,
+      y: 300,
+      w: 170,
+      h: 70,
+      label: 'SWD / Debug Header',
+      sublabel: 'SWDIO / SWCLK flash + debug',
+      category: 'control',
+    });
+    if (mcuNode) {
+      edges.push({ from: 'debug_header', to: mcuNode.id, label: 'SWD', type: 'gpio' });
+    }
   }
 
   // 3. Storage nodes on Top Right
