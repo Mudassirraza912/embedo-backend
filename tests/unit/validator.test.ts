@@ -435,4 +435,298 @@ describe('Hardware Validator & Auto-Repairer', () => {
     const bomItem = report.repairedGraph.bom.find((b) => b.partNumber === 'SiT1532AI-J4-DCC-32.768E');
     expect(bomItem).toBeDefined();
   });
+
+  it('should auto-repair 28V buck regulator to 40V AEC-Q100 LMR14030-Q1 for automotive 12V system', () => {
+    const autoGraph: CanonicalDesignGraph = {
+      projectMeta: {
+        name: 'Automotive LTE Telematics Module',
+        tagline: '12V automotive telematics module with ISO 7637-2 load dump protection',
+        controller: 'STM32F405',
+      },
+      controller: {
+        partNumber: 'STM32F405RGT6',
+        manufacturer: 'STMicroelectronics',
+        rationale: 'Telematics application MCU',
+      },
+      nodes: [
+        {
+          id: 'battery_12v',
+          label: '12V Vehicle Battery',
+          sublabel: 'Automotive Power Input',
+          category: 'power',
+          partNumber: 'AUTOMOTIVE-12V-IN',
+        },
+        {
+          id: 'buck_regulator',
+          label: 'TPS54202',
+          sublabel: '28V 2A Buck Regulator',
+          category: 'power',
+          partNumber: 'TPS54202DDCR',
+        },
+        {
+          id: 'mcu',
+          label: 'STM32F405',
+          sublabel: 'MCU',
+          category: 'control',
+          partNumber: 'STM32F405RGT6',
+        },
+      ],
+      edges: [],
+      powerRails: [
+        {
+          name: '3.3V',
+          voltageV: 3.3,
+          source: 'buck_regulator',
+          consumers: ['mcu'],
+        },
+      ],
+      bom: [
+        {
+          partNumber: 'TPS54202DDCR',
+          manufacturer: 'Texas Instruments',
+          category: 'Power Management',
+          description: 'Step-Down Converter 4.5V-28V In, 2A Out',
+          qty: 1,
+        },
+      ],
+    };
+
+    const report = validateAndRepairDesignGraph(autoGraph);
+    expect(report.issues.some((i) => i.code === 'AUTOMOTIVE_BUCK_VOLTAGE_INSUFFICIENT')).toBe(true);
+    const buckNode = report.repairedGraph.nodes.find((n) => n.id === 'buck_regulator');
+    expect(buckNode?.partNumber).toBe('LMR14030SDDA');
+    expect(buckNode?.label).toBe('LMR14030-Q1');
+    const bomItem = report.repairedGraph.bom.find((b) => b.partNumber === 'LMR14030SDDA');
+    expect(bomItem).toBeDefined();
+    const tvsBom = report.repairedGraph.bom.find((b) => b.partNumber === 'SMCJ36CA');
+    expect(tvsBom).toBeDefined();
+  });
+
+  it('should auto-protect cellular modem from 5V overvoltage by creating dedicated 3.8V rail', () => {
+    const telematicsGraph: CanonicalDesignGraph = {
+      projectMeta: {
+        name: 'Automotive LTE Telematics Module',
+        tagline: 'Telematics with Quectel EC21 LTE Cat-1 Modem',
+        controller: 'STM32F405',
+      },
+      controller: {
+        partNumber: 'STM32F405RGT6',
+        manufacturer: 'STMicroelectronics',
+        rationale: 'Telematics application MCU',
+      },
+      nodes: [
+        {
+          id: 'mcu',
+          label: 'STM32F405',
+          sublabel: 'MCU',
+          category: 'control',
+          partNumber: 'STM32F405RGT6',
+        },
+        {
+          id: 'lte_modem',
+          label: 'Quectel EC21',
+          sublabel: 'LTE Cat-1 Modem',
+          category: 'connectivity',
+          partNumber: 'EC21-A',
+        },
+      ],
+      edges: [],
+      powerRails: [
+        {
+          name: '5V',
+          voltageV: 5.0,
+          source: 'main_regulator',
+          consumers: ['lte_modem'],
+        },
+        {
+          name: '3.3V',
+          voltageV: 3.3,
+          source: 'main_regulator',
+          consumers: ['mcu'],
+        },
+      ],
+      bom: [
+        {
+          partNumber: 'EC21-A',
+          manufacturer: 'Quectel',
+          category: 'Wireless',
+          description: 'LTE Cat 1 Module',
+          qty: 1,
+        },
+      ],
+    };
+
+    const report = validateAndRepairDesignGraph(telematicsGraph);
+    expect(report.issues.some((i) => i.code === 'CELLULAR_MODEM_VBAT_OVERVOLTAGE')).toBe(true);
+    const rail5V = report.repairedGraph.powerRails.find((r) => r.name === '5V');
+    expect(rail5V?.consumers.includes('lte_modem')).toBe(false);
+    const rail38V = report.repairedGraph.powerRails.find((r) => r.voltageV === 3.8);
+    expect(rail38V).toBeDefined();
+    expect(rail38V?.consumers.includes('lte_modem')).toBe(true);
+    const modemNode = report.repairedGraph.nodes.find((n) => n.id === 'lte_modem');
+    expect(modemNode?.voltageV).toBe(3.8);
+    const poscapBom = report.repairedGraph.bom.find((b) => b.partNumber === '6TPB470M');
+    expect(poscapBom).toBeDefined();
+  });
+
+  it('should auto-upgrade 1W isolated DC-DC to 2W B0505S-2WR3 for 4-channel isolated RS-485 bridge', () => {
+    const rs485Graph: CanonicalDesignGraph = {
+      projectMeta: {
+        name: 'USB 2.0 to 4-Channel Isolated RS-485 Bridge',
+        tagline: '4-channel isolated RS-485 transceiver with ESD protection',
+        controller: 'ESP32-P4',
+      },
+      controller: {
+        partNumber: 'ESP32-P4',
+        manufacturer: 'Espressif',
+        rationale: 'High-speed USB host/device MCU',
+      },
+      nodes: [
+        {
+          id: 'isolated_dcdc',
+          label: 'B0505S-1W',
+          sublabel: '1W Isolated DC-DC',
+          category: 'power',
+          partNumber: 'B0505S-1W',
+        },
+        {
+          id: 'mcu',
+          label: 'ESP32-P4',
+          sublabel: 'MCU',
+          category: 'control',
+          partNumber: 'ESP32-P4',
+        },
+        {
+          id: 'rs485_ch1',
+          label: 'ISO1500 CH1',
+          sublabel: 'Isolated RS-485',
+          category: 'connectivity',
+          partNumber: 'ISO1500DBQ',
+        },
+        {
+          id: 'rs485_ch2',
+          label: 'ISO1500 CH2',
+          sublabel: 'Isolated RS-485',
+          category: 'connectivity',
+          partNumber: 'ISO1500DBQ',
+        },
+        {
+          id: 'rs485_ch3',
+          label: 'ISO1500 CH3',
+          sublabel: 'Isolated RS-485',
+          category: 'connectivity',
+          partNumber: 'ISO1500DBQ',
+        },
+        {
+          id: 'rs485_ch4',
+          label: 'ISO1500 CH4',
+          sublabel: 'Isolated RS-485',
+          category: 'connectivity',
+          partNumber: 'ISO1500DBQ',
+        },
+      ],
+      edges: [],
+      powerRails: [
+        {
+          name: '5V_ISO',
+          voltageV: 5.0,
+          source: 'isolated_dcdc',
+          consumers: ['rs485_ch1', 'rs485_ch2', 'rs485_ch3', 'rs485_ch4'],
+        },
+      ],
+      bom: [
+        {
+          partNumber: 'B0505S-1W',
+          manufacturer: 'Mornsun',
+          category: 'Power Management',
+          description: 'Isolated DC/DC Converter 5V to 5V 1W',
+          qty: 1,
+        },
+      ],
+    };
+
+    const report = validateAndRepairDesignGraph(rs485Graph);
+    expect(report.issues.some((i) => i.code === 'ISOLATED_DCDC_UNDERSIZED')).toBe(true);
+    const dcdcNode = report.repairedGraph.nodes.find((n) => n.id === 'isolated_dcdc');
+    expect(dcdcNode?.partNumber).toBe('B0505S-2WR3');
+    expect(dcdcNode?.label).toBe('B0505S-2WR3');
+    const bomItem = report.repairedGraph.bom.find((b) => b.partNumber === 'B0505S-2WR3');
+    expect(bomItem).toBeDefined();
+  });
+
+  it('should de-duplicate cascaded ECG analog front-ends by removing redundant AD8232 when ADS1292R is present', () => {
+    const ecgGraph: CanonicalDesignGraph = {
+      projectMeta: {
+        name: 'Wearable ECG Monitor',
+        tagline: 'Single-lead wearable ECG monitor with 24-bit ADC and RLD',
+        controller: 'nRF52840',
+      },
+      controller: {
+        partNumber: 'nRF52840-QIAA',
+        manufacturer: 'Nordic Semiconductor',
+        rationale: 'BLE SoC',
+      },
+      nodes: [
+        {
+          id: 'ad8232',
+          label: 'AD8232',
+          sublabel: 'Analog ECG Front-End',
+          category: 'sensing',
+          partNumber: 'AD8232ACPTZ',
+        },
+        {
+          id: 'ads1292',
+          label: 'ADS1292R',
+          sublabel: '24-Bit 2-Channel ECG AFE',
+          category: 'sensing',
+          partNumber: 'ADS1292RIRSMR',
+        },
+        {
+          id: 'mcu',
+          label: 'nRF52840',
+          sublabel: 'BLE SoC',
+          category: 'control',
+          partNumber: 'nRF52840-QIAA',
+        },
+      ],
+      edges: [
+        { from: 'ad8232', to: 'ads1292', label: 'ANALOG_IN', type: 'analog' },
+        { from: 'mcu', to: 'ads1292', label: 'SPI', type: 'spi' },
+      ],
+      powerRails: [
+        {
+          name: '3.3V',
+          voltageV: 3.3,
+          source: 'regulator',
+          consumers: ['mcu', 'ad8232', 'ads1292'],
+        },
+      ],
+      bom: [
+        {
+          partNumber: 'AD8232ACPTZ',
+          manufacturer: 'Analog Devices',
+          category: 'Analog Front End',
+          description: 'Single-Lead Heart Rate Monitor Front End',
+          qty: 1,
+        },
+        {
+          partNumber: 'ADS1292RIRSMR',
+          manufacturer: 'Texas Instruments',
+          category: 'Analog Front End',
+          description: 'Low-Power 2-Channel 24-Bit AFE for ECG',
+          qty: 1,
+        },
+      ],
+    };
+
+    const report = validateAndRepairDesignGraph(ecgGraph);
+    expect(report.issues.some((i) => i.code === 'REDUNDANT_ECG_AFE_REMOVED')).toBe(true);
+    expect(report.repairedGraph.nodes.some((n) => n.id === 'ad8232')).toBe(false);
+    expect(report.repairedGraph.nodes.some((n) => n.id === 'ads1292')).toBe(true);
+    expect(report.repairedGraph.bom.some((b) => b.partNumber === 'AD8232ACPTZ')).toBe(false);
+    expect(report.repairedGraph.bom.some((b) => b.partNumber === 'ADS1292RIRSMR')).toBe(true);
+    const rail = report.repairedGraph.powerRails.find((r) => r.name === '3.3V');
+    expect(rail?.consumers.includes('ad8232')).toBe(false);
+    expect(rail?.consumers.includes('ads1292')).toBe(true);
+  });
 });

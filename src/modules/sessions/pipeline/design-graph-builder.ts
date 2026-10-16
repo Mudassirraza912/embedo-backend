@@ -125,7 +125,7 @@ export async function buildCanonicalDesignGraph(
 Your goal is to synthesize a production-grade, electrically consistent Canonical Design Graph for an embedded hardware system based on user specifications.
 
 CRITICAL HARDWARE RULES:
-1. Every component MUST have real, commercially available manufacturer part numbers (e.g. ESP32-S3-MINI-1, STM32WLE5JC, STM32L072CZTX, SX1262IMLTRT, TPS63031DSKR, TPS62840DLYR, AP63203WU-7, BQ25186, SHT40-AD1B-R2, ICM-42688-P, AD5421BREZ, XTR116U, ADuM1441ARSZ, AD5700BCPZ, AD7124-4BRUZ, SPV1040T, SiT1532AI-J4-DCC-32.768E, GRM31CR61A476KE15L, etc.).
+1. Every component MUST have real, commercially available manufacturer part numbers (e.g. ESP32-S3-MINI-1, STM32WLE5JC, STM32L072CZTX, SX1262IMLTRT, TPS63031DSKR, TPS62840DLYR, AP63203WU-7, BQ25186, SHT40-AD1B-R2, ICM-42688-P, AD5421BREZ, XTR116U, ADuM1441ARSZ, AD5700BCPZ, AD7124-4BRUZ, SPV1040T, SiT1532AI-J4-DCC-32.768E, GRM31CR61A476KE15L, LMR14030SDDA, LMR16030SDDA, TPS54340QDDAQ1, B0505S-2WR3, ADS1292RIRSMR, BTS7008-2EPA, SMCJ36CA, etc.).
 2. Node IDs must be clean lowercase alphanumeric strings (e.g. "usbc", "mcu", "charger", "battery", "regulator", "imu", "storage", "display", "haptic", "gauge").
 3. Power Source & Power Path Architecture:
    - Match the user's requested power source EXACTLY:
@@ -195,7 +195,38 @@ CRITICAL HARDWARE RULES:
     - When operating temperatures drop below -40°C (e.g. stratospheric weather balloon flight computer down to -60°C):
       * Crystal Oscillator Stall: Standard 32.768 kHz tuning-fork quartz crystals stop oscillating below -40°C due to increased crystal motional resistance and decreased oscillator transconductance (gm). Mandate a temperature-compensated silicon MEMS oscillator (e.g. SiTime SiT1532 rated to -55°C) or MCU internal calibrated RC oscillator.
       * Primary Battery Chemistry: Standard LiPo collapses below -20°C. Mandate Lithium-Iron Disulfide (Li-FeS2, e.g. Energizer L91 AA) primary cells, which retain >70% capacity down to -40°C.
-      * Thermal Gondola Architecture: State that flight electronics are enclosed in an expanded polystyrene (EPS) / aerogel thermal insulation payload gondola, where board dissipated power (~100–300 mW) maintains internal PCB temperature above -20°C, protecting standard industrial silicon.`;
+      * Thermal Gondola Architecture: State that flight electronics are enclosed in an expanded polystyrene (EPS) / aerogel thermal insulation payload gondola, where board dissipated power (~100–300 mW) maintains internal PCB temperature above -20°C, protecting standard industrial silicon.
+17. Automotive 12V/24V Power & Load Dump Transient Compliance (ISO 7637-2 / ISO 16750-2):
+    - Vehicle electrical systems experience severe transients: load dump (ISO 7637-2 / ISO 16750-2 Pulse 5a/5b clamped to 35V–40V for 12V systems, or 87V+ unsuppressed, lasting 40–400 ms), cold crank (down to 6V), and reverse battery (-14V).
+    - NEVER use a buck converter with Vin(max) <= 28V (such as TPS54202, TPS54331, AP63203) connected directly to an automotive battery rail! Under load dump surges, 28V buck converters will suffer catastrophic overvoltage destruction.
+    - MANDATE high-voltage automotive-grade buck regulators rated for AT LEAST 40V, PREFERABLY 60V–65V input (e.g. LMR14030-Q1 [40V], LMR16030-Q1 [60V], TPS54340-Q1 [42V], TPS54360-Q1 [60V], LM5008A [95V], MAX16904 [36V-42V]).
+    - Automotive Front-End Protection: Include input reverse-polarity P-channel MOSFET / Schottky diode, common-mode choke, and a robust automotive TVS diode rated for load dump (e.g. SMCJ36CA or SM8A27).
+18. Cellular Modem VBAT Supply Rail & Voltage Limits (3.8V Nominal):
+    - Cellular modems (Quectel EC21, EC25, BG95, EG915, SIMCom SIM7600, Telit LE910, etc.) have strict supply input specs:
+      * VBAT Operating Range: 3.3V to 4.3V (Typical / Nominal: 3.8V).
+      * Absolute Maximum Rating: 4.5V!
+    - NEVER connect a 5.0V power rail directly to a cellular modem VBAT pin! 5.0V directly violates the 4.5V absolute maximum and permanently destroys the internal RF power amplifier and baseband silicon.
+    - Cellular modems must be powered from a dedicated 3.8V power rail (e.g. "3.8V_MODEM" or high-current 3.8V buck output) rated for AT LEAST 2A to 3A peak pulse current, backed by >= 470 µF low-ESR bulk capacitance (e.g. Panasonic POSCAP or low-ESR tantalum + MLCCs) placed directly at the modem VBAT pins to buffer 2A LTE transmission bursts without dipping below 3.3V.
+19. Multi-Channel Isolated RS-485 Power Sizing (2W–3W Minimum for 4 Channels):
+    - Standard RS-485 specifies differential voltage Vod >= 1.5V into a terminated bus (120 Ω at each end = 54 Ω parallel equivalent load).
+    - Driver output current during transmission is ~37 mA, plus transceiver internal logic, receiver, and isolation barrier current (~15-20 mA). Total power per transmitting channel is ~50-60 mA at 5V (~250-300 mW).
+    - For 4 concurrent isolated RS-485 channels (e.g. ISO1500, ADM2483), a 1W isolated DC-DC converter (such as B0505S-1W, 200 mA output) is severely undersized and will brown out when multiple channels transmit simultaneously (total load 220-240 mA = 1.1W-1.2W).
+    - Mandate at least 2W isolated DC-DC capacity (e.g. B0505S-2WR3, B0505XT-2WR3, CRE1S0505SC 2W, or push-pull driver SN6505B with 2W-3W transformer) or individual 1W isolated DC-DCs per channel.
+20. Biomedical ECG Analog Front-End (AFE) Architectural Non-Redundancy:
+    - Complete integrated medical ECG AFEs (Texas Instruments ADS1292R, ADS1291, ADS1298, or Analog Devices MAX30001, ADAS1000) ALREADY contain:
+      * Ultra-high CMRR Instrumentation Amplifiers (INAs, >100 dB)
+      * Programmable Gain Amplifiers (PGAs)
+      * Built-in Right Leg Drive (RLD) active common-mode rejection amplifier
+      * Lead-off detection circuitry and test signal generators
+      * 24-bit delta-sigma Analog-to-Digital Converters (ADCs).
+    - NEVER cascade two complete ECG analog front-ends together! (e.g. DO NOT route an AD8232 output into an ADS1292R!). Cascading creates an absurd double-INA noise penalty, clips differential input ranges, and causes conflicting dual-RLD feedback instabilities.
+    - When a 24-bit precision ECG AFE (ADS1292R, ADS1291, MAX30001) is specified: ECG electrodes (RA, LA) and Right Leg Drive (RLD) MUST connect DIRECTLY to the ADS1292R inputs. NO AD8232 is needed.
+    - When an analog heart-rate monitor IC (AD8232) is used: its conditioned single-ended analog output feeds directly into an MCU internal ADC or generic precision ADC (ADS1115), NOT another biomedical ECG AFE.
+21. High-Side Inductive Solenoid/Relay Switching & Clamping:
+    - When switching high-current inductive loads (12V 5A solenoid valves, actuators, relays):
+      * Infineon PROFET+2 smart high-side switches (e.g. BTS7008-2EPA, BTS7004-1EPP) integrate charge pumps, short-circuit, overtemperature, current sensing (IS pin), and active inductive voltage clamping (Vds(cl) ≈ 42V).
+      * The 12V automotive battery input must be protected with an automotive-rated transient TVS (e.g. SMCJ36CA) and the logic power supply buck regulator stepping 12V to 3.3V must be rated for at least 40V–60V (e.g. LMR14030-Q1 or TPS54340-Q1).
+      * For repetitive PWM switching, specify external freewheeling Schottky diodes (e.g. SS54 / V10P10) across the solenoid coils to prevent excessive silicon thermal dissipation from the internal active clamp.`;
 
   const userPrompt = `Synthesize the Canonical Design Graph for the following hardware intent:
 ${JSON.stringify(intent, null, 2)}

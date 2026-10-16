@@ -46,7 +46,7 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
   for (const node of graph.nodes) nodeMap.set(node.id, node);
 
   // 1. Edge reference integrity
-  const validEdges: DesignEdge[] = graph.edges.filter((edge) => {
+  let validEdges: DesignEdge[] = graph.edges.filter((edge) => {
     const fromExists = nodeMap.has(edge.from);
     const toExists = nodeMap.has(edge.to);
     if (!fromExists || !toExists) {
@@ -578,6 +578,236 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
         nodeId: tuningForkCrystal.id,
       });
     }
+  }
+
+  // 11. Automotive 12V Load Dump & Buck Converter Voltage Rating
+  // Automotive 12V vehicle rails experience severe load dump transients (ISO 7637-2 / ISO 16750-2 Pulse 5a/5b: 35V-40V clamped by TVS, up to 87V+ unsuppressed).
+  // A buck regulator rated for <= 28V (TPS54202, TPS54331, AP63203, MP2307, LM2596) will break down and destroy downstream circuitry.
+  // Automotive front-ends require at least 40V–60V input rating (e.g. LMR14030-Q1 40V, LMR16030-Q1 60V, TPS54340-Q1 42V).
+  const isAutomotive =
+    /\b(automotive|vehicle|car|truck|12v\s*battery|iso[-\s]?7637|iso[-\s]?16750|obd|telematics)\b/i.test(
+      `${graph.projectMeta.name} ${graph.projectMeta.tagline} ${(graph.engineeringDecisions ?? []).join(' ')}`
+    ) ||
+    graph.nodes.some((n) => n.category === 'power' && /\b(12v|automotive|vehicle|car)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`));
+
+  if (isAutomotive) {
+    const LOW_VOLTAGE_BUCKS = /(tps54202|tps54331|tps54302|ap63203|mp2307|lm2596)/i;
+    const lowVoltageBuckNode = graph.nodes.find(
+      (n) => n.category === 'power' && (LOW_VOLTAGE_BUCKS.test(n.partNumber ?? '') || LOW_VOLTAGE_BUCKS.test(n.label))
+    );
+
+    if (lowVoltageBuckNode) {
+      const oldPart = lowVoltageBuckNode.partNumber || lowVoltageBuckNode.label;
+      lowVoltageBuckNode.partNumber = 'LMR14030SDDA';
+      lowVoltageBuckNode.label = 'LMR14030-Q1';
+      lowVoltageBuckNode.sublabel = '40V 3.5A Automotive Buck';
+      lowVoltageBuckNode.manufacturer = 'Texas Instruments';
+      lowVoltageBuckNode.rationale =
+        'AEC-Q100 automotive-qualified step-down converter with 40V continuous (45V transient) input range and 3.5A capability, withstanding ISO 7637-2 / ISO 16750-2 load dump surges without overvoltage failure.';
+
+      for (const item of graph.bom || []) {
+        if (LOW_VOLTAGE_BUCKS.test(item.partNumber) || LOW_VOLTAGE_BUCKS.test(item.description)) {
+          item.partNumber = 'LMR14030SDDA';
+          item.manufacturer = 'Texas Instruments';
+          item.category = 'Power Management';
+          item.description = 'Step-Down Converter AEC-Q100 4V-40V In, 3.5A Out, SO PowerPAD-8';
+        }
+      }
+
+      const hasAutomotiveTvs = (graph.bom || []).some((b) => /\b(smcj36|sm8a|tvs|transient)\b/i.test(`${b.partNumber} ${b.description}`));
+      if (!hasAutomotiveTvs) {
+        graph.bom.push({
+          partNumber: 'SMCJ36CA',
+          manufacturer: 'Littelfuse',
+          category: 'Circuit Protection',
+          description: 'TVS Diode 1500W 36V Bidirectional SMC (ISO 7637-2 / ISO 16750-2 load dump clamp)',
+          qty: 1,
+          unitCostUsd: 0.45,
+        });
+      }
+
+      issues.push({
+        severity: 'warning',
+        code: 'AUTOMOTIVE_BUCK_VOLTAGE_INSUFFICIENT',
+        message: `In an automotive 12V vehicle system, ISO 7637-2 / ISO 16750-2 load dump transients surge to 35V–40V (clamped) or 87V+ (unsuppressed). Replaced 28V-rated regulator '${oldPart}' with 40V AEC-Q100 qualified LMR14030-Q1 buck converter to prevent catastrophic overvoltage breakdown.`,
+        nodeId: lowVoltageBuckNode.id,
+      });
+    }
+  }
+
+  // 12. Cellular Modem VBAT Supply Rail Protection (3.8V Nominal, 4.5V Absolute Max)
+  // Quectel (EC21, EC25, BG95, EG915), SIMCom (SIM7600), Telit (LE910) cellular modems:
+  // Operating VBAT: 3.3V - 4.3V (nominal 3.8V). Absolute Maximum Rating: 4.5V!
+  // Supplying 5.0V directly to VBAT causes immediate physical overvoltage breakdown of the internal RF PA and baseband.
+  const CELLULAR_MODEM_PATTERN = /\b(quectel|ec21|ec25|bg95|bg96|eg915|sim7600|le910|lte[-\s]?cat|cellular[-\s]?modem)\b/i;
+  const modemNode = graph.nodes.find(
+    (n) => n.category === 'connectivity' && CELLULAR_MODEM_PATTERN.test(`${n.id} ${n.partNumber ?? ''} ${n.label} ${n.sublabel ?? ''}`)
+  );
+
+  if (modemNode) {
+    const overvoltageRail = graph.powerRails.find(
+      (r) => r.consumers.includes(modemNode.id) && (r.voltageV === 5 || r.name.toLowerCase().includes('5v'))
+    );
+
+    if (overvoltageRail) {
+      overvoltageRail.consumers = overvoltageRail.consumers.filter((id) => id !== modemNode.id);
+
+      let modemRail = graph.powerRails.find((r) => r.voltageV === 3.8 || r.name.toLowerCase().includes('3.8v'));
+      if (!modemRail) {
+        modemRail = {
+          name: '3.8V_MODEM',
+          voltageV: 3.8,
+          source: 'modem_regulator',
+          consumers: [modemNode.id],
+        };
+        graph.powerRails.push(modemRail);
+      } else if (!modemRail.consumers.includes(modemNode.id)) {
+        modemRail.consumers.push(modemNode.id);
+      }
+
+      modemNode.voltageV = 3.8;
+      if (!modemNode.currentMa || modemNode.currentMa < 500) {
+        modemNode.currentMa = 500;
+      }
+
+      let modemRegNode = graph.nodes.find((n) => n.category === 'power' && /\b(3\.8v|modem[-\s]?reg)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`));
+      if (!modemRegNode) {
+        modemRegNode = {
+          id: 'modem_regulator',
+          label: 'TPS54302 (3.8V)',
+          sublabel: '3.8V 3A Buck for LTE VBAT',
+          category: 'power',
+          partNumber: 'TPS54302DDCR',
+          manufacturer: 'Texas Instruments',
+          voltageV: 3.8,
+          rationale:
+            'Dedicated 3.8V 3A synchronous step-down regulator supplying Quectel LTE Cat-1 modem VBAT pin (3.3V-4.3V operating range, 3.8V nominal) to prevent catastrophic overvoltage damage from 5V rails and handle 2A transmission burst pulses.',
+        };
+        graph.nodes.push(modemRegNode);
+        nodeMap.set(modemRegNode.id, modemRegNode);
+
+        const srcNode = graph.nodes.find((n) => n.category === 'power' && n.id !== modemRegNode?.id && !n.id.includes('pulse')) || graph.nodes[0];
+        if (srcNode) {
+          validEdges.push({
+            from: srcNode.id,
+            to: modemRegNode.id,
+            label: 'PWR_IN',
+            type: 'power',
+          });
+        }
+        validEdges.push({
+          from: modemRegNode.id,
+          to: modemNode.id,
+          label: 'VBAT_3.8V',
+          type: 'power',
+        });
+      }
+
+      const hasModemBulkCap = (graph.bom || []).some((b) => /\b(470\s*uf|poscap|tantalum)\b/i.test(`${b.description} ${b.partNumber}`));
+      if (!hasModemBulkCap) {
+        graph.bom.push({
+          partNumber: '6TPB470M',
+          manufacturer: 'Panasonic',
+          category: 'Passives',
+          description: 'Capacitor POSCAP Tantalum-Polymer 470µF 6.3V 15mΩ ESR (LTE Modem VBAT Burst Buffer)',
+          qty: 1,
+          unitCostUsd: 0.95,
+        });
+      }
+
+      issues.push({
+        severity: 'warning',
+        code: 'CELLULAR_MODEM_VBAT_OVERVOLTAGE',
+        message: `Cellular modem '${modemNode.label}' VBAT pin has an operating range of 3.3V–4.3V (nominal 3.8V) with an absolute maximum rating of 4.5V. Supplying 5.0V directly to VBAT causes catastrophic overvoltage destruction of the RF power amplifier. Re-routed modem VBAT to a dedicated 3.8V / 3A buck regulator with 470µF low-ESR bulk capacitance.`,
+        nodeId: modemNode.id,
+      });
+    }
+  }
+
+  // 13. Multi-Channel Isolated RS-485 Power Sizing (2W Minimum for 4 Channels)
+  // Standard RS-485 terminated buses (120 Ω at both ends = 54 Ω differential load) draw ~40 mA per active driver + 15 mA logic.
+  // Driving 4 concurrent isolated RS-485 channels consumes >220 mA (>1.1W) on the isolated rail.
+  // A 1W isolated DC-DC (such as B0505S-1W, 200 mA output) will brown out.
+  const rs485Nodes = graph.nodes.filter(
+    (n) => /\b(rs[-\s]?485|iso1500|iso1410|adm2483|adm2587|max14853)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''} ${n.partNumber ?? ''}`)
+  );
+  const is4ChannelRs485 =
+    rs485Nodes.length >= 3 ||
+    /\b(4[-\s]?channel|quad|4[-\s]?ch|4\s*buses)\b/i.test(`${graph.projectMeta.name} ${graph.projectMeta.tagline}`);
+
+  if (is4ChannelRs485) {
+    const undersizedIsoDcdc = graph.nodes.find(
+      (n) => n.category === 'power' && /\b(b0505s-1w|cre1s0505|1w|isolated\s*dc)\b/i.test(`${n.id} ${n.partNumber ?? ''} ${n.label} ${n.sublabel ?? ''}`)
+    );
+
+    const bomUndersized = (graph.bom || []).find((b) => /\b(b0505s-1w|1w\s*isolated)\b/i.test(`${b.partNumber} ${b.description}`));
+
+    if (undersizedIsoDcdc || bomUndersized) {
+      if (undersizedIsoDcdc) {
+        undersizedIsoDcdc.partNumber = 'B0505S-2WR3';
+        undersizedIsoDcdc.label = 'B0505S-2WR3';
+        undersizedIsoDcdc.sublabel = '2W Isolated DC-DC (400mA)';
+        undersizedIsoDcdc.manufacturer = 'Mornsun';
+        undersizedIsoDcdc.rationale =
+          '2W isolated 5V-to-5V DC-DC converter (400mA output) providing adequate power headroom for 4 terminated RS-485 buses (54Ω load draws ~50mA per active channel; 4 channels require >220mA peak).';
+      }
+
+      for (const item of graph.bom || []) {
+        if (/\b(b0505s-1w|1w\s*isolated)\b/i.test(`${item.partNumber} ${item.description}`)) {
+          item.partNumber = 'B0505S-2WR3';
+          item.manufacturer = 'Mornsun';
+          item.category = 'Power Management';
+          item.description = 'Isolated DC/DC Converter 5V to 5V 2W 400mA SIP-4';
+          item.unitCostUsd = 2.85;
+        }
+      }
+
+      issues.push({
+        severity: 'warning',
+        code: 'ISOLATED_DCDC_UNDERSIZED',
+        message: 'A 1W isolated DC/DC converter (200 mA output) is undersized for 4 terminated RS-485 channels (each channel draws ~50 mA under transmission into a 54 Ω load, totaling >220 mA peak). Auto-upgraded to Mornsun B0505S-2WR3 2W isolated DC/DC converter.',
+        nodeId: undersizedIsoDcdc?.id,
+      });
+    }
+  }
+
+  // 14. Biomedical ECG Analog Front-End (AFE) De-Duplication
+  // Dedicated medical ECG AFEs (TI ADS1292R / ADS1291 / ADS1298, ADI MAX30001 / ADAS1000) ALREADY integrate:
+  // - High-CMRR Instrumentation Amplifiers (>100 dB)
+  // - Programmable Gain Amplifiers (PGAs)
+  // - Right Leg Drive (RLD) active common-mode rejection amplifier
+  // - 24-bit delta-sigma ADCs
+  // Cascading an AD8232 into an ADS1292R is an architectural redundancy that degrades SNR, doubles noise, and causes dual-RLD loop instability.
+  const analogEcgNode = graph.nodes.find(
+    (n) => /ad8232/i.test(`${n.id} ${n.partNumber ?? ''} ${n.label}`)
+  );
+  const integratedEcgNode = graph.nodes.find(
+    (n) => /(ads129[1248]|max30001|adas1000)/i.test(`${n.id} ${n.partNumber ?? ''} ${n.label}`)
+  );
+
+  if (analogEcgNode && integratedEcgNode) {
+    const redundantId = analogEcgNode.id;
+
+    graph.nodes = graph.nodes.filter((n) => n.id !== redundantId);
+    nodeMap.delete(redundantId);
+
+    validEdges = validEdges.filter((e) => e.from !== redundantId && e.to !== redundantId);
+
+    for (const rail of graph.powerRails) {
+      rail.consumers = rail.consumers.filter((cid) => cid !== redundantId);
+    }
+
+    graph.bom = (graph.bom || []).filter((b) => !/ad8232/i.test(`${b.partNumber} ${b.description}`));
+
+    integratedEcgNode.rationale =
+      'Fully integrated 24-bit 2-channel medical ECG Analog Front-End with integrated low-noise high-CMRR Instrumentation Amplifiers, PGA, Right Leg Drive (RLD) amplifier, lead-off detection, and 24-bit delta-sigma ADC. Electrodes and RLD connect directly without redundant external preamps.';
+
+    issues.push({
+      severity: 'warning',
+      code: 'REDUNDANT_ECG_AFE_REMOVED',
+      message: `Architectural redundancy detected: Cascading AD8232 analog front-end into ADS1292R is redundant and degrades signal quality. ADS1292R already integrates high-CMRR instrumentation amplifiers, PGA, Right Leg Drive (RLD), and dual 24-bit delta-sigma ADCs. Removed redundant AD8232 and connected patient electrodes directly to ADS1292R.`,
+      nodeId: integratedEcgNode.id,
+    });
   }
 
   const repairedGraph: CanonicalDesignGraph = { ...graph, edges: validEdges };
