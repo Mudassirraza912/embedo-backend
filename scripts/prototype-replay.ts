@@ -5,8 +5,8 @@
  *
  *   1. Dump a session (dev, or read-only prod) to JSON:
  *      scripts/prototype-replay-dump.sql via psql -v sid=<session id> -At -f ... > dump.json
- *   2. DATABASE_URL=postgresql://x:x@localhost:5432/x JWT_ACCESS_SECRET=0123456789abcdef0123456789abcdef \
- *        npx tsx scripts/prototype-replay.ts dump.json [out.svg]
+ *   2. npx tsx scripts/prototype-replay.ts dump.json [out.svg]
+ *      with the same dummy DATABASE_URL / JWT_ACCESS_SECRET env as the unit tests (env.ts needs them).
  *
  * Nothing is written anywhere except the optional SVG. No AI calls, no database.
  */
