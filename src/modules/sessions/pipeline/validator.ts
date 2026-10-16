@@ -216,7 +216,9 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
 
   // 5. Power converter & battery voltage compatibility validation
   const isPrimaryBattery = (n: DesignNode) =>
-    /\b(aa|aaa|cr2032|cr2025|coin|alkaline|primary|1\.5v|3v)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`) &&
+    (/\b(battery|cell|pack)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`) ||
+      /\b(aa|aaa|cr2032|cr2025|cr2450|coin|alkaline)\b/i.test(`${n.id} ${n.label}`)) &&
+    !/\b(regulator|converter|ldo|buck|boost|switch|supply|smps|terminal|input)\b/i.test(`${n.id} ${n.label}`) &&
     !/\b(lipo|li-po|lithium-ion|li-ion|18650|rechargeable)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`);
 
   const batteryNode = graph.nodes.find((n) => n.category === 'power' && isPrimaryBattery(n));
@@ -728,11 +730,13 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
   // Standard RS-485 terminated buses (120 Ω at both ends = 54 Ω differential load) draw ~40 mA per active driver + 15 mA logic.
   // Driving 4 concurrent isolated RS-485 channels consumes >220 mA (>1.1W) on the isolated rail.
   // A 1W isolated DC-DC (such as B0505S-1W, 200 mA output) will brown out.
-  const rs485Nodes = graph.nodes.filter(
-    (n) => /\b(rs[-\s]?485|iso1500|iso1410|adm2483|adm2587|max14853)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''} ${n.partNumber ?? ''}`)
+  const rs485TransceiverNodes = graph.nodes.filter(
+    (n) =>
+      /\b(iso1500|iso1410|adm2483|adm2587|max14853|sn65hvd)\b/i.test(`${n.partNumber ?? ''} ${n.label}`) ||
+      (/\b(rs[-\s]?485)\b/i.test(`${n.id} ${n.label}`) && /\b(transceiver|phy|driver)\b/i.test(`${n.label} ${n.sublabel ?? ''}`))
   );
   const is4ChannelRs485 =
-    rs485Nodes.length >= 3 ||
+    rs485TransceiverNodes.length >= 3 ||
     /\b(4[-\s]?channel|quad|4[-\s]?ch|4\s*buses)\b/i.test(`${graph.projectMeta.name} ${graph.projectMeta.tagline}`);
 
   if (is4ChannelRs485) {

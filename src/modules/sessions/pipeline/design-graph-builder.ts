@@ -3,7 +3,7 @@ import { aiRouterService } from '../../ai/ai-router.service.js';
 import { CanonicalDesignGraph, StructuredIntent, NODE_CATEGORIES, EDGE_TYPES, NodeCategory, EdgeType } from './types.js';
 import { GroundingContext } from './rag-grounder.js';
 import { logger } from '../../../config/logger.js';
-import { stripJsonFences } from './json-utils.js';
+import { stripJsonFences, safeParseOrRepairJson } from './json-utils.js';
 
 // The model regularly reaches for a near-synonym of an allowed enum value ("actuation" for a relay,
 // "sensor" for "sensing", "wireless" for "connectivity"). Rejecting the whole graph for one
@@ -102,8 +102,18 @@ export const canonicalDesignGraphSchema = z.object({
   edges: z.array(designEdgeSchema),
   powerRails: z.array(powerRailSchema),
   bom: z.array(bomItemSchema),
-  engineeringDecisions: z.array(z.string()).optional(),
-  suggestedRefinements: z.array(z.string().max(60)).max(6).optional(),
+  engineeringDecisions: z.array(z.string()).optional().default([]),
+  suggestedRefinements: z
+    .preprocess((val) => {
+      if (Array.isArray(val)) {
+        return val
+          .filter((item): item is string => typeof item === 'string')
+          .map((s) => (s.length > 60 ? s.slice(0, 57) + '...' : s))
+          .slice(0, 8);
+      }
+      return val;
+    }, z.array(z.string().max(60)).max(8).optional())
+    .default([]),
 });
 
 /**
@@ -226,7 +236,16 @@ CRITICAL HARDWARE RULES:
     - When switching high-current inductive loads (12V 5A solenoid valves, actuators, relays):
       * Infineon PROFET+2 smart high-side switches (e.g. BTS7008-2EPA, BTS7004-1EPP) integrate charge pumps, short-circuit, overtemperature, current sensing (IS pin), and active inductive voltage clamping (Vds(cl) ≈ 42V).
       * The 12V automotive battery input must be protected with an automotive-rated transient TVS (e.g. SMCJ36CA) and the logic power supply buck regulator stepping 12V to 3.3V must be rated for at least 40V–60V (e.g. LMR14030-Q1 or TPS54340-Q1).
-      * For repetitive PWM switching, specify external freewheeling Schottky diodes (e.g. SS54 / V10P10) across the solenoid coils to prevent excessive silicon thermal dissipation from the internal active clamp.`;
+      * For repetitive PWM switching, specify external freewheeling Schottky diodes (e.g. SS54 / V10P10) across the solenoid coils to prevent excessive silicon thermal dissipation from the internal active clamp.
+22. Architecture Scope, Granularity & Token Economy (MANDATORY):
+    - Synthesize a clean functional block diagram containing primary ICs and major functional subsystems (typically 7 to 12 nodes total, e.g. Power Input/Protection, Primary Buck/Boost Regulator, Isolated DC-DC if isolated, MCU/Controller, Analog Front-End / Sensors, Transceiver/Radio, Actuation/Switches, UI/Indicators).
+    - DO NOT decompose individual jellybean passive components (0402 bypass capacitors, pull-up resistors, burden resistors, voltage divider resistors) or individual TVS diodes into separate standalone graph nodes. Integrate them into the matching functional block's description or BOM.
+    - Node rationale: EXACTLY 1-2 concise sentences (<= 30 words). Focus directly on part selection and key electrical justification.
+    - Node sublabel: Concise 2-4 words (e.g. '3.3V 1A Synchronous Buck', 'Isolated RS-485 Transceiver').
+    - BOM description: Standard single-line catalog description (<= 50 characters).
+    - BOM Items: 1 entry per functional node or critical IC/module (typically 7 to 14 BOM items). Do NOT generate dozens of generic passive entries.
+    - engineeringDecisions: 3 to 5 concise technical bullet points (under 40 words each). Summarize key calculations (power budget, isolation rating, bus termination/drive, ESD/protection compliance).
+    - suggestedRefinements: 3 to 5 concise chips, strictly 2 to 4 words each (MUST be <= 50 characters, never a sentence or phrase with commas).`;
 
   const userPrompt = `Synthesize the Canonical Design Graph for the following hardware intent:
 ${JSON.stringify(intent, null, 2)}
@@ -312,7 +331,7 @@ Output JSON adhering strictly to:
 
   const parseGraph = (text: string): unknown => {
     try {
-      return JSON.parse(stripJsonFences(text));
+      return safeParseOrRepairJson(text);
     } catch {
       return undefined;
     }

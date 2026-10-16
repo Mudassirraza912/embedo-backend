@@ -23,6 +23,7 @@ export const googleAuthSchema = z.object({
   expertiseLevel: z.enum(['student', 'hobbyist', 'professional', 'expert']).optional(),
   // Required (true) when this sign-in creates a NEW account; ignored for existing accounts.
   dataConsent: z.boolean().optional(),
+  linkAccount: z.boolean().optional(),
 });
 
 export const forgotPasswordSchema = z.object({
