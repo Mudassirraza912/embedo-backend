@@ -371,3 +371,40 @@ describe('hardware sourcing (vendor pages → private board + review queue)', ()
     expect(result).toMatchObject({ isPrototypeRequest: false, sourced: [] });
   });
 });
+
+describe('large controller pinouts (dev 2026-10-16: every STM32H7 Nucleo extraction failed on "at most 80 pins")', () => {
+  it('trims a 140-pin board to 80 pins, keeping power, ground and every bus pin, and splits long headers', () => {
+    const bus = ['PB8', 'PB9', 'PA5', 'PA6', 'PA7', 'PD8', 'PD9', 'PD5', 'PD6', 'PC12', 'PD2', 'PE8', 'PE7', 'PC6', 'PC7', 'PD1', 'PD0'];
+    const busFns: Record<string, string> = { PB8: 'I2C1_SCL', PB9: 'I2C1_SDA', PA5: 'SPI1_SCK', PA6: 'SPI1_MISO', PA7: 'SPI1_MOSI', PD8: 'USART3_TX', PD9: 'USART3_RX', PD5: 'USART2_TX', PD6: 'USART2_RX', PC12: 'UART5_TX', PD2: 'UART5_RX', PE8: 'UART7_TX', PE7: 'UART7_RX', PC6: 'USART6_TX', PC7: 'USART6_RX', PD1: 'FDCAN1_TX', PD0: 'FDCAN1_RX' };
+    const gpio = Array.from({ length: 118 }, (_, i) => `PG${i}`);
+    const power = ['3V3', '5V', 'VIN', 'GND', 'E5V'];
+    const names = [...gpio.slice(0, 60), ...bus, ...power, ...gpio.slice(60)];
+    const pins = names.map((name) =>
+      power.includes(name)
+        ? { name, signal_class: name === 'GND' ? 'ground' : 'power', direction: name === 'GND' ? 'ground' : name === 'VIN' || name === 'E5V' ? 'power_in' : 'power_out', voltage_domain: null, functions: [] }
+        : { name, signal_class: 'data', direction: 'bidirectional', voltage_domain: '3V3', functions: busFns[name] ? [busFns[name]] : [`GPIO`] }
+    );
+    const facts = {
+      product_name: 'NUCLEO-H743ZI2',
+      vendor: 'STMicroelectronics',
+      is_controller: true,
+      functional_categories: ['Processing'],
+      prototype_role: 'Main controller',
+      pins,
+      connectors: [
+        { ref: 'CN11', kind: 'header', pins: names.slice(0, 70) },
+        { ref: 'CN12', kind: 'header', pins: names.slice(70) },
+      ],
+      interfaces: Array.from({ length: 12 }, (_, i) => ({ type: i < 6 ? 'UART' : 'GPIO', role: 'controller' })),
+      facts_source: 'model_knowledge',
+    };
+    const parsed = factsSchema.safeParse(normaliseFacts(facts));
+    expect(parsed.success).toBe(true);
+    const f = parsed.data!;
+    expect(f.pins.length).toBe(80);
+    for (const n of [...bus, ...power]) expect(f.pins.map((p) => p.name)).toContain(n);
+    expect(f.interfaces).toHaveLength(12);
+    expect(checkFacts(f)).toEqual([]);
+    expect(Math.max(...f.connectors.map((c) => c.pins.length))).toBeLessThanOrEqual(48);
+  });
+});

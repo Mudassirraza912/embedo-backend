@@ -100,7 +100,7 @@ export function normaliseFacts(raw: unknown): unknown {
 
   const seen = new Set<string>();
   const pins: unknown[] = [];
-  for (const p of Array.isArray(out.pins) ? out.pins : []) {
+  for (const p of keepUsefulPins(Array.isArray(out.pins) ? out.pins : [])) {
     const name = pinLabel(p);
     if (!name || seen.has(name.toUpperCase())) continue;
     seen.add(name.toUpperCase());
@@ -128,7 +128,12 @@ export function normaliseFacts(raw: unknown): unknown {
     if (names.length === 0) continue;
     names.forEach((n) => placed.add(n.toUpperCase()));
     const kind = conn.kind === 'stemma_qt' && names.length !== 4 ? 'header' : conn.kind;
-    connectors.push({ ...conn, kind, pins: names.slice(0, 48), ref: typeof conn.ref === 'string' && conn.ref.trim() ? conn.ref : `J${connectors.length + 1}` });
+    // A long header (a Nucleo morpho row has 70 pins) is split into parts of 48, never cut short:
+    // a cut-off pin would sit on no connector and the whole board would be rejected.
+    const ref = typeof conn.ref === 'string' && conn.ref.trim() ? conn.ref : `J${connectors.length + 1}`;
+    for (let i = 0; i < names.length; i += 48) {
+      connectors.push({ ...conn, kind, pins: names.slice(i, i + 48), ref: i === 0 ? ref : `${ref}_${i / 48 + 1}` });
+    }
   }
   const loose = pins.map(pinLabel).filter((n): n is string => Boolean(n) && !placed.has(n!.toUpperCase()));
   for (let i = 0; i < loose.length; i += 48) connectors.push({ ref: `J${connectors.length + 1}`, kind: 'header', pins: loose.slice(i, i + 48) });
@@ -151,6 +156,30 @@ export function normaliseFacts(raw: unknown): unknown {
     out.functional_categories = known.length > 0 ? known : out.functional_categories;
   }
   return out;
+}
+
+const MAX_PINS = 80;
+const BUS_TEXT = /\b(?:I2C|SPI|(?:LP)?US?ART|FDCAN|CAN|SDA|SCL|SCK|MOSI|MISO|TX|RX)\d*(?:_|\b)/i;
+
+/**
+ * A board with more pins than a record holds (a Nucleo-144 breaks out ~140) is trimmed, never
+ * rejected: power and ground first, then every pin that carries a bus (by function token or name),
+ * then plain GPIOs in board order. Asking controllers for every bus instance made the model list
+ * the whole Nucleo; every STM32H7 extraction then failed on "at most 80 pins" (dev, 2026-10-16) and
+ * the bench fell back to a Pico. Connector entries naming a dropped pin are removed afterwards.
+ */
+export function keepUsefulPins(pins: unknown[]): unknown[] {
+  if (pins.length <= MAX_PINS) return pins;
+  const rank = (p: unknown): number => {
+    const o = p && typeof p === 'object' ? (p as Record<string, unknown>) : { name: p };
+    const text = `${String(o.name ?? '')} ${Array.isArray(o.functions) ? o.functions.join(' ') : ''}`;
+    if (/power|ground/.test(`${o.signal_class ?? ''} ${o.direction ?? ''}`) || /^(GND|VIN|VCC|VDD|3V3|5V|VBUS|E5V|IOREF)$/i.test(String(o.name ?? p))) return 0;
+    if (BUS_TEXT.test(text)) return 1;
+    if (/debug|control/.test(String(o.signal_class ?? ''))) return 3;
+    return 2;
+  };
+  const order = pins.map((p, i) => ({ p, i, r: rank(p) })).sort((a, b) => a.r - b.r || a.i - b.i).slice(0, MAX_PINS);
+  return order.sort((a, b) => a.i - b.i).map((x) => x.p);
 }
 
 /** Models sometimes list a pin as a bare name; classify it from the name instead of rejecting the board. */
@@ -224,7 +253,8 @@ export const factsSchema = z.object({
         rx: z.string().nullable().optional(),
       })
     )
-    .max(8)
+    // One entry per bus instance: an STM32H7 lists more than 8. Trimmed, never a rejection.
+    .transform((list) => list.slice(0, 16))
     .default([]),
   required_accessories: list(clip(120), 4).default([]),
   notes: list(clip(240), 4).default([]),
