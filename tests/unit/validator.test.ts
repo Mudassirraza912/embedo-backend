@@ -208,4 +208,231 @@ describe('Hardware Validator & Auto-Repairer', () => {
     const spiEdge = report.repairedGraph.edges.find((e) => e.to === 'lora_transceiver' && e.type === 'spi');
     expect(spiEdge).toBeDefined();
   });
+
+  it('should auto-repair 2-wire 4-20mA loop transmitter with high-power isolator to AD5421 and ADuM1441', () => {
+    const loopGraph: CanonicalDesignGraph = {
+      projectMeta: {
+        name: 'Isolated 4-20 mA HART RTD Transmitter',
+        tagline: 'Loop-powered 4-20mA sensor with galvanic isolation',
+        controller: 'MSP430F2001',
+      },
+      controller: {
+        partNumber: 'MSP430F2001',
+        manufacturer: 'Texas Instruments',
+        rationale: 'Ultra-low-power 16-bit MCU',
+      },
+      nodes: [
+        {
+          id: 'loop_connector',
+          label: 'Loop Connector',
+          sublabel: '24V Loop Supply (4-20mA)',
+          category: 'power',
+          partNumber: 'TB002-500-02BE',
+        },
+        {
+          id: 'isolated_dcdc',
+          label: 'ADuM5000',
+          sublabel: 'Isolated DC-DC',
+          category: 'power',
+          partNumber: 'ADuM5000ARWZ',
+          currentMa: 20,
+        },
+        {
+          id: 'mcu',
+          label: 'MSP430F2001',
+          sublabel: 'Microcontroller',
+          category: 'control',
+          partNumber: 'MSP430F2001',
+          currentMa: 0.3,
+        },
+      ],
+      edges: [],
+      powerRails: [
+        {
+          name: '3.3V',
+          voltageV: 3.3,
+          source: 'loop_connector',
+          consumers: ['mcu'],
+        },
+      ],
+      bom: [
+        {
+          partNumber: 'ADuM5000ARWZ',
+          manufacturer: 'Analog Devices',
+          category: 'Power Management',
+          description: 'Isolated DC/DC Converter 5V 500mW',
+          qty: 1,
+        },
+      ],
+    };
+
+    const report = validateAndRepairDesignGraph(loopGraph);
+    expect(report.issues.some((i) => i.code === 'LOOP_POWER_BUDGET_EXCEEDED')).toBe(true);
+    const isoNode = report.repairedGraph.nodes.find((n) => n.id === 'digital_isolator');
+    expect(isoNode).toBeDefined();
+    expect(isoNode?.partNumber).toBe('ADuM1441ARSZ');
+    expect(isoNode?.currentMa).toBeLessThan(0.05);
+    const bomItem = report.repairedGraph.bom.find((b) => b.partNumber === 'ADuM1441ARSZ');
+    expect(bomItem).toBeDefined();
+  });
+
+  it('should auto-inject 47uF pulse reservoir capacitor when CR2032 powers BLE/RF load', () => {
+    const bleBeaconGraph: CanonicalDesignGraph = {
+      projectMeta: {
+        name: 'BLE Asset Tracker Beacon',
+        tagline: 'CR2032 powered iBeacon with accelerometer',
+        controller: 'nRF52810',
+      },
+      controller: {
+        partNumber: 'nRF52810-QFAA',
+        manufacturer: 'Nordic Semiconductor',
+        rationale: 'Ultra-low-power BLE 5.0 SoC',
+      },
+      nodes: [
+        {
+          id: 'battery',
+          label: 'CR2032 Coin Cell',
+          sublabel: '3.0V / 225mAh',
+          category: 'power',
+          partNumber: 'CR2032',
+        },
+        {
+          id: 'mcu',
+          label: 'nRF52810',
+          sublabel: 'BLE SoC',
+          category: 'control',
+          partNumber: 'nRF52810-QFAA',
+        },
+      ],
+      edges: [],
+      powerRails: [
+        {
+          name: '3.0V',
+          voltageV: 3.0,
+          source: 'battery',
+          consumers: ['mcu'],
+        },
+      ],
+      bom: [],
+    };
+
+    const report = validateAndRepairDesignGraph(bleBeaconGraph);
+    expect(report.issues.some((i) => i.code === 'COIN_CELL_PULSE_CAPACITOR_ADDED')).toBe(true);
+    const pulseCapNode = report.repairedGraph.nodes.find((n) => n.id === 'pulse_reservoir_cap');
+    expect(pulseCapNode).toBeDefined();
+    expect(pulseCapNode?.partNumber).toBe('GRM31CR61A476KE15L');
+    const bomItem = report.repairedGraph.bom.find((b) => b.partNumber === 'GRM31CR61A476KE15L');
+    expect(bomItem).toBeDefined();
+  });
+
+  it('should auto-inject MLCC buffer capacitor for supercapacitor design operating at sub-zero temperatures', () => {
+    const supercapGraph: CanonicalDesignGraph = {
+      projectMeta: {
+        name: 'Agricultural Soil Moisture Node',
+        tagline: 'Solar + Supercapacitor node operating outdoors from -30°C to 65°C',
+        controller: 'STM32L071',
+      },
+      controller: {
+        partNumber: 'STM32L071KBT6',
+        manufacturer: 'STMicroelectronics',
+        rationale: 'Ultra-low-power Cortex-M0+ MCU',
+      },
+      nodes: [
+        {
+          id: 'solar_panel',
+          label: 'Solar Panel',
+          sublabel: '5V 100mA',
+          category: 'power',
+          partNumber: 'SP-5V-100MA',
+        },
+        {
+          id: 'supercap',
+          label: 'Supercapacitor Bank',
+          sublabel: '5.5V / 10F',
+          category: 'power',
+          partNumber: 'XT3560-3R0307-R',
+        },
+        {
+          id: 'mcu',
+          label: 'STM32L071',
+          sublabel: 'MCU',
+          category: 'control',
+          partNumber: 'STM32L071KBT6',
+        },
+      ],
+      edges: [],
+      powerRails: [
+        {
+          name: '3.3V',
+          voltageV: 3.3,
+          source: 'supercap',
+          consumers: ['mcu'],
+        },
+      ],
+      bom: [],
+    };
+
+    const report = validateAndRepairDesignGraph(supercapGraph);
+    expect(report.issues.some((i) => i.code === 'SUPERCAPACITOR_COLD_ESR_DERATED')).toBe(true);
+    const mlccNode = report.repairedGraph.nodes.find((n) => n.id === 'supercap_mlcc_buffer');
+    expect(mlccNode).toBeDefined();
+    expect(mlccNode?.partNumber).toBe('GRM32ER61C107ME20L');
+  });
+
+  it('should auto-repair tuning-fork quartz crystal to silicon MEMS oscillator for stratospheric flight computer at -60C', () => {
+    const flightComputerGraph: CanonicalDesignGraph = {
+      projectMeta: {
+        name: 'Stratospheric Flight Computer',
+        tagline: 'Stratospheric flight computer running down to -60°C',
+        controller: 'STM32L151',
+      },
+      controller: {
+        partNumber: 'STM32L151C8T6',
+        manufacturer: 'STMicroelectronics',
+        rationale: 'Low-power flight controller',
+      },
+      nodes: [
+        {
+          id: 'crystal',
+          label: '32.768kHz Crystal',
+          sublabel: 'Tuning-Fork Crystal',
+          category: 'power',
+          partNumber: 'ABS07-32.768KHZ-T',
+        },
+        {
+          id: 'mcu',
+          label: 'STM32L151',
+          sublabel: 'MCU',
+          category: 'control',
+          partNumber: 'STM32L151C8T6',
+        },
+      ],
+      edges: [],
+      powerRails: [
+        {
+          name: '3.3V',
+          voltageV: 3.3,
+          source: 'mcu',
+          consumers: [],
+        },
+      ],
+      bom: [
+        {
+          partNumber: 'ABS07-32.768KHZ-T',
+          manufacturer: 'Abracon',
+          category: 'Crystals',
+          description: 'Crystal 32.7680kHz 12.5pF SMD',
+          qty: 1,
+        },
+      ],
+    };
+
+    const report = validateAndRepairDesignGraph(flightComputerGraph);
+    expect(report.issues.some((i) => i.code === 'EXTREME_COLD_TEMPERATURE_DERATED')).toBe(true);
+    const oscNode = report.repairedGraph.nodes.find((n) => n.id === 'crystal');
+    expect(oscNode?.partNumber).toBe('SiT1532AI-J4-DCC-32.768E');
+    expect(oscNode?.label).toBe('SiT1532');
+    const bomItem = report.repairedGraph.bom.find((b) => b.partNumber === 'SiT1532AI-J4-DCC-32.768E');
+    expect(bomItem).toBeDefined();
+  });
 });

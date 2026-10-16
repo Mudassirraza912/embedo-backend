@@ -347,6 +347,239 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
     }
   }
 
+  // 7. 2-Wire 4-20 mA Loop-Powered Architecture & Power Budget
+  // In a 2-wire loop-powered transmitter, all power is derived from the 4-20 mA loop current.
+  // By Kirchhoff's Current Law, all internal circuitry MUST consume < 3.5 mA total.
+  // High-power isolated DC/DC converters (such as ADuM5000 drawing 20-30 mA) permanently saturate the loop and violate physics.
+  const is420LoopProject =
+    /(4[-\s]?20\s*ma|current[-\s]?loop|hart)/i.test(
+      `${graph.projectMeta.name} ${graph.projectMeta.tagline} ${graph.projectMeta.controller}`
+    ) ||
+    graph.nodes.some((n) => /(4[-\s]?20\s*ma|xtr11|ad5421|loop)/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`));
+
+  if (is420LoopProject) {
+    const is3Or4Wire = /(3[-\s]?wire|4[-\s]?wire|auxiliary\s*power)/i.test(
+      `${graph.projectMeta.name} ${graph.projectMeta.tagline} ${(graph.engineeringDecisions ?? []).join(' ')}`
+    );
+
+    if (!is3Or4Wire) {
+      // 2-Wire Loop: check for incompatible high-power DC/DC converter
+      const HIGH_POWER_ISOLATORS = /(adum5000|adum6000|adum5401|adum5240|cre1|recom|dcdc)/i;
+      const badIsoNode = graph.nodes.find(
+        (n) =>
+          HIGH_POWER_ISOLATORS.test(n.partNumber ?? '') ||
+          HIGH_POWER_ISOLATORS.test(n.id) ||
+          HIGH_POWER_ISOLATORS.test(n.label ?? '') ||
+          HIGH_POWER_ISOLATORS.test(n.sublabel ?? '')
+      );
+
+      if (badIsoNode) {
+        const oldPart = badIsoNode.partNumber || 'ADuM5000';
+        badIsoNode.id = 'digital_isolator';
+        badIsoNode.label = 'ADuM1441';
+        badIsoNode.sublabel = 'Micropower Digital Isolator';
+        badIsoNode.partNumber = 'ADuM1441ARSZ';
+        badIsoNode.manufacturer = 'Analog Devices';
+        badIsoNode.category = 'connectivity';
+        badIsoNode.currentMa = 0.015;
+        badIsoNode.rationale =
+          'Quad-channel micropower digital isolator (4.5 µA/ch at 2 Mbps) replacing high-power DC/DC converter to satisfy 2-wire loop < 3.5 mA power budget.';
+
+        // Ensure loop DAC is an ultra-low-power loop regulator/DAC (e.g. AD5421 or XTR116)
+        let loopDacNode = graph.nodes.find((n) => /(ad5421|xtr11|loop[-\s]?dac)/i.test(`${n.id} ${n.partNumber ?? ''}`));
+        if (!loopDacNode) {
+          const firstPowerOrControl = graph.nodes.find((n) => n.id.includes('dac') || n.id.includes('xtr') || n.id.includes('loop'));
+          if (firstPowerOrControl) {
+            loopDacNode = firstPowerOrControl;
+            loopDacNode.partNumber = 'AD5421BREZ';
+            loopDacNode.label = 'AD5421';
+            loopDacNode.sublabel = 'Loop DAC & Regulated DC/DC';
+            loopDacNode.manufacturer = 'Analog Devices';
+            loopDacNode.category = 'power';
+            loopDacNode.rationale =
+              'Loop-powered 4-20mA DAC with on-chip high-efficiency step-down DC/DC converter (Iq < 250 µA) stepping down 24V loop to 3.3V.';
+          }
+        }
+
+        // Cap field-side node current draws to sub-milliamp levels
+        for (const n of graph.nodes) {
+          if (n.category === 'sensing' && (n.currentMa ?? 0) > 2) n.currentMa = 0.25;
+          if (n.category === 'control' && (n.currentMa ?? 0) > 2) n.currentMa = 0.35;
+          if (n.category === 'connectivity' && n.id.includes('hart') && (n.currentMa ?? 0) > 1) n.currentMa = 0.14;
+        }
+
+        // Update BOM
+        for (const item of graph.bom || []) {
+          if (HIGH_POWER_ISOLATORS.test(item.partNumber) || HIGH_POWER_ISOLATORS.test(item.description)) {
+            item.partNumber = 'ADuM1441ARSZ';
+            item.manufacturer = 'Analog Devices';
+            item.description = 'Quad-Channel Micropower Digital Isolator, 2.5kV RMS';
+            item.category = 'Isolation';
+          }
+        }
+
+        issues.push({
+          severity: 'warning',
+          code: 'LOOP_POWER_BUDGET_EXCEEDED',
+          message: `In a 2-wire loop-powered 4-20mA transmitter, total circuit current must strictly be < 3.5 mA (KCL) to allow 4 mA zero-scale and NAMUR NE43 fault signaling. Replaced high-power isolated DC/DC '${oldPart}' (~20 mA draw) with ADuM1441 micropower digital isolator (< 20 µA) and AD5421 loop-powered buck/DAC.`,
+          nodeId: badIsoNode.id,
+        });
+      }
+    }
+  }
+
+  // 8. Coin-Cell High Internal Resistance & Pulse Reservoir Capacitor
+  // CR2032/CR2025 coin cells have high internal resistance (Ri = 10-100+ Ω).
+  // RF load bursts (BLE, LoRa, Zigbee) drawing 10-15 mA cause severe IR drop and brownout reset without a bulk pulse reservoir capacitor.
+  const isCoinCell = graph.nodes.some(
+    (n) => n.category === 'power' && /\b(cr2032|cr2025|cr2450|coin[-\s]?cell)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`)
+  );
+  const hasRfLoad =
+    graph.nodes.some((n) => /\b(ble|bluetooth|nrf5|esp32|lora|zigbee|wireless|radio)\b/i.test(`${n.partNumber} ${n.label} ${n.sublabel ?? ''} ${n.category}`)) ||
+    /ble|beacon|lora|wireless/i.test(`${graph.projectMeta.name} ${graph.projectMeta.tagline}`);
+
+  if (isCoinCell && hasRfLoad) {
+    const hasPulseCap = graph.nodes.some(
+      (n) => /\b(reservoir|pulse[-\s]?cap|buffer[-\s]?cap|47uf|100uf|bulk[-\s]?cap)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`)
+    );
+    const hasBOMPulseCap = (graph.bom || []).some((b) => /\b(47\s*uf|100\s*uf|reservoir|pulse)\b/i.test(`${b.description} ${b.partNumber}`));
+
+    if (!hasPulseCap && !hasBOMPulseCap) {
+      const pulseCapNode: DesignNode = {
+        id: 'pulse_reservoir_cap',
+        label: '47µF Pulse Reservoir Cap',
+        sublabel: 'Low-Leakage Buffer',
+        category: 'power',
+        partNumber: 'GRM31CR61A476KE15L',
+        manufacturer: 'Murata',
+        rationale:
+          '47µF low-leakage X5R ceramic capacitor placed directly across CR2032 coin cell to buffer 15mA peak RF transmission bursts without voltage sag across battery internal resistance (Ri = 10-100Ω).',
+        voltageV: 3.0,
+        currentMa: 0.0001,
+      };
+      graph.nodes.push(pulseCapNode);
+      nodeMap.set(pulseCapNode.id, pulseCapNode);
+
+      const coinBatNode = graph.nodes.find(
+        (n) => n.category === 'power' && /\b(cr2032|cr2025|cr2450|coin)\b/i.test(`${n.id} ${n.label}`)
+      );
+      if (coinBatNode) {
+        validEdges.push({
+          from: coinBatNode.id,
+          to: pulseCapNode.id,
+          label: 'VBAT',
+          type: 'power',
+        });
+      }
+
+      graph.bom.push({
+        partNumber: 'GRM31CR61A476KE15L',
+        manufacturer: 'Murata',
+        category: 'Passives',
+        description: 'Capacitor Ceramic 47µF 10V X5R 1206 Low-Leakage',
+        qty: 1,
+        unitCostUsd: 0.35,
+      });
+
+      issues.push({
+        severity: 'warning',
+        code: 'COIN_CELL_PULSE_CAPACITOR_ADDED',
+        message: 'CR2032 coin cell has high internal resistance (10–100Ω) which causes brownout reset during 15mA BLE/RF radio transmission bursts. Added 47µF low-leakage pulse reservoir capacitor in parallel with the coin cell.',
+        nodeId: pulseCapNode.id,
+      });
+    }
+  }
+
+  // 9. Supercapacitor Sub-Zero ESR Derating & Buffering
+  // Supercapacitor ESR surges 3x-5x at sub-zero temperatures (-30°C).
+  // High-current pulses (NB-IoT / cellular 300-500 mA) cause premature input rail collapse without low-ESR cold-rating and parallel MLCC buffer.
+  const supercapNode = graph.nodes.find(
+    (n) => n.category === 'power' && /\b(supercap|supercapacitor|edlc|ultracapacitor)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`)
+  );
+  const isSubZeroEnv =
+    /-([2-6]\d)\s*°?c/i.test(`${graph.projectMeta.name} ${graph.projectMeta.tagline} ${(graph.engineeringDecisions ?? []).join(' ')}`);
+
+  if (supercapNode && isSubZeroEnv) {
+    const hasMlccBuffer =
+      graph.nodes.some((n) => /\b(mlcc|buffer|100uf|ceramic)\b/i.test(`${n.id} ${n.label} ${n.sublabel ?? ''}`)) ||
+      (graph.bom || []).some((b) => /\b(100\s*uf|mlcc|buffer)\b/i.test(`${b.description} ${b.partNumber}`));
+
+    if (!hasMlccBuffer) {
+      const mlccBufferNode: DesignNode = {
+        id: 'supercap_mlcc_buffer',
+        label: '100µF Low-ESR MLCC Bank',
+        sublabel: 'Cold Transient Buffer',
+        category: 'power',
+        partNumber: 'GRM32ER61C107ME20L',
+        manufacturer: 'Murata',
+        rationale:
+          '100µF low-ESR ceramic MLCC placed in parallel with supercapacitor bank to absorb high di/dt NB-IoT transmit pulses (300-500mA) when supercapacitor ESR increases at -30°C.',
+        voltageV: 5.5,
+        currentMa: 0.0001,
+      };
+      graph.nodes.push(mlccBufferNode);
+      nodeMap.set(mlccBufferNode.id, mlccBufferNode);
+
+      validEdges.push({
+        from: supercapNode.id,
+        to: mlccBufferNode.id,
+        label: 'V_SUPERCAP',
+        type: 'power',
+      });
+
+      graph.bom.push({
+        partNumber: 'GRM32ER61C107ME20L',
+        manufacturer: 'Murata',
+        category: 'Passives',
+        description: 'Capacitor Ceramic 100µF 16V X5R 1210 Low-ESR',
+        qty: 1,
+        unitCostUsd: 0.65,
+      });
+
+      issues.push({
+        severity: 'warning',
+        code: 'SUPERCAPACITOR_COLD_ESR_DERATED',
+        message: 'Supercapacitor ESR increases 3x–5x at -30°C. Added 100µF low-ESR ceramic MLCC buffer bank to absorb high di/dt NB-IoT transmit pulses without input rail collapse.',
+        nodeId: mlccBufferNode.id,
+      });
+    }
+  }
+
+  // 10. Stratospheric & Extreme Cold (<-40°C) Crystal Stall & Silicon Check
+  // Standard tuning-fork 32.768 kHz crystals stop oscillating below -40°C due to increased motional resistance.
+  // Stratospheric flights (-60°C) require silicon MEMS oscillators or internal calibrated RC and EPS thermal insulation.
+  const isExtremeCold =
+    /-([5-9]\d)\s*°?c/i.test(`${graph.projectMeta.name} ${graph.projectMeta.tagline} ${(graph.engineeringDecisions ?? []).join(' ')}`);
+
+  if (isExtremeCold) {
+    const tuningForkCrystal = graph.nodes.find(
+      (n) => /\b(crystal|xtal|32\.768|abs07|ecs|tuning[-\s]?fork)\b/i.test(`${n.id} ${n.partNumber ?? ''} ${n.label}`)
+    );
+    if (tuningForkCrystal) {
+      tuningForkCrystal.partNumber = 'SiT1532AI-J4-DCC-32.768E';
+      tuningForkCrystal.label = 'SiT1532';
+      tuningForkCrystal.sublabel = 'MEMS Oscillator (-55°C to +85°C)';
+      tuningForkCrystal.manufacturer = 'SiTime';
+      tuningForkCrystal.rationale =
+        'Ultra-low power 32.768 kHz silicon MEMS oscillator operating down to -55°C without crystal oscillator stall common to quartz tuning-fork crystals at -60°C.';
+
+      for (const item of graph.bom || []) {
+        if (/\b(crystal|xtal|32\.768|abs07)\b/i.test(`${item.partNumber} ${item.description}`)) {
+          item.partNumber = 'SiT1532AI-J4-DCC-32.768E';
+          item.manufacturer = 'SiTime';
+          item.description = 'MEMS Oscillator 32.768kHz 1.2V-3.63V Extended Temp';
+        }
+      }
+
+      issues.push({
+        severity: 'warning',
+        code: 'EXTREME_COLD_TEMPERATURE_DERATED',
+        message: 'At stratospheric temperatures down to -60°C, standard quartz tuning-fork crystals stall. Auto-repaired to SiTime SiT1532 silicon MEMS oscillator rated for extreme low temperatures.',
+        nodeId: tuningForkCrystal.id,
+      });
+    }
+  }
+
   const repairedGraph: CanonicalDesignGraph = { ...graph, edges: validEdges };
   const hasCriticalErrors = issues.some((i) => i.severity === 'error');
 

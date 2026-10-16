@@ -125,11 +125,11 @@ export async function buildCanonicalDesignGraph(
 Your goal is to synthesize a production-grade, electrically consistent Canonical Design Graph for an embedded hardware system based on user specifications.
 
 CRITICAL HARDWARE RULES:
-1. Every component MUST have real, commercially available manufacturer part numbers (e.g. ESP32-S3-MINI-1, STM32WLE5JC, STM32L072CZTX, SX1262IMLTRT, TPS63031DSKR, TPS62840DLYR, AP63203WU-7, BQ25186, SHT40-AD1B-R2, ICM-42688-P, etc.).
+1. Every component MUST have real, commercially available manufacturer part numbers (e.g. ESP32-S3-MINI-1, STM32WLE5JC, STM32L072CZTX, SX1262IMLTRT, TPS63031DSKR, TPS62840DLYR, AP63203WU-7, BQ25186, SHT40-AD1B-R2, ICM-42688-P, AD5421BREZ, XTR116U, ADuM1441ARSZ, AD5700BCPZ, AD7124-4BRUZ, SPV1040T, SiT1532AI-J4-DCC-32.768E, GRM31CR61A476KE15L, etc.).
 2. Node IDs must be clean lowercase alphanumeric strings (e.g. "usbc", "mcu", "charger", "battery", "regulator", "imu", "storage", "display", "haptic", "gauge").
 3. Power Source & Power Path Architecture:
    - Match the user's requested power source EXACTLY:
-     * Primary Non-Rechargeable Batteries (e.g. 2x AA, AAA, CR2032, Li-SOCl2):
+     * Primary Non-Rechargeable Batteries (e.g. 2x AA, AAA, CR2032, Li-SOCl2, Li-FeS2 Energizer L91):
        - DO NOT include USB-C, DO NOT include a battery charger IC (like BQ25186), and DO NOT include a LiPo battery. Charging primary cells is a catastrophic electrical safety hazard!
        - The battery node MUST represent the specified battery (e.g. id: "battery", label: "2x AA Battery Pack", sublabel: "3.0V nominal (2.0V-3.0V)", category: "power").
        - Power Converter Topology Selection:
@@ -140,6 +140,12 @@ CRITICAL HARDWARE RULES:
        - Include USB-C (5V input) -> Charger IC (e.g. BQ25186) -> LiPo Battery -> 3.3V Low-Iq Buck/LDO Regulator -> System rails.
      * External DC Power (e.g. 9V–24V DC):
        - DC Terminal/Jack -> Buck Regulator (e.g. AP63203WU-7) -> 3.3V / 5V rails.
+     * 2-Wire 4–20 mA Loop-Powered Supply (e.g. 24V loop supply):
+       - The transmitter is powered SOLELY from the 4-20mA loop current. All loop-side and field-side circuitry MUST draw < 3.5 mA total.
+       - Use an integrated loop-power DAC/regulator such as AD5421 (integrated high-efficiency DC/DC buck converting 24V loop to 3.3V at < 250 µA Iq) or XTR116/XTR117 (internal 5V/4.096V VREG, < 250 µA Iq).
+       - NEVER add USB-C, external batteries, or high-power isolated DC/DC converters (like ADuM5000) to a 2-wire loop-powered transmitter!
+     * Solar + Supercapacitor (Maintenance-Free Energy Harvesting):
+       - Solar Panel (e.g. 5V 100mA) -> Solar MPPT Boost/Buck Charger (e.g. SPV1040) -> Supercapacitor Bank (e.g. 5.5V / 10F with balancing) -> Ultra-low Iq Buck Converter (e.g. TPS62840, 60 nA Iq) -> 3.3V System Rail.
 4. Category values must be one of: power, control, sensing, storage, connectivity, audio, ui, haptic, gauge, motor.
 5. Edge types must be one of: power, i2c, spi, uart, usb, sdmmc, gpio, signal, analog.
 6. Power rails must list every active voltage domain (e.g. 5V, 3.3V, VSYS, VBAT) and all consumer node IDs connected to that rail.
@@ -163,7 +169,33 @@ CRITICAL HARDWARE RULES:
       a. Select an integrated LoRaWAN SoC (e.g. STM32WLE5JC / STM32WL55CC).
       b. Select a certified SiP module (e.g. Murata CMWX1ZZABZ-091 or Seeed LoRa-E5).
       c. Pair the MCU with an external LoRa transceiver (e.g. Semtech SX1262, SX1276, or RFM95W) connected via SPI and GPIOs.
-    - The same applies to BLE: do not add a separate BLE module if the MCU already integrates BLE (e.g. ESP32-S3, nRF52840), and do not claim a non-wireless MCU has integrated BLE.`;
+    - The same applies to BLE: do not add a separate BLE module if the MCU already integrates BLE (e.g. ESP32-S3, nRF52840), and do not claim a non-wireless MCU has integrated BLE.
+13. 2-Wire 4–20 mA Current-Loop Power Architecture & Kirchhoff's Current Law (KCL):
+    - In a 2-wire (loop-powered) 4–20 mA transmitter, ALL operating current flows through the loop itself.
+    - Strict Power Budget: The total quiescent current drawn by all transmitter circuitry (MCU, AFE, reference, isolation, HART modem, loop regulator) MUST BE < 3.5 mA (absolute ceiling < 3.6 mA, reserving 0.4 mA margin for NAMUR NE43 3.8 mA low-scale signaling).
+    - NEVER claim that drawing 10–20 mA on a 2-wire loop is valid — drawing > 3.6 mA permanently saturates the loop and makes 4 mA zero-scale transmission physically impossible!
+    - For Galvanic Isolation in 2-Wire Loops:
+      * NEVER use isolated DC/DC converters like ADuM5000/ADuM6000 (which draw 20–30 mA no-load).
+      * Use micropower digital isolators (e.g. ADuM1441 / ADuM1440, drawing < 5 µA/ch at 2 Mbps) and power the isolated sensor side through a high-efficiency sub-milliamp micropower topology or loop DAC (e.g. AD5421 with integrated buck stepping down 24V loop to 3.3V with < 250 µA quiescent current).
+      * Select sub-milliamp components: MCU (MSP430FR / STM32L0 < 400 µA), Precision AFE (AD7124-4 / AD7793 < 250 µA), HART modem (AD5700 < 140 µA in receive).
+      * If external power is available (3-wire or 4-wire transmitter), explicitly state "3-wire transmitter with external 24V power" so the loop budget constraint does not apply.
+14. Coin-Cell Internal Resistance & Pulse Reservoir Capacitors:
+    - Primary lithium coin cells (CR2032, CR2025, CR2450) have high internal DC resistance (Ri ≈ 10–20 Ω fresh, increasing to 80–200 Ω when depleted or cold).
+    - When powering pulsed RF loads (BLE advertising bursts of 10–15 mA, LoRa transmissions, Zigbee):
+      * Instantaneous rail sag: ΔV = I_peak * Ri can exceed 1.0V–1.5V, dropping below MCU Brown-Out Reset (BOR) threshold (1.7V).
+      * MANDATE a Pulse Reservoir Bulk Capacitor (47 µF to 100 µF low-leakage X5R ceramic or low-leakage tantalum, leakage < 0.2 µA, e.g. Murata GRM31CR61A476KE15L) directly across the coin cell to buffer the 1–3 ms RF transmission bursts.
+      * Explicitly document the internal resistance and pulse reservoir buffer in "engineeringDecisions".
+15. Supercapacitor Sub-Zero ESR Derating & Transient Buffering:
+    - In energy-harvesting designs (Solar + Supercapacitor) operating in outdoor sub-zero environments (-20°C to -40°C) with pulsed cellular RF (NB-IoT, LTE-M, GSM bursts of 300–500 mA):
+      * Supercapacitor Equivalent Series Resistance (ESR) surges by 3x–5x at sub-zero temperatures (e.g., from 50 mΩ up to 0.5–1.5 Ω at -30°C).
+      * A 500 mA RF pulse across 1.0 Ω cold ESR causes an instantaneous 0.5V drop, potentially collapsing the buck converter input below its minimum operating threshold.
+      * MANDATE cold-rated low-ESR supercapacitors (organic acetonitrile/quaternary ammonium electrolyte rated to -40°C, e.g. Eaton XT series or Maxwell DuraBlue) and place a parallel 100 µF low-ESR MLCC ceramic capacitor bank at the buck input to absorb high di/dt burst edges.
+      * Document cold ESR derating in "engineeringDecisions".
+16. Extreme Cold (Below -40°C) Stratospheric & Cryogenic Operations:
+    - When operating temperatures drop below -40°C (e.g. stratospheric weather balloon flight computer down to -60°C):
+      * Crystal Oscillator Stall: Standard 32.768 kHz tuning-fork quartz crystals stop oscillating below -40°C due to increased crystal motional resistance and decreased oscillator transconductance (gm). Mandate a temperature-compensated silicon MEMS oscillator (e.g. SiTime SiT1532 rated to -55°C) or MCU internal calibrated RC oscillator.
+      * Primary Battery Chemistry: Standard LiPo collapses below -20°C. Mandate Lithium-Iron Disulfide (Li-FeS2, e.g. Energizer L91 AA) primary cells, which retain >70% capacity down to -40°C.
+      * Thermal Gondola Architecture: State that flight electronics are enclosed in an expanded polystyrene (EPS) / aerogel thermal insulation payload gondola, where board dissipated power (~100–300 mW) maintains internal PCB temperature above -20°C, protecting standard industrial silicon.`;
 
   const userPrompt = `Synthesize the Canonical Design Graph for the following hardware intent:
 ${JSON.stringify(intent, null, 2)}
