@@ -1,5 +1,6 @@
 import {
   CanonicalDesignGraph,
+  DesignNode,
   DiagramEdge,
   DiagramLegend,
   DiagramNode,
@@ -19,6 +20,50 @@ const LEGEND_COLORS: Record<string, string> = {
   gpio: '#075F69',
   analog: '#EC4899',
 };
+
+function projectNode(
+  n: DesignNode | undefined,
+  fallback: {
+    id: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    label: string;
+    sublabel?: string;
+    category: string;
+  }
+): DiagramNode {
+  if (!n) {
+    return {
+      id: fallback.id,
+      x: fallback.x,
+      y: fallback.y,
+      w: fallback.w,
+      h: fallback.h,
+      label: fallback.label,
+      sublabel: fallback.sublabel || '',
+      category: fallback.category,
+    };
+  }
+  return {
+    id: fallback.id || n.id,
+    x: fallback.x,
+    y: fallback.y,
+    w: fallback.w,
+    h: fallback.h,
+    label: n.label || fallback.label,
+    sublabel: fallback.sublabel || n.sublabel || '',
+    category: fallback.category || n.category,
+    partNumber: n.partNumber,
+    manufacturer: n.manufacturer,
+    selectionRationale: n.rationale,
+    voltage: n.voltageV ? `${n.voltageV}V` : undefined,
+    current: n.currentMa ? `${n.currentMa}mA` : undefined,
+    interfaces: n.interfaces,
+    description: n.sublabel || n.label,
+  };
+}
 
 /**
  * Pure deterministic diagram projection algorithm.
@@ -133,61 +178,69 @@ function projectFunctionalBlock(graph: CanonicalDesignGraph): ProjectedDiagram {
   // 1. Left Column: Power components
   let leftY = 70;
   for (const pNode of powerNodes) {
-    nodes.push({
-      id: pNode.id,
-      x: 50,
-      y: leftY,
-      w: 160,
-      h: leftY === 70 ? 70 : 80,
-      label: pNode.label,
-      sublabel: pNode.sublabel,
-      category: pNode.category,
-    });
+    nodes.push(
+      projectNode(pNode, {
+        id: pNode.id,
+        x: 50,
+        y: leftY,
+        w: 160,
+        h: leftY === 70 ? 70 : 80,
+        label: pNode.label,
+        sublabel: pNode.sublabel,
+        category: pNode.category,
+      })
+    );
     leftY += 130;
   }
 
   // 2. Center Column: MCU + lower center accessories
   if (mcuNode) {
-    nodes.push({
-      id: mcuNode.id,
-      x: 410,
-      y: 300,
-      w: 180,
-      h: 100,
-      label: mcuNode.label,
-      sublabel: mcuNode.sublabel,
-      category: mcuNode.category,
-    });
+    nodes.push(
+      projectNode(mcuNode, {
+        id: mcuNode.id,
+        x: 410,
+        y: 300,
+        w: 180,
+        h: 100,
+        label: mcuNode.label,
+        sublabel: mcuNode.sublabel,
+        category: mcuNode.category,
+      })
+    );
   }
 
   let centerY = 470;
   for (const cNode of centerBottomNodes) {
-    nodes.push({
-      id: cNode.id,
-      x: 410,
-      y: centerY,
-      w: 180,
-      h: 65,
-      label: cNode.label,
-      sublabel: cNode.sublabel,
-      category: cNode.category,
-    });
+    nodes.push(
+      projectNode(cNode, {
+        id: cNode.id,
+        x: 410,
+        y: centerY,
+        w: 180,
+        h: 65,
+        label: cNode.label,
+        sublabel: cNode.sublabel,
+        category: cNode.category,
+      })
+    );
     centerY += 90;
   }
 
   // 3. Right Column: Peripherals (Storage, Audio, UI, Sensors, Actuators)
   let rightY = 70;
   for (const pNode of peripheralNodes) {
-    nodes.push({
-      id: pNode.id,
-      x: 760,
-      y: rightY,
-      w: 180,
-      h: 65,
-      label: pNode.label,
-      sublabel: pNode.sublabel,
-      category: pNode.category,
-    });
+    nodes.push(
+      projectNode(pNode, {
+        id: pNode.id,
+        x: 760,
+        y: rightY,
+        w: 180,
+        h: 65,
+        label: pNode.label,
+        sublabel: pNode.sublabel,
+        category: pNode.category,
+      })
+    );
     rightY += 95;
   }
 
@@ -199,7 +252,9 @@ function projectFunctionalBlock(graph: CanonicalDesignGraph): ProjectedDiagram {
     to: e.to,
     label: e.label,
     type: e.type,
+    kind: e.type,
     dashed: e.dashed,
+    direction: e.busType === 'i2c' ? 'bidirectional' : 'unidirectional',
   }));
 
   const usedTypes = new Set(edges.map((e) => e.type));
@@ -518,23 +573,27 @@ function projectPowerTree(graph: CanonicalDesignGraph): ProjectedDiagram {
     const x = col === 0 ? 470 : 650;
     const y = 240 + row * 80;
     const loadId = `load_${load.id}`;
-
-    nodes.push({
-      id: loadId,
-      x,
-      y,
-      w: 150,
-      h: 60,
-      label: load.label,
-      sublabel: load.sublabel,
-      category: load.category,
-    });
+    nodes.push(
+      projectNode(load, {
+        id: loadId,
+        x,
+        y,
+        w: 150,
+        h: 60,
+        label: load.label,
+        sublabel: load.sublabel,
+        category: load.category,
+      })
+    );
 
     edges.push({
       from: 'rail',
       to: loadId,
       label: railVoltageStr,
       type: 'rail',
+      kind: 'rail',
+      voltage: railVoltageStr,
+      direction: 'unidirectional',
     });
   }
 
@@ -573,16 +632,18 @@ function projectProtocolMap(graph: CanonicalDesignGraph): ProjectedDiagram {
 
   // 1. Controller in center
   if (mcuNode) {
-    nodes.push({
-      id: mcuNode.id,
-      x: 410,
-      y: 290,
-      w: 180,
-      h: 90,
-      label: mcuNode.label,
-      sublabel: 'interface controller',
-      category: mcuNode.category,
-    });
+    nodes.push(
+      projectNode(mcuNode, {
+        id: mcuNode.id,
+        x: 410,
+        y: 290,
+        w: 180,
+        h: 90,
+        label: mcuNode.label,
+        sublabel: 'interface controller',
+        category: mcuNode.category,
+      })
+    );
   }
 
   // 2. Host / Programming interface on left
@@ -599,7 +660,7 @@ function projectProtocolMap(graph: CanonicalDesignGraph): ProjectedDiagram {
       category: 'power',
     });
     if (mcuNode) {
-      edges.push({ from: 'usbc', to: mcuNode.id, label: 'USB', type: 'usb' });
+      edges.push({ from: 'usbc', to: mcuNode.id, label: 'USB', type: 'usb', kind: 'usb', direction: 'bidirectional' });
     }
   } else {
     nodes.push({
@@ -613,25 +674,27 @@ function projectProtocolMap(graph: CanonicalDesignGraph): ProjectedDiagram {
       category: 'control',
     });
     if (mcuNode) {
-      edges.push({ from: 'debug_header', to: mcuNode.id, label: 'SWD', type: 'gpio' });
+      edges.push({ from: 'debug_header', to: mcuNode.id, label: 'SWD', type: 'gpio', kind: 'gpio', direction: 'bidirectional' });
     }
   }
 
   // 3. Storage nodes on Top Right
   let topX = 500;
   for (const sNode of storageNodes) {
-    nodes.push({
-      id: sNode.id,
-      x: topX,
-      y: 70,
-      w: 180,
-      h: 70,
-      label: sNode.label,
-      sublabel: sNode.sublabel,
-      category: sNode.category,
-    });
+    nodes.push(
+      projectNode(sNode, {
+        id: sNode.id,
+        x: topX,
+        y: 70,
+        w: 180,
+        h: 70,
+        label: sNode.label,
+        sublabel: sNode.sublabel,
+        category: sNode.category,
+      })
+    );
     if (mcuNode) {
-      edges.push({ from: mcuNode.id, to: sNode.id, label: 'SDMMC', type: 'sdmmc' });
+      edges.push({ from: mcuNode.id, to: sNode.id, label: 'SDMMC', type: 'sdmmc', kind: 'sdmmc', direction: 'bidirectional' });
     }
     topX += 230;
   }
@@ -639,16 +702,18 @@ function projectProtocolMap(graph: CanonicalDesignGraph): ProjectedDiagram {
   // 4. Peripherals on Right Column
   let rightY = 210;
   for (const pNode of otherPeripherals) {
-    nodes.push({
-      id: pNode.id,
-      x: 770,
-      y: rightY,
-      w: 180,
-      h: 60,
-      label: pNode.label,
-      sublabel: pNode.sublabel,
-      category: pNode.category,
-    });
+    nodes.push(
+      projectNode(pNode, {
+        id: pNode.id,
+        x: 770,
+        y: rightY,
+        w: 180,
+        h: 60,
+        label: pNode.label,
+        sublabel: pNode.sublabel,
+        category: pNode.category,
+      })
+    );
 
     const edge = graph.edges.find(
       (e) => (e.from === mcuNode?.id && e.to === pNode.id) || (e.from === pNode.id && e.to === mcuNode?.id)
@@ -661,7 +726,9 @@ function projectProtocolMap(graph: CanonicalDesignGraph): ProjectedDiagram {
         to: pNode.id,
         label: edge?.label || busType.toUpperCase(),
         type: busType,
+        kind: busType,
         dashed: edge?.dashed,
+        direction: busType === 'i2c' || busType === 'spi' ? 'bidirectional' : 'unidirectional',
       });
     }
 
@@ -671,18 +738,20 @@ function projectProtocolMap(graph: CanonicalDesignGraph): ProjectedDiagram {
   // 5. UI nodes on Bottom
   let bottomX = 300;
   for (const uNode of uiNodes) {
-    nodes.push({
-      id: uNode.id,
-      x: bottomX,
-      y: Math.max(540, rightY + 20),
-      w: 170,
-      h: 60,
-      label: uNode.label,
-      sublabel: uNode.sublabel,
-      category: uNode.category,
-    });
+    nodes.push(
+      projectNode(uNode, {
+        id: uNode.id,
+        x: bottomX,
+        y: Math.max(540, rightY + 20),
+        w: 170,
+        h: 60,
+        label: uNode.label,
+        sublabel: uNode.sublabel,
+        category: uNode.category,
+      })
+    );
     if (mcuNode) {
-      edges.push({ from: mcuNode.id, to: uNode.id, label: 'GPIO/PWM', type: 'gpio' });
+      edges.push({ from: mcuNode.id, to: uNode.id, label: 'GPIO/PWM', type: 'gpio', kind: 'gpio' });
     }
     bottomX += 230;
   }

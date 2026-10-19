@@ -131,6 +131,13 @@ export interface DiagramNode {
   label: string;
   sublabel: string;
   category: string;
+  partNumber?: string;
+  manufacturer?: string;
+  selectionRationale?: string;
+  voltage?: string;
+  current?: string;
+  interfaces?: string[];
+  description?: string;
 }
 
 export interface DiagramEdge {
@@ -139,6 +146,10 @@ export interface DiagramEdge {
   label: string;
   type: string;
   dashed?: boolean;
+  kind?: string;
+  voltage?: string;
+  direction?: string;
+  description?: string;
 }
 
 export interface DiagramLegend {
@@ -168,9 +179,23 @@ export interface ArchitectureMetricsSummary {
 
 export interface ValidationSummary {
   isValid: boolean;
+  checked?: boolean;
+  rulesChecked?: number;
+  coverage?: number;
   errorCount: number;
   warningCount: number;
-  issues: Array<{ severity: 'error' | 'warning'; code: string; message: string; nodeId?: string }>;
+  issues: Array<{
+    id?: string;
+    severity: 'error' | 'warning' | 'critical';
+    code: string;
+    category?: string;
+    domain?: string;
+    title?: string;
+    message: string;
+    recommendation?: string;
+    affectedViews?: string[];
+    nodeId?: string;
+  }>;
 }
 
 export interface ProjectedArchitecture {
