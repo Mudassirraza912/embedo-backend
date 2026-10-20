@@ -5,12 +5,18 @@
  *
  *   1. Dump a session (dev, or read-only prod) to JSON:
  *      scripts/prototype-replay-dump.sql via psql -v sid=<session id> -At -f ... > dump.json
- *   2. npx tsx scripts/prototype-replay.ts dump.json [out.svg]
+ *   2. npx tsx scripts/prototype-replay.ts dump.json [out.svg] [--reference]
  *      with the same dummy DATABASE_URL / JWT_ACCESS_SECRET env as the unit tests (env.ts needs them).
+ *      --reference swaps sourced controllers for their reference pinout and fixes I2C addresses,
+ *      as a new run would source them.
  *
  * Nothing is written anywhere except the optional SVG. No AI calls, no database.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
+import { factsSchema, factsToBoard } from '../src/modules/hardware/discovery/hardware-sourcer.js';
+import { buildRecord, buildSvg } from '../src/modules/hardware/discovery/record-builder.js';
+import { referenceBoardFor } from '../src/modules/hardware/reference/controller-boards.js';
+import { addressesFor } from '../src/modules/hardware/reference/i2c-addresses.js';
 import { hardwareRecordSchema, isControllerRecord } from '../src/modules/hardware/hardware.schema.js';
 import { parseModuleSvg } from '../src/modules/hardware/hardware-svg.js';
 import { renderBenchArt } from '../src/modules/hardware/bench-art.js';
@@ -38,9 +44,11 @@ interface Dump {
   }>;
 }
 
-const [file, svgOut] = process.argv.slice(2);
+const args = process.argv.slice(2);
+const useReference = args.includes('--reference');
+const [file, svgOut] = args.filter((a) => !a.startsWith('--'));
 if (!file) {
-  console.error('usage: tsx scripts/prototype-replay.ts dump.json [out.svg]');
+  console.error('usage: tsx scripts/prototype-replay.ts dump.json [out.svg] [--reference]');
   process.exit(2);
 }
 const dump = JSON.parse(readFileSync(file, 'utf8')) as Dump;
@@ -71,12 +79,38 @@ for (const row of dump.entities) {
   });
 }
 
+// --reference: rebuild the session's records the way a new run sources them today (a reference
+// pinout for a known controller board, datasheet I2C addresses), keeping the same entity ids.
+if (useReference) {
+  for (const [id, e] of entities) {
+    if (e.isController) {
+      const ref = referenceBoardFor({ product_name: e.record.identity.product_name, vendor_sku: e.record.identity.vendor_sku });
+      if (!ref) continue;
+      const board = factsToBoard(factsSchema.parse(ref.facts), id, e.productFamilyId, ref.sourceUrl);
+      const record = hardwareRecordSchema.parse(buildRecord(board, { verification_method: 'manual_verified', record_origin: 'embedo_curated', scope: 'private_project' }));
+      const { svg } = buildSvg(board);
+      entities.set(id, { ...e, record, verificationMethod: 'manual_verified', svg: { hash: 'ref', markup: svg, parsed: parseModuleSvg(svg) } });
+      console.log(`reference ${id}: ${e.record.identity.product_name} -> ${record.identity.product_name} (${record.pins.length} pins)`);
+      continue;
+    }
+    const known = addressesFor(e.record);
+    const iface = e.record.interfaces.interfaces.find((i) => /I2C|STEMMA|QWIIC/i.test(i.type));
+    if (known && iface) {
+      const before = iface.addresses.join('/');
+      iface.addresses = known.addresses;
+      (iface.details as Record<string, unknown>)['default_address'] = known.addresses[0];
+      if (before !== known.addresses.join('/')) console.log(`addresses ${e.record.identity.product_name}: ${before || '-'} -> ${known.addresses.join('/')}`);
+    }
+  }
+}
+
 const p = assemblePrototype(composition, entities, {
   svgBasePath: '/api/v1/hardware/entities',
   projectName: dump.session.title ?? 'Prototype',
   understanding: '',
   notes: '',
   externalSupplyVolts: externalSupplyVoltsOf(dump.session.intent_text),
+  brief: dump.session.intent_text,
 });
 
 console.log(`session ${dump.session.id}`);
@@ -84,9 +118,24 @@ console.log(`summary  ${p.moduleDiagram.header.summary} · layout ${p.moduleDiag
 console.log(`checks   ${JSON.stringify(p.compatibility.counts)}`);
 for (const i of p.instances) console.log(`  ${i.instanceId.padEnd(14)} ${i.placeholder ? `[placeholder ${i.placeholder.kind}] ` : ''}${i.label}`);
 console.log(`nets     ${p.nets.map((n) => `${n.name}(${n.members.length})`).join(' ')}`);
+if (process.env.REPLAY_NETS) for (const n of p.nets) console.log(`  net ${n.name}: ${n.members.map((m) => `${m.instanceId}.${m.pinName}`).join(" ")}`);
 for (const r of p.compatibility.results.filter((r) => r.status !== 'PASS')) console.log(`  ${r.status.padEnd(7)} ${r.ruleType}: ${r.message}`);
 const unwired = p.pinList.summary.unwiredModules ?? [];
 if (unwired.length > 0) console.log(`unwired  ${unwired.map((m) => m.label).join(', ')}`);
+
+// REPLAY_JSON=<file>: also write the payload, e.g. for a frontend preview.
+if (process.env.REPLAY_JSON) {
+  writeFileSync(process.env.REPLAY_JSON, JSON.stringify(p));
+  // The bench art each instance loads, light and dark, keyed by entity id.
+  const all = withPlaceholderEntities(entities, p.instances);
+  const art = Object.fromEntries(
+    p.instances.map((i) => {
+      const rec = all.get(i.hardwareEntityId)!.record;
+      return [i.hardwareEntityId, { dark: renderBenchArt(rec, i.isController, 'dark').svg, light: renderBenchArt(rec, i.isController, 'light').svg }];
+    })
+  );
+  writeFileSync(`${process.env.REPLAY_JSON}.art.json`, JSON.stringify(art));
+}
 
 if (svgOut) {
   const all = withPlaceholderEntities(entities, p.instances);

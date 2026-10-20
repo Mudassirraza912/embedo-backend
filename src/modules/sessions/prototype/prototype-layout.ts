@@ -44,13 +44,14 @@ export const NET_SHADES: Record<NetClass | 'cable', string[]> = {
   gpio: ['#F472B6', '#FB7185', '#E879F9', '#FDA4AF'],
   analog: ['#B48EF5', '#D3B8FF'],
   pwm: ['#F58E6E', '#FFB199'],
+  load: ['#FB923C', '#F97316', '#FDBA74'],
   cable: ['#20E6E0'],
 };
 export const NET_COLORS: Record<NetClass | 'cable', string> = Object.fromEntries(
   Object.entries(NET_SHADES).map(([k, v]) => [k, v[0]!])
 ) as Record<NetClass | 'cable', string>;
 
-const CLASS_ORDER: Array<NetClass | 'cable'> = ['power', 'ground', 'i2c', 'spi', 'uart', 'can', 'rs485', 'gpio', 'analog', 'pwm', 'cable'];
+const CLASS_ORDER: Array<NetClass | 'cable'> = ['power', 'ground', 'i2c', 'spi', 'uart', 'can', 'rs485', 'gpio', 'analog', 'pwm', 'load', 'cable'];
 
 const LEGEND_LABELS: Record<NetClass | 'cable', string> = {
   power: 'Power',
@@ -63,6 +64,7 @@ const LEGEND_LABELS: Record<NetClass | 'cable', string> = {
   gpio: 'GPIO',
   analog: 'Analog',
   pwm: 'PWM',
+  load: 'Motor / load',
   cable: 'STEMMA QT / Qwiic cable',
 };
 

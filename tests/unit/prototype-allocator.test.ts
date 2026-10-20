@@ -104,13 +104,27 @@ describe('prototype pin allocator (fixture library)', () => {
     expect(result.results.filter((r) => r.status === 'BLOCKER')).toEqual([]);
   });
 
-  it('flags two BME280s at 0x77 on one bus as a blocker with the alternate-address fix', () => {
+  it('moves the second of two BME280s to 0x76 and wires its SDO strap to GND', () => {
     const controller = mcu(lib.pico);
     const peripherals = [mod('bme1', lib.bme280, { interface: 'I2C' }), mod('bme2', lib.bme280, { interface: 'I2C' })];
     const allocation = allocatePins(controller, peripherals);
-    const conflict = evaluateCompatibility(controller, peripherals, allocation).find((r) => r.ruleType === 'bus_address_conflict');
-    expect(conflict).toMatchObject({ status: 'BLOCKER', instanceIds: ['bme1', 'bme2'] });
-    expect(conflict!.suggestedFix).toContain('0x76');
+    expect(allocation.i2cAddresses.get('bme1')).toMatchObject({ address: '0x77', moved: false });
+    expect(allocation.i2cAddresses.get('bme2')).toMatchObject({ address: '0x76', moved: true, strap: { pin: 'SDO', level: 'GND', wired: true } });
+    expect(netNamed(allocation.nets, 'GND')!.members.some((m) => m.instanceId === 'bme2' && m.pinId === 'HW-FX03:SDO')).toBe(true);
+    const bus = evaluateCompatibility(controller, peripherals, allocation).filter((r) => r.ruleType === 'bus_address_conflict');
+    expect(bus).toHaveLength(1);
+    expect(bus[0]).toMatchObject({ status: 'PASS' });
+    expect(bus[0]!.message).toContain('0x76');
+  });
+
+  it('flags a third BME280 (both addresses taken) as a blocker with the multiplexer fix', () => {
+    const controller = mcu(lib.pico);
+    const peripherals = ['bme1', 'bme2', 'bme3'].map((id) => mod(id, lib.bme280, { interface: 'I2C' }));
+    const allocation = allocatePins(controller, peripherals);
+    const conflict = evaluateCompatibility(controller, peripherals, allocation).find((r) => r.ruleType === 'bus_address_conflict' && r.status === 'BLOCKER');
+    expect(conflict).toBeDefined();
+    expect(conflict!.instanceIds.sort()).toEqual(['bme1', 'bme2', 'bme3']);
+    expect(conflict!.suggestedFix).toContain('TCA9548A');
     expect(conflict!.pinIds.sort()).toEqual(['HW-FX03:SCK', 'HW-FX03:SDI']);
   });
 

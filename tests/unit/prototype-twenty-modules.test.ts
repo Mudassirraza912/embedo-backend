@@ -316,17 +316,20 @@ describe('20-module industrial IoT brief (prod regression, 2026-10-15)', () => {
     // Power: 12 V input → regulator; 3.3 V sensors on the 3.3 V rail; logic levels pass.
     const dcin = p.instances.find((i) => i.placeholder?.kind === 'DCIN')!;
     expect(dcin.label).toBe('12 V DC input');
-    expect(netOf(p, '12V')!.members.map((m) => m.instanceId).sort()).toEqual([dcin.instanceId, 'power1'].sort());
+    // The 12 V input feeds the regulator and the industrial field devices (CANopen / Modbus run from 12-24 V).
+    expect(netOf(p, '12V')!.members.map((m) => m.instanceId).sort()).toEqual([dcin.instanceId, 'gas1', 'power1', 'pressure1', 'soil1', 'vibration1'].sort());
     const rail3v3 = netOf(p, '3V3')!.members.map((m) => m.instanceId);
     for (const id of ['sht31_1', 'scd41_1', 'bme688_1', 'bmp390_1', 'veml7700_1', 'imu1']) expect(rail3v3).toContain(id);
     expect(netOf(p, '5V')!.members.map((m) => m.instanceId)).toContain('pms5003_1');
     expect(p.compatibility.results.filter((r) => r.ruleType === 'logic_voltage_compatibility' && r.status !== 'PASS')).toEqual([]);
 
-    // Placeholders: never library records, power never guessed, one summary note.
+    // Placeholders: never library records; powered from their kind's usual rail (sensors and
+    // transceivers on the 3.3 V logic rail, field devices on 12 V), stated in one summary note.
     expect(p.hardwareLibrary.entries.some((e) => e.hardwareEntityId.startsWith('PLACEHOLDER-'))).toBe(false);
-    const placeholderPins = new Set(p.instances.filter((i) => i.placeholder && i.placeholder.kind !== 'DCIN').map((i) => i.instanceId));
-    expect(p.nets.filter((n) => n.class === 'power').flatMap((n) => n.members).filter((m) => placeholderPins.has(m.instanceId))).toEqual([]);
-    expect(p.compatibility.results.filter((r) => r.ruleType === 'placeholder_module')).toHaveLength(1);
+    for (const id of ['gps1', 'ble1', 'can_xcvr1', 'rs485_xcvr1']) expect(rail3v3).toContain(id);
+    const summary = p.compatibility.results.filter((r) => r.ruleType === 'placeholder_module');
+    expect(summary).toHaveLength(1);
+    expect(summary[0]!.message).toContain('12 V DC input');
   });
 
   it('groups boards by protocol on the diagram: one protocol never splits within a row', () => {
@@ -391,7 +394,8 @@ describe('20-module industrial IoT brief (prod regression, 2026-10-15)', () => {
     expect(rail3v3).toEqual(expect.arrayContaining(['mcu.3V3', 'sht31_1.VIN', 'veml7700_1.VIN', 'imu1.3V3']));
     expect(netOf(p, '5V')!.members.map((m) => m.instanceId)).toEqual(expect.arrayContaining(['psu1', 'pms5003_1']));
     expect(netOf(p, '5V')!.members.map((m) => m.instanceId)).not.toContain('sht31_1');
-    expect(netOf(p, '12V')!.members.map((m) => m.instanceId).sort()).toEqual(['dcin', 'psu1']);
+    expect(netOf(p, '12V')!.members.map((m) => m.instanceId)).toEqual(expect.arrayContaining(['dcin', 'psu1']));
+    expect(netOf(p, '12V')!.members.map((m) => m.instanceId)).not.toContain('sht31_1');
   });
 
   it('dev run 2026-10-16: one UART instance serves one device, even when it is offered on several pin pairs', async () => {

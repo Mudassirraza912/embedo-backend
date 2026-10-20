@@ -228,7 +228,7 @@ function renderBadge(m: ModuleDiagram['modules'][number]): string[] {
   const bx = m.content ? m.content.x : m.x + 14;
   const by = m.content ? m.content.y - 30 : m.y + 14;
   const w = m.badge.length * 6.3 + 28;
-  const color = /PRIVATE/.test(m.badge) ? '#B48EF5' : /ARTWORK/.test(m.badge) ? MUTED : WARN;
+  const color = /I²C|I2C/.test(m.badge) ? '#20E6E0' : /PRIVATE/.test(m.badge) ? '#B48EF5' : /ARTWORK/.test(m.badge) ? MUTED : WARN;
   return [
     `<rect x="${bx}" y="${by}" width="${w}" height="20" rx="10" fill="${color}" fill-opacity="0.14" stroke="${color}" stroke-opacity="0.6"/>`,
     `<circle cx="${bx + 11}" cy="${by + 10}" r="3" fill="${color}"/>`,

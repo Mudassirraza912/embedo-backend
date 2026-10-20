@@ -13,6 +13,7 @@ import { assemblePrototype, externalSupplyVoltsOf } from './prototype-assembler.
 import { filterAppliedSuggestions, getAppliedChangeLineage } from '../pipeline/refinement-history.js';
 import { isPrototypeArchitecture, isPrototypeComposition, PrototypeArchitecture, PrototypeComposition } from './prototype.types.js';
 import { benchDiffView, describeBench, diffBenches } from './prototype-diff.js';
+import { isOutsideKind, PlaceholderKind } from './prototype-placeholders.js';
 
 /**
  * Prototype pipeline (plan D5), run by the ai-pipeline worker for sessions of type "prototype".
@@ -253,6 +254,8 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       // The outside supply the brief states ("12V input"), drawn feeding the bench's first regulator.
       externalSupplyVolts: externalSupplyVoltsOf(`${session.intentText}
 ${requestText}`),
+      brief: `${session.intentText}
+${requestText}`,
     });
     const counts = payload.compatibility.counts;
     const cables = payload.connections.filter((c) => c.kind === 'cable').length;
@@ -388,6 +391,7 @@ ${requestText}`),
 /** Short, factual card text: what was placed, how it connects, and what is not in the library. */
 function summaryMessage(payload: PrototypeArchitecture, tag: string, sourcing: SourcingResult | null, changes: string[] = []): string {
   const modules = payload.instances.filter((i) => !i.isController && !i.placeholder).map((i) => `${i.label} (${i.instanceId})`);
+  const outside = payload.instances.filter((i) => isOutsideKind(i.placeholder?.kind as PlaceholderKind | undefined)).map((i) => i.label);
   const cables = payload.connections.filter((c) => c.kind === 'cable').length;
   const wires = payload.connections.length - cables;
   const { summary } = payload.pinList;
@@ -398,11 +402,12 @@ function summaryMessage(payload: PrototypeArchitecture, tag: string, sourcing: S
     changes.length > 0 ? `**What changed**\n${changes.map((c) => `- ${c}`).join('\n')}\n` : null,
     `- **Controller**: ${payload.projectMeta.controller}`,
     `- **Modules**: ${modules.length > 0 ? modules.join(', ') : 'none'}`,
+    outside.length > 0 ? `- **Outside parts** (named in the brief, wired on the bench): ${outside.join(', ')}` : null,
     `- **Connections**: ${wires} jumper wire(s)${cables > 0 ? `, ${cables} STEMMA QT / Qwiic cable(s)` : ''}`,
     `- **Pin list**: ${summary.rows} contacts · ${summary.assigned + summary.proposed} connected · ${summary.blocking} blocking`,
     `- **Checks**: ${counts.PASS} passed · ${counts.BLOCKER} failed · ${counts.UNKNOWN} unverified · ${counts.WARNING} warning`,
     payload.gaps.some((g) => g.instanceId)
-      ? `- **Placeholders** (no matching module in the library yet; wired on their bus, power not wired): ${payload.gaps
+      ? `- **Placeholders** (no matching module in the library yet; wired on their bus, powered from the usual rail for their kind): ${payload.gaps
           .filter((g) => g.instanceId)
           .map((g) => g.need)
           .join('; ')}`
@@ -410,7 +415,16 @@ function summaryMessage(payload: PrototypeArchitecture, tag: string, sourcing: S
     payload.gaps.some((g) => !g.instanceId) ? `- **Not in library**: ${payload.gaps.filter((g) => !g.instanceId).map((g) => `${g.category} — ${g.need}`).join('; ')}` : null,
     sourcing && sourcing.sourced.length > 0
       ? `- **Sourced for this project**: ${sourcing.sourced
-          .map((b) => `${b.productName} (${b.factsSource === 'vendor_page' ? 'pinout read from the vendor page' : 'pinout from AI product knowledge — check it against the board'})`)
+          .map(
+            (b) =>
+              `${b.productName} (${
+                b.factsSource === 'vendor_page'
+                  ? 'pinout read from the vendor page'
+                  : b.factsSource === 'reference'
+                    ? "pinout from the board's documentation"
+                    : 'pinout from AI product knowledge — check it against the board'
+              })`
+          )
           .join('; ')}`
       : null,
     payload.notes ? `\n${payload.notes}` : null,
