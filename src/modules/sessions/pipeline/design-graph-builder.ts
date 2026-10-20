@@ -258,7 +258,28 @@ CRITICAL HARDWARE RULES:
     - BOM description: Standard single-line catalog description (<= 50 characters).
     - BOM Items: 1 entry per functional node or critical IC/module (typically 7 to 14 BOM items). Do NOT generate dozens of generic passive entries.
     - engineeringDecisions: 3 to 5 concise technical bullet points (under 40 words each). Summarize key calculations (power budget, isolation rating, bus termination/drive, ESD/protection compliance).
-    - suggestedRefinements: 3 to 5 concise chips, strictly 2 to 4 words each (MUST be <= 50 characters, never a sentence or phrase with commas).`;
+    - suggestedRefinements: 3 to 5 concise chips, strictly 2 to 4 words each (MUST be <= 50 characters, never a sentence or phrase with commas).
+25. Compute Tier Classification & Systematic Peripheral Architecture Framework:
+    - You MUST systematically classify the primary compute controller into the appropriate tier based on OS, real-time determinism, and compute requirements:
+      * Tier 1: Microcontrollers (MCUs) [Bare-Metal / FreeRTOS / Zephyr]:
+        - For sub-millisecond determinism, ultra-low standby power (< 10 µA), single-chip hardware peripheral control (ADC/PWM/timers).
+        - Architectures: ARM Cortex-M0+/M3/M4/M7, RISC-V RV32, AVR, PIC (e.g. STM32G4, STM32H7, STM32L4, TI MSPM0, Raspberry Pi RP2040).
+      * Tier 2: Wireless SoCs [Single-Chip RF + Compute]:
+        - For compact connected edge nodes requiring integrated wireless radios (BLE, Wi-Fi 6, Thread, Zigbee, Sub-GHz, LoRa).
+        - Architectures: Espressif (ESP32-S3, ESP32-C6), Nordic Semiconductor (nRF52840, nRF5340, nRF9160), Silicon Labs EFR32, STM32WB/WL.
+      * Tier 3: Application Processors (MPUs) & System-on-Modules (SoMs) [Embedded Linux, Android, Yocto, Buildroot, ROS]:
+        - For ANY design requiring "Embedded Linux", "Linux gateway", "Linux SBC", "Computer Vision", OpenCV, video streaming, multi-threaded high-throughput networking, dual Gigabit Ethernet, complex graphical touch displays (MIPI-DSI / LVDS), web server, or containerized edge applications.
+        - Architectures: ARM Cortex-A (Cortex-A7/A35/A53/A72), 64-bit RISC-V, or x86 requiring an MMU and external DDR3/DDR4/LPDDR4 memory.
+        - Established Families: NXP i.MX Series (i.MX 8M Mini/Plus, i.MX 6ULL), STMicroelectronics STM32MP1 (STM32MP157), Texas Instruments Sitara (AM6254, AM3358), Raspberry Pi Compute Module (CM4 / BCM2711), Microchip SAMA5 (SAMA5D27), Allwinner.
+        - CRITICAL ARCHITECTURAL RULE: Microcontrollers (Cortex-M0/M0+/M3/M4/M7 without MMU) CANNOT boot or run the Linux kernel! When Linux or MPU compute is specified, NEVER select a Cortex-M MCU as the primary host. The primary controller node MUST be in "nodes" with category "control" and id "mcu" (or "mpu").
+      * Tier 4: FPGAs & Hybrid SoCs [Deterministic Hardware Logic & High-Speed DSP]:
+        - For high-speed parallel data acquisition (>50 MSPS), multi-axis servo synchronization, custom hardware protocol decoders, PCIe endpoints.
+        - Architectures: AMD/Xilinx Zynq-7000 / Artix-7, Lattice iCE40 / ECP5, Gowin GW1N/GW2A.
+    - Systematic Peripheral & Physical Layer Interfacing Rules:
+      * High-Speed Ethernet: Always connect the controller's internal MAC (RGMII/RMII/MII) to a dedicated Gigabit or 10/100 PHY (e.g. KSZ9031RNX, DP83867, LAN8720A) paired with an RJ45 connector with integrated magnetics. For small MCUs without an on-chip MAC, use an SPI Ethernet controller (e.g. W5500).
+      * Industrial Fieldbuses (CAN / CAN FD & RS-485): Controllers provide digital logic (CAN TX/RX, UART TX/RX); ALWAYS place dedicated transceivers (e.g. TCAN1042 / TJA1051 for CAN FD; ISO1500 / ADM2483 / MAX485 for RS-485) between the controller and physical bus lines. Galvanically isolated transceivers must be used for industrial and high-voltage equipment.
+      * Cellular Modems (LTE-M, NB-IoT, 4G Cat 1/4): Connect to host via high-speed USB 2.0 or UART. Supply via dedicated 3.8V rail with >= 2A-3A peak pulse rating and bulk capacitance.
+      * Flash & OS Storage: MPUs require eMMC (via 8-bit SDMMC/MMC) or MicroSD card for OS rootfs boot; MCUs use on-chip flash or external SPI NOR Flash (W25Qxx).`;
 
   const userPrompt = `Synthesize the Canonical Design Graph for the following hardware intent:
 ${JSON.stringify(intent, null, 2)}

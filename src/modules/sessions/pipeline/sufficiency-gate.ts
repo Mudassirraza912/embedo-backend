@@ -113,11 +113,10 @@ export function checkSufficiency(intent: StructuredIntent, rawInputText?: string
     clarificationQuestions.push('Which functions or interfaces are essential for this product?');
   }
 
-  // 3. Power Source Check — BLOCKING.
-  // Power source determines the entire power tree (battery chemistry/voltage vs USB vs mains
-  // produce structurally different designs), so a missing one is a clarification, not a guess.
-  // See PRD §6.11: "Portable environmental monitor with temperature, humidity, CO2 sensing and BLE
-  // connectivity" names sensing and connectivity but never confirms how it is powered.
+  // 3. Power Source Check
+  // Portable battery-powered devices require explicit battery runtime/chemistry choices per PRD §6.11.
+  // For stationary, equipment, computing, and interface-rich designs that omit explicit power,
+  // infer an appropriate engineering-standard power architecture so synthesis can proceed directly without stalling.
   const powerSubsystems = intent.subsystems?.power || [];
   const powerConstraint = intent.constraints?.powerSource;
   const hasExplicitPower = (powerConstraint && powerConstraint.trim().length > 0) || powerSubsystems.length > 0;
@@ -131,13 +130,54 @@ export function checkSufficiency(intent: StructuredIntent, rawInputText?: string
       haystack.includes('handheld') ||
       haystack.includes('tracker');
 
-    missingFields.push('powerSource');
-    if (isPortable) {
-      suggestedDefaults['powerSource'] = '3.7V LiPo Battery with USB-C Charging (BQ25186 / TP4056)';
-      clarificationQuestions.push('How will this device be powered, and what runtime should it support?');
+    // Only block if the device is portable (where battery chemistry/runtime must be decided),
+    // OR if the brief has no concrete functional subsystems yet.
+    if (isPortable || !hasSubsystem) {
+      missingFields.push('powerSource');
+      if (isPortable) {
+        suggestedDefaults['powerSource'] = '3.7V LiPo Battery with USB-C Charging (BQ25186 / TP4056)';
+        clarificationQuestions.push('How will this device be powered, and what runtime should it support?');
+      } else {
+        suggestedDefaults['powerSource'] = 'USB-C 5V Bus / 3.3V LDO';
+        clarificationQuestions.push('How will this device be powered?');
+      }
     } else {
-      suggestedDefaults['powerSource'] = 'USB-C 5V Bus / 3.3V LDO';
-      clarificationQuestions.push('How will this device be powered?');
+      // Inferred power architecture based on general functional domain
+      let defaultPower = 'USB-C 5V Bus with 3.3V LDO / Buck Regulator';
+
+      if (haystack.includes('mains') || haystack.includes('ac') || haystack.includes('110v') || haystack.includes('220v') || haystack.includes('240v') || haystack.includes('grid')) {
+        defaultPower = '85V-265V AC Mains Input with Isolated Flyback Converter';
+      } else if (haystack.includes('auto') || haystack.includes('vehicle') || haystack.includes('car') || haystack.includes('truck') || haystack.includes('ecu') || haystack.includes('obd')) {
+        defaultPower = '12V-24V Automotive Battery Input with Load Dump Protection & Synchronous Buck';
+      } else if (haystack.includes('poe') || haystack.includes('power over ethernet')) {
+        defaultPower = 'IEEE 802.3af/at PoE Isolated 48V to 5V Supply';
+      } else if (haystack.includes('solar') || haystack.includes('harvesting')) {
+        defaultPower = 'Solar MPPT Harvesting with Supercapacitor / LiFePO4 Storage';
+      } else if (
+        haystack.includes('industrial') ||
+        haystack.includes('plc') ||
+        haystack.includes('din') ||
+        haystack.includes('rs485') ||
+        haystack.includes('can') ||
+        haystack.includes('motor') ||
+        haystack.includes('valve') ||
+        haystack.includes('solenoid') ||
+        haystack.includes('equipment') ||
+        haystack.includes('machine') ||
+        haystack.includes('gateway') ||
+        haystack.includes('linux') ||
+        haystack.includes('24v')
+      ) {
+        defaultPower = '12V-24V DC Industrial Supply with Wide-Input Buck Regulator';
+      }
+
+      suggestedDefaults['powerSource'] = defaultPower;
+      if (!intent.constraints) intent.constraints = {};
+      intent.constraints.powerSource = defaultPower;
+      if (!intent.subsystems) intent.subsystems = {} as any;
+      if (!intent.subsystems.power || intent.subsystems.power.length === 0) {
+        intent.subsystems.power = [defaultPower];
+      }
     }
   }
 

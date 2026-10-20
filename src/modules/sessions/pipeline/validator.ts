@@ -16,7 +16,7 @@ export interface ValidationReport {
 
 /** Common MCU / wireless-SoC families, matched against a node's part number. */
 const MCU_PART_PATTERN =
-  /^(stm32|stm8|esp32|esp8266|nrf5|nrf9|rp2040|rp2350|atmega|attiny|atsam|samd|same|saml|pic1|pic2|pic3|dspic|msp430|msp432|efr32|efm32|cc13|cc26|cc32|gd32|ch32|ra[24]|rx\d|lpc\d|mk\d|mimxrt|imxrt|tms320|xmc|psoc|cy8c|max32|apollo|bl60|bl70|w600|rtl87|bk72|ln88|mspm0|stm32wb|stm32wl)/i;
+  /^(stm32|stm8|esp32|esp8266|nrf5|nrf9|rp2040|rp2350|atmega|attiny|atsam|samd|same|saml|pic1|pic2|pic3|dspic|msp430|msp432|efr32|efm32|cc13|cc26|cc32|gd32|ch32|ra[24]|rx\d|lpc\d|mk\d|mimxrt|imxrt|tms320|xmc|psoc|cy8c|max32|apollo|bl60|bl70|w600|rtl87|bk72|ln88|mspm0|stm32wb|stm32wl|imx|mcimx|mimx|am335|am62|sitara|bcm2|bcm5|cm4|rpi|sama5|at91|stm32mp|rk3|allwinner|a64|h6)/i;
 
 /** Map a declared interface name onto the closed edge-type union used by the frontend contract. */
 const interfaceToEdgeType = (iface: string | undefined): EdgeType => {
@@ -45,59 +45,25 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
   const nodeMap = new Map<string, DesignNode>();
   for (const node of graph.nodes) nodeMap.set(node.id, node);
 
-  // 1. Edge reference integrity
-  let validEdges: DesignEdge[] = graph.edges.filter((edge) => {
-    const fromExists = nodeMap.has(edge.from);
-    const toExists = nodeMap.has(edge.to);
-    if (!fromExists || !toExists) {
-      issues.push({
-        severity: 'warning',
-        code: 'INVALID_EDGE_ENDPOINT',
-        message: `Dropped edge referencing unknown node: '${edge.from}' -> '${edge.to}'`,
-      });
-      return false;
-    }
-    if (!isEdgeType(edge.type)) {
-      const coerced = interfaceToEdgeType(edge.type);
-      issues.push({
-        severity: 'warning',
-        code: 'EDGE_TYPE_COERCED',
-        message: `Edge '${edge.from}' -> '${edge.to}' had unknown type '${String(edge.type)}', coerced to '${coerced}'`,
-      });
-      edge.type = coerced;
-    }
-    return true;
-  });
-
-  // 2. Controller presence — a real requirement, not a heuristic; without it the projection is meaningless.
+  // 1. Controller presence & resolution FIRST (before checking edges, so edges from 'controller' or 'mcu' are not dropped)
   let mcuNode = graph.nodes.find((n) => n.category === 'control');
   if (!mcuNode) {
-    // The graph always names its controller separately (graph.controller.partNumber). When the model
-    // files that same node under another category — typically "connectivity" for a wireless SoC such
-    // as an ESP32 — the controller is still unambiguous, so repair the category instead of rejecting
-    // an otherwise-valid design (seen live: three consecutive refinement attempts on a Wi-Fi socket
-    // design failed with NO_CONTROLLER_NODE and the change was never applied).
     const norm = (s: string | undefined) => (s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
     const declared = norm(graph.controller?.partNumber);
-    // A "motor controller" or "motor driver" is NOT the MCU — exactly the confusion that broke an
-    // industrial motor-controller design three times in production.
     const isDriverLike = (n: DesignNode) => /\b(motor|driver|gate|h[-\s]?bridge|esc|power)\b/i.test(`${n.id} ${n.label}`);
     const candidate =
-      // 1. the declared controller's part number
       (declared
         ? graph.nodes.find((n) => {
             const pn = norm(n.partNumber);
             return pn.length > 0 && (pn === declared || pn.includes(declared) || declared.includes(pn));
           })
         : undefined) ??
-      // 2. a recognised MCU/SoC family by part number
       graph.nodes.find((n) => MCU_PART_PATTERN.test(n.partNumber ?? '')) ??
-      // 3. a node that is plainly named as the MCU
       graph.nodes.find(
         (n) =>
           !isDriverLike(n) &&
-          (['mcu', 'controller', 'soc', 'cpu', 'processor', 'microcontroller'].includes(n.id.toLowerCase()) ||
-            /\b(mcu|microcontroller|micro-controller|soc|processor)\b/i.test(n.label))
+          (['mcu', 'controller', 'soc', 'cpu', 'processor', 'microcontroller', 'mpu'].includes(n.id.toLowerCase()) ||
+            /\b(mcu|microcontroller|micro-controller|soc|processor|mpu)\b/i.test(n.label))
       );
     if (candidate) {
       issues.push({
@@ -111,11 +77,9 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
     }
   }
   if (!mcuNode && graph.controller?.partNumber) {
-    // Last resort: the graph declares its controller but never drew it as a node. Add it rather
-    // than throwing the whole design away (each NO_CONTROLLER_NODE retry re-runs the full Sol call).
     const added: DesignNode = {
       id: graph.nodes.some((n) => n.id === 'mcu') ? 'mcu_main' : 'mcu',
-      label: 'Microcontroller',
+      label: 'Main Controller',
       sublabel: graph.controller.partNumber,
       category: 'control',
       partNumber: graph.controller.partNumber,
@@ -139,6 +103,42 @@ export function validateAndRepairDesignGraph(input: CanonicalDesignGraph): Valid
       message: 'Design graph lacks a primary control/MCU node.',
     });
   }
+
+  // Remap edges referencing aliases 'controller' or 'mcu' to the resolved controller node id
+  if (mcuNode) {
+    for (const edge of graph.edges) {
+      if ((edge.from === 'controller' || edge.from === 'mcu') && !nodeMap.has(edge.from)) {
+        edge.from = mcuNode.id;
+      }
+      if ((edge.to === 'controller' || edge.to === 'mcu') && !nodeMap.has(edge.to)) {
+        edge.to = mcuNode.id;
+      }
+    }
+  }
+
+  // 2. Edge reference integrity
+  let validEdges: DesignEdge[] = graph.edges.filter((edge) => {
+    const fromExists = nodeMap.has(edge.from);
+    const toExists = nodeMap.has(edge.to);
+    if (!fromExists || !toExists) {
+      issues.push({
+        severity: 'warning',
+        code: 'INVALID_EDGE_ENDPOINT',
+        message: `Dropped edge referencing unknown node: '${edge.from}' -> '${edge.to}'`,
+      });
+      return false;
+    }
+    if (!isEdgeType(edge.type)) {
+      const coerced = interfaceToEdgeType(edge.type);
+      issues.push({
+        severity: 'warning',
+        code: 'EDGE_TYPE_COERCED',
+        message: `Edge '${edge.from}' -> '${edge.to}' had unknown type '${String(edge.type)}', coerced to '${coerced}'`,
+      });
+      edge.type = coerced;
+    }
+    return true;
+  });
 
   // 3. Power continuity
   const poweredNodeIds = new Set<string>();

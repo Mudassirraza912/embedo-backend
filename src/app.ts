@@ -20,6 +20,7 @@ import { prisma } from './db/prisma.js';
 import { redis } from './db/redis.js';
 import { bullBoardRouter } from './jobs/bull-board.js';
 import { logger } from './config/logger.js';
+import { computeLiveServiceTelemetry, addSubscriber, removeSubscriber } from './modules/status/status.service.js';
 
 import { rateLimitGlobal } from './common/middlewares/rate-limit.middleware.js';
 
@@ -83,6 +84,40 @@ export const createApp = (): Express => {
       channel: buildInfo.channel,
       requestId: req.id,
     });
+  });
+
+  // Public Service Status endpoint for status.embedo.ai (ESD-2 / ESD-3 / ESD-4 / ESD-5)
+  app.get(`${env.API_PREFIX}/status`, async (_req: Request, res: Response) => {
+    try {
+      const telemetry = await computeLiveServiceTelemetry();
+      res.status(200).json(telemetry);
+    } catch (err) {
+      logger.error({ err }, 'Failed to compute live service telemetry');
+      res.status(500).json({ error: 'Failed to compute service status' });
+    }
+  });
+
+  // Public status subscription endpoints (ESD-8)
+  app.post(`${env.API_PREFIX}/status/subscribe`, async (req: Request, res: Response) => {
+    const { email, webhookUrl } = (req.body || {}) as { email?: string; webhookUrl?: string };
+    if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      await addSubscriber('email', email);
+      res.status(200).json({ success: true, message: 'Subscribed to status updates successfully.' });
+      return;
+    }
+    if (webhookUrl && /^https?:\/\//i.test(webhookUrl)) {
+      await addSubscriber('webhook', webhookUrl);
+      res.status(200).json({ success: true, message: 'Webhook subscribed successfully.' });
+      return;
+    }
+    res.status(400).json({ error: 'Valid email address or webhook URL required.' });
+  });
+
+  app.delete(`${env.API_PREFIX}/status/subscribe`, async (req: Request, res: Response) => {
+    const { email, webhookUrl } = (req.body || {}) as { email?: string; webhookUrl?: string };
+    if (email) await removeSubscriber('email', email);
+    if (webhookUrl) await removeSubscriber('webhook', webhookUrl);
+    res.status(200).json({ success: true, message: 'Unsubscribed successfully.' });
   });
 
   // Rate limiting runs BEFORE authentication so throttled requests never hit the database.
