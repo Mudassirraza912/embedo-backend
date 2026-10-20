@@ -75,7 +75,7 @@ const PLACEHOLDER_WORDS: Array<[RegExp, string]> = [
 const KIND_WORD: Record<PlaceholderKind, string> = {
   I2C: 'i2c_dev', SPI: 'spi_dev', UART: 'serial', GPIO: 'io', ANALOG: 'analog', PWM: 'pwm',
   CAN: 'can_dev', CANXCVR: 'can_xcvr', RS485: 'modbus', RS485XCVR: 'rs485_xcvr', DCIN: 'dcin', NONE: 'module',
-  BATTERY: 'battery', MOTOR: 'motor', STEPPER: 'stepper', LOAD: 'load', SERVO: 'servo',
+  BATTERY: 'battery', MOTOR: 'motor', STEPPER: 'stepper', LOAD: 'load', SERVO: 'servo', PIXELS: 'pixels',
 };
 
 /**
@@ -232,6 +232,8 @@ export function assemblePrototype(
         ? /battery|li-?po|li-?ion|18650/.test(placedText) && libraryModules.some((m) => /battery|li-?po|li-?ion|18650/i.test(entities.get(m.hardwareEntityId)!.record.identity.product_name) && !/charg/i.test(entities.get(m.hardwareEntityId)!.record.identity.product_name))
         : spec.kind === 'LOAD'
           ? new RegExp(`\\b${spec.stem}\\b`).test(placedText)
+          : spec.kind === 'PIXELS'
+            ? /neopixel|ws281\d|sk6812|led strip|dotstar/.test(placedText)
           : spec.kind === 'SERVO'
             ? /\bservo\b(?!.*(?:driver|controller|hat))/.test(placedText)
             : /\b(?:dc|gear|stepper) motor\b(?!.*(?:driver|controller|shield))/.test(placedText);
@@ -347,7 +349,10 @@ export function assemblePrototype(
         inset: art.inset,
         edges: art.edges,
         // Each I2C device's address on the shared bus, so the bus can be read off the diagram.
-        badge: i2cAddresses.get(i.instanceId)?.address ? `I²C ${i2cAddresses.get(i.instanceId)!.address}` : null,
+        badge: (() => {
+          const a = i2cAddresses.get(i.instanceId);
+          return a?.address ? `I²C ${a.address}${a.channel ? ` · CH${a.channel.n}` : ''}` : null;
+        })(),
         outsideSupply: isOutsideKind(i.placeholder?.kind as PlaceholderKind | undefined),
       };
     }),

@@ -123,6 +123,20 @@ for (const r of p.compatibility.results.filter((r) => r.status !== 'PASS')) cons
 const unwired = p.pinList.summary.unwiredModules ?? [];
 if (unwired.length > 0) console.log(`unwired  ${unwired.map((m) => m.label).join(', ')}`);
 
+// REPLAY_JSON=<file>: also write the payload, e.g. for a frontend preview.
+if (process.env.REPLAY_JSON) {
+  writeFileSync(process.env.REPLAY_JSON, JSON.stringify(p));
+  // The bench art each instance loads, light and dark, keyed by entity id.
+  const all = withPlaceholderEntities(entities, p.instances);
+  const art = Object.fromEntries(
+    p.instances.map((i) => {
+      const rec = all.get(i.hardwareEntityId)!.record;
+      return [i.hardwareEntityId, { dark: renderBenchArt(rec, i.isController, 'dark').svg, light: renderBenchArt(rec, i.isController, 'light').svg }];
+    })
+  );
+  writeFileSync(`${process.env.REPLAY_JSON}.art.json`, JSON.stringify(art));
+}
+
 if (svgOut) {
   const all = withPlaceholderEntities(entities, p.instances);
   const artwork = new Map(p.instances.map((i) => [i.instanceId, renderBenchArt(all.get(i.hardwareEntityId)!.record, i.isController).svg]));

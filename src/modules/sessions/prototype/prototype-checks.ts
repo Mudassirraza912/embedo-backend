@@ -102,7 +102,8 @@ export function evaluateCompatibility(controller: AllocInstance, allPeripherals:
     if (clashes === 0 && unknown === 0) {
       const entries = onBus.map((p) => {
         const a = allocation.i2cAddresses.get(p.instanceId)!;
-        return `${a.address} ${label(p.instanceId)}${a.moved && a.strap?.wired ? ` (${a.strap.pin} to ${a.strap.level === 'GND' ? 'GND' : 'V+'})` : ''}`;
+        const how = a.channel ? ` (${label(a.channel.mux)} channel ${a.channel.n})` : a.moved && a.strap?.wired ? ` (${a.strap.pin} to ${a.strap.level === 'GND' ? 'GND' : 'V+'})` : '';
+        return `${a.address} ${label(p.instanceId)}${how}`;
       });
       out.push(make('bus_address_conflict', 'PASS', `I2C bus, every address unique: ${entries.join(', ')}.`, onBus.map((p) => p.instanceId)));
     }

@@ -25,7 +25,7 @@ export const PLACEHOLDER_ORIGIN = 'placeholder';
 
 export const PLACEHOLDER_KINDS = [
   'I2C', 'SPI', 'UART', 'GPIO', 'ANALOG', 'PWM', 'CAN', 'CANXCVR', 'RS485', 'RS485XCVR', 'DCIN', 'NONE',
-  'BATTERY', 'MOTOR', 'STEPPER', 'LOAD', 'SERVO',
+  'BATTERY', 'MOTOR', 'STEPPER', 'LOAD', 'SERVO', 'PIXELS',
 ] as const;
 export type PlaceholderKind = (typeof PLACEHOLDER_KINDS)[number];
 
@@ -34,7 +34,7 @@ export type PlaceholderKind = (typeof PLACEHOLDER_KINDS)[number];
  * and wired like boards but are not modules to buy from the library: real parts the engineer
  * brings, shown as "Outside part" rather than "Choose a part".
  */
-export const OUTSIDE_KINDS: ReadonlySet<PlaceholderKind> = new Set(['DCIN', 'BATTERY', 'MOTOR', 'STEPPER', 'LOAD', 'SERVO']);
+export const OUTSIDE_KINDS: ReadonlySet<PlaceholderKind> = new Set(['DCIN', 'BATTERY', 'MOTOR', 'STEPPER', 'LOAD', 'SERVO', 'PIXELS']);
 export const isOutsideKind = (kind: PlaceholderKind | null | undefined): boolean => kind != null && OUTSIDE_KINDS.has(kind);
 
 interface KindDef {
@@ -92,6 +92,8 @@ const KINDS: Record<PlaceholderKind, KindDef> = {
   },
   LOAD: { link: null, label: 'Load', pins: [sig('LOAD+', 'input', 'other'), { ...GND, name: 'LOAD-' }], interfaces: [] },
   SERVO: { link: 'PWM', linkPin: 'SIG', label: 'Servo', pins: [power('V+'), GND, sig('SIG', 'input')], interfaces: [] },
+  // An addressable LED strip (WS2812B / NeoPixel): 5 V supply and one data input, wired by the allocator.
+  PIXELS: { link: null, label: 'LED strip', pins: [power('5V'), GND, sig('DIN', 'input')], interfaces: [] },
 };
 
 /** Battery chemistry ranges per cell, empty to full. */
@@ -191,11 +193,11 @@ export function placeholderEntity(hardwareEntityId: string, name: string): Libra
     vendor: outside ? 'Outside part' : 'Placeholder',
     sku: null,
     group: outside ? 'Outside part' : 'Placeholder',
-    categories: [kind === 'DCIN' || kind === 'BATTERY' ? 'Power' : kind === 'MOTOR' || kind === 'STEPPER' || kind === 'LOAD' || kind === 'SERVO' ? 'Motor/Actuation' : 'Interface'],
+    categories: [kind === 'PIXELS' ? 'Display/UI' : kind === 'DCIN' || kind === 'BATTERY' ? 'Power' : kind === 'MOTOR' || kind === 'STEPPER' || kind === 'LOAD' || kind === 'SERVO' ? 'Motor/Actuation' : 'Interface'],
     role: outside ? 'Outside part' : 'Placeholder',
     silicon: outside ? def.label || 'Outside part' : def.label ? `Placeholder · ${def.label}` : 'Placeholder',
     secondary: [],
-    hostRequirement: kind === 'SERVO' ? 'host_required' : outside || kind === 'NONE' ? 'optional_host' : 'host_required',
+    hostRequirement: kind === 'SERVO' || kind === 'PIXELS' ? 'host_required' : outside || kind === 'NONE' ? 'optional_host' : 'host_required',
     requiredHostInterfaces: def.link && kind !== 'CAN' && kind !== 'RS485' ? [def.link] : [],
     supply,
     logic: 'not specified',

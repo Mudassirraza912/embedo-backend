@@ -1,7 +1,7 @@
 import { describe, it, expect } from '@jest/globals';
 import { prepareBundle } from '../../src/modules/hardware/hardware-admin.service.js';
 import { LibraryEntity } from '../../src/modules/hardware/hardware-library.service.js';
-import { answersNeed, factsSchema, factsToBoard, normaliseFacts, withReferenceAddresses } from '../../src/modules/hardware/discovery/hardware-sourcer.js';
+import { answersNeed, factsSchema, factsToBoard, normaliseFacts, pageMatchesProduct, withReferenceAddresses } from '../../src/modules/hardware/discovery/hardware-sourcer.js';
 import { buildRecord, buildSvg } from '../../src/modules/hardware/discovery/record-builder.js';
 import { isControllerRecord } from '../../src/modules/hardware/hardware.schema.js';
 import { parseModuleSvg } from '../../src/modules/hardware/hardware-svg.js';
@@ -175,6 +175,7 @@ const LIB: Record<string, Record<string, unknown>> = {
   SHT40A: i2cModule('Adafruit SHT40 Breakout A', 'SHT40', ['0x44']),
   SHT40B: i2cModule('Adafruit SHT40 Breakout B', 'SHT40', ['0x44']),
   SHT40C: i2cModule('Adafruit SHT40 Breakout C', 'SHT40', ['0x44']),
+  MUX: i2cModule('Adafruit TCA9548A 1-to-8 I2C Multiplexer Breakout', 'TCA9548A', ['0x70'], Array.from({ length: 8 }, (_, n) => [io(`SD${n}`, 'bidirectional', null), io(`SC${n}`, 'bidirectional', null)]).flat()),
   BMP390: i2cModule('Adafruit BMP390 Breakout', 'BMP390', ['0x77', '0x76']),
   BMP390NOSDO: i2cModule('Adafruit BMP390 STEMMA only', 'BMP390', ['0x77']),
   BME688SDO: i2cModule('Adafruit BME688 Breakout', 'BME688', ['0x77', '0x76'], [io('SDO', 'bidirectional', null)]),
@@ -195,6 +196,17 @@ const LIB: Record<string, Record<string, unknown>> = {
   BOOST,
   BUCK,
   CHARGER,
+  SHIFTER: mod(
+    '74AHCT125 - Quad Level-Shifter (3V to 5V)',
+    [pwr('VCC', 'power_in', '5V'), GND, ...[1, 2, 3, 4].flatMap((n) => [io(`OE${n}`, 'input', null), io(`A${n}`, 'input', '5V'), io(`Y${n}`, 'output', '5V')])],
+    { functional_categories: ['Interface'], main_silicon: '74AHCT125', supply_voltage_min_v: 4.5, supply_voltage_max_v: 5.5 }
+  ),
+  PSWITCH: mod('Pololu Big Pushbutton Power Switch, HP', [pwr('VIN', 'power_in'), pwr('VOUT', 'power_out'), GND, io('CTRL', 'input', null)], {
+    functional_categories: ['Power'],
+    host_requirement: 'optional_host',
+    supply_voltage_min_v: 4.5,
+    supply_voltage_max_v: 40,
+  }),
   NOGND: mod('Weird board without ground', [pwr('VIN', 'power_in'), io('OUT', 'output')]),
 };
 
@@ -350,6 +362,21 @@ describe('4. I2C addresses', () => {
     const clash = results(p, 'BLOCKER', 'bus_address_conflict');
     expect(clash.length).toBeGreaterThan(0);
     expect(clash.every((r) => /multiplexer|TCA9548/i.test(r.suggestedFix ?? ''))).toBe(true);
+  });
+
+  it('three fixed-0x44 SHT40s with a TCA9548A: two go on mux channels, no failure (dev 2026-10-20)', () => {
+    const p = build('F446', [
+      { id: 'mux', key: 'MUX', links: [{ interface: 'I2C' }] },
+      { id: 'a', key: 'SHT40A', links: [{ interface: 'I2C' }] },
+      { id: 'b', key: 'SHT40B', links: [{ interface: 'I2C' }] },
+      { id: 'c', key: 'SHT40C', links: [{ interface: 'I2C' }] },
+    ]);
+    expect(results(p, 'BLOCKER', 'bus_address_conflict')).toEqual([]);
+    const channels = p.nets.filter((n) => /^MUX_CH\d_SDA$/.test(n.name));
+    expect(channels).toHaveLength(2);
+    for (const n of channels) expect(n.members.map((m) => m.instanceId)[0]).toBe('mux');
+    expect(['a', 'b', 'c'].map((id) => addr(p, id)).filter((b) => b && /CH\d/.test(b))).toHaveLength(2);
+    expect(results(p, 'PASS', 'bus_address_conflict')[0]!.message).toMatch(/channel \d/);
   });
 
   it('BMP390 + BME688 with SDO on the header: one moves to 0x76 with its SDO strapped to GND, no failure', () => {
@@ -669,5 +696,55 @@ describe('12. robustness', () => {
   });
   it('brief with every outside part at once and no drivers', () => {
     expect(() => build('UNO', [], { brief: '2S LiPo, 4 DC motors, a stepper, 2 servos, a 12V pump, a fan, a heater, an LED strip' })).not.toThrow();
+  });
+});
+
+describe('13. vendor page matching', () => {
+  it('rejects a redirected page for a different part number (SparkFun NEO-M8N URL serving the NEO-M9N page)', () => {
+    const m9n = 'SparkFun GPS Breakout - NEO-M9N, Chip Antenna (Qwiic). The NEO-M9N module is a 92-channel u-blox M9 engine GNSS receiver. SparkFun GPS Breakout Qwiic U.FL.';
+    expect(pageMatchesProduct(m9n, { product_name: 'SparkFun GPS Breakout - NEO-M8N, U.FL (Qwiic)', vendor_sku: 'GPS-15733' })).toBe(false);
+    expect(pageMatchesProduct(`${m9n} NEO-M8N`, { product_name: 'SparkFun GPS Breakout - NEO-M8N, U.FL (Qwiic)', vendor_sku: null })).toBe(true);
+    // Ratings are not part numbers: "3.3V" and "1000mA" never decide a match.
+    expect(pageMatchesProduct('PowerBoost 1000 Basic USB boost converter from Adafruit', { product_name: 'PowerBoost 1000 Basic - 5V USB Boost @ 1000mA', vendor_sku: '2030' })).toBe(true);
+  });
+});
+
+describe('14. LED strips, buffers and load switches (dev 2026-10-20)', () => {
+  it('a WS2812B strip on a 3.3 V controller takes its data through the buffer; the resolver links on Y1 and OE1 are corrected', () => {
+    const p = build('ESP32S3', [{ id: 'lshift1', key: 'SHIFTER', links: [{ interface: 'GPIO', pinName: 'A1' }, { interface: 'GPIO', pinName: 'Y1' }, { interface: 'GPIO', pinName: 'OE1' }] }], {
+      brief: 'ESP32-S3 with a 5V WS2812B LED strip and a 74AHCT125 level shifter, USB powered',
+    });
+    const din = p.nets.find((n) => n.name === 'PIXELS1_DIN')!;
+    expect(din.members.map((m) => `${m.instanceId}.${m.pinName}`).sort()).toEqual(['lshift1.Y1', 'pixels1.DIN']);
+    // The controller drives A1 only: never a buffer output, never its output enable.
+    const signalNets = p.nets.filter((n) => n.class !== 'ground' && n.class !== 'power' && n.members.some((m) => m.instanceId === 'mcu'));
+    expect(signalNets.flatMap((n) => n.members.filter((m) => m.instanceId === 'lshift1').map((m) => m.pinName))).toEqual(['A1']);
+    expect(p.nets.find((n) => n.name === 'GND')!.members.some((m) => m.instanceId === 'lshift1' && m.pinName === 'OE1')).toBe(true);
+    expect(results(p, 'BLOCKER')).toEqual([]);
+    // The strip is powered from 5 V.
+    expect(p.nets.find((n) => n.class === 'power' && n.members.some((m) => m.instanceId === 'pixels1'))!.name).toBe('5V');
+  });
+
+  it('without a buffer, a WS2812B strip on a 3.3 V controller is a Fail with the 74AHCT125 fix; on a 5 V UNO it passes', () => {
+    const brief = 'drives a 5V WS2812B LED strip';
+    const esp = build('ESP32S3', [], { brief });
+    expect(results(esp, 'BLOCKER', 'logic_voltage_compatibility')[0]!.suggestedFix).toContain('74AHCT125');
+    const uno = build('UNO', [], { brief });
+    expect(results(uno, 'BLOCKER')).toEqual([]);
+    expect(uno.nets.some((n) => n.name === 'PIXELS1_DIN' && n.members.some((m) => m.instanceId === 'mcu'))).toBe(true);
+  });
+
+  it('a plain 12 V LED strip is a switched load; a buffer is never taken for a motor driver', () => {
+    expect(outsidePartsOf('a 12V LED strip on a relay').map((x) => x.kind)).toEqual(['LOAD']);
+    const p = build('F446', [{ id: 'buf', key: 'SHIFTER' }], { brief: 'one DC motor' });
+    expect(p.nets.some((n) => n.class === 'load' && n.members.some((m) => m.instanceId === 'buf'))).toBe(false);
+    expect(results(p, 'WARNING').some((r) => /motor-driver output/.test(r.message))).toBe(true);
+  });
+
+  it('a 12 V fan through a high-side power switch: 12 V on VIN, VOUT to the fan, no "own supply" warning', () => {
+    const p = build('F446', [{ id: 'reg', key: 'BUCK' }, { id: 'sw', key: 'PSWITCH', links: [{ interface: 'GPIO', pinName: 'CTRL' }] }], { volts: 12, brief: '12V DC input, a 12V cooling fan switched by a power switch' });
+    expect(p.nets.find((n) => n.name === '12V')!.members.map((m) => `${m.instanceId}.${m.pinName}`)).toEqual(expect.arrayContaining(['sw.VIN']));
+    expect(p.nets.find((n) => n.name === 'FAN1_SW')!.members.map((m) => `${m.instanceId}.${m.pinName}`).sort()).toEqual(['fan1.LOAD+', 'sw.VOUT']);
+    expect(results(p, 'WARNING').filter((r) => r.instanceIds.includes('sw'))).toEqual([]);
   });
 });

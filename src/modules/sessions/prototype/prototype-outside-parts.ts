@@ -10,7 +10,7 @@ import { PlaceholderKind } from './prototype-placeholders.js';
  */
 
 export interface OutsidePartSpec {
-  kind: Extract<PlaceholderKind, 'BATTERY' | 'MOTOR' | 'STEPPER' | 'LOAD' | 'SERVO'>;
+  kind: Extract<PlaceholderKind, 'BATTERY' | 'MOTOR' | 'STEPPER' | 'LOAD' | 'SERVO' | 'PIXELS'>;
   /** Block label, e.g. "7.4 V 2S LiPo battery", "DC motor 2", "12 V water pump". */
   label: string;
   /** Instance id stem: "battery", "motor", "pump", "servo". */
@@ -114,6 +114,14 @@ export function outsidePartsOf(brief: string): OutsidePartSpec[] {
     rest = `${rest.slice(0, at)}${' '.repeat(m[0].length)}${rest.slice(at + m[0].length)}`;
     if (DRIVER_AFTER.test(text.slice(at + m[0].length))) continue;
     seen.add(stem);
+    // An addressable strip (WS2812B, NeoPixel) is a data device, not a switched load.
+    const near = text.slice(Math.max(0, at - 40), at + m[0].length + 20);
+    if (stem === 'ledstrip' && /ws281\d|sk6812|neopixel|addressable|apa102|dotstar|pixel/i.test(near)) {
+      const v = /(\d+(?:\.\d+)?)\s*v\b/i.exec(text.slice(Math.max(0, at - 30), at))?.[1];
+      const chip = /ws281\d\w?|sk6812|neopixel|apa102|dotstar/i.exec(near)?.[0];
+      out.push({ kind: 'PIXELS', label: [v ? `${v} V` : null, chip ? (/neopixel/i.test(chip) ? 'NeoPixel' : chip.toUpperCase()) : null, 'LED strip'].filter(Boolean).join(' '), stem: 'pixels' });
+      continue;
+    }
     const volts = /(\d+(?:\.\d+)?)\s*v(?:dc)?\s*(?:dc\s+)?$/i.exec(text.slice(Math.max(0, at - 12), at))?.[1];
     out.push({ kind: 'LOAD', label: `${volts ? `${volts} V ` : ''}${name}`, stem });
   }

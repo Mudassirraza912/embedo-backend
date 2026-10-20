@@ -58,6 +58,8 @@ export interface I2cAssignment {
   strap: { pin: string | null; level: 'GND' | 'VCC'; wired: boolean } | null;
   /** Devices that already hold every address this one can take. */
   clashWith: string[];
+  /** On a multiplexer channel (its own address space) instead of the main bus. */
+  channel?: { mux: string; n: number };
 }
 
 const slug = (text: string): string =>
@@ -319,6 +321,40 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
 
   // --- I2C: one shared bus --------------------------------------------------------------------
   const i2cPeripherals = peripherals.filter((p) => p.links.some((l) => l.interface === 'I2C'));
+
+  // An I2C multiplexer on the bench (TCA9548A) takes the devices whose addresses would clash on the
+  // main bus, one channel each (dev 2026-10-20: three SHT40s and a TCA9548A, all wired to the main
+  // bus, failed the address check the mux was placed to solve).
+  const MUX = /\b[TP]CA954[2-8]A?\b|\bi2c (?:mux|multiplexer)\b/i;
+  const muxBoard =
+    i2cPeripherals
+      .map((p) => boards.get(p.instanceId)!)
+      .find((b) => !isPlaceholderEntity(b.entity) && MUX.test(`${b.label} ${b.record.identity.main_silicon ?? ''}`) && b.record.pins.some((pin) => /^SD\d$/i.test(pin.pin_name.trim()))) ?? null;
+  const muxChannels = muxBoard
+    ? Array.from({ length: 8 }, (_, n) => ({ n, sd: muxBoard.pinsByName(`SD${n}`)[0], sc: muxBoard.pinsByName(`SC${n}`)[0] })).filter(
+        (c): c is { n: number; sd: HardwarePin; sc: HardwarePin } => Boolean(c.sd && c.sc && muxBoard.isWireable(c.sd.pin_id) && muxBoard.isWireable(c.sc.pin_id))
+      )
+    : [];
+  const muxed = new Map<string, number>();
+  if (muxBoard && muxChannels.length > 0) {
+    const taken = new Set(addressesFor(muxBoard.entity.record)?.addresses.slice(0, 1) ?? []);
+    const devices = i2cPeripherals
+      .filter((p) => p.instanceId !== muxBoard.instanceId && !isPlaceholderEntity(p.entity))
+      .map((p) => ({ p, f: addressesFor(p.entity.record) }))
+      .sort((a, b) => (a.f?.addresses.length ?? 99) - (b.f?.addresses.length ?? 99));
+    for (const { p, f } of devices) {
+      if (!f) continue;
+      const free = f.addresses.find((a) => !taken.has(a));
+      if (free) {
+        taken.add(free);
+        continue;
+      }
+      const ch = muxChannels[muxed.size];
+      if (!ch) break;
+      muxed.set(p.instanceId, ch.n);
+    }
+  }
+
   if (i2cPeripherals.length > 0) {
     // The board's labelled I2C (record details, e.g. the Feather's SDA/SCL + STEMMA QT) wins over
     // any function-capable pair.
@@ -388,6 +424,7 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       const ordered = [...i2cPeripherals].sort((a, b) => socketOnly(b) - socketOnly(a));
 
       for (const p of ordered) {
+        if (muxed.has(p.instanceId)) continue; // wired to its mux channel below
         const board = boards.get(p.instanceId)!;
         const details = board.interfaceDetails('I2C')[0] ?? {};
         const pSda = board.pinFromDetail(details, 'sda_pin_id') ?? PERIPHERAL_NAMES.sda.flatMap((n) => board.pinsByName(n))[0] ?? null;
@@ -500,6 +537,25 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
           );
           chain.push(p.instanceId);
         }
+      }
+
+      // Devices behind the multiplexer: each on its own channel's SDn/SCn (the mux is on the main bus).
+      for (const [id, n] of muxed) {
+        if (!muxBoard || !linked.get(muxBoard.instanceId)?.has('I2C')) break;
+        const board = boards.get(id)!;
+        const details = board.interfaceDetails('I2C')[0] ?? {};
+        const pSda = board.pinFromDetail(details, 'sda_pin_id') ?? PERIPHERAL_NAMES.sda.flatMap((x) => board.pinsByName(x))[0] ?? null;
+        const pScl = board.pinFromDetail(details, 'scl_pin_id') ?? PERIPHERAL_NAMES.scl.flatMap((x) => board.pinsByName(x))[0] ?? null;
+        const ch = muxChannels.find((c) => c.n === n)!;
+        if (!pSda || !pScl) continue;
+        const base = `${muxBoard.instanceId.toUpperCase()}_CH${n}`;
+        nets.add(`${base}_SDA`, 'i2c', claim(muxBoard, ch.sd, true));
+        nets.add(`${base}_SDA`, 'i2c', claim(board, pSda, true));
+        nets.add(`${base}_SCL`, 'i2c', claim(muxBoard, ch.sc, true));
+        nets.add(`${base}_SCL`, 'i2c', claim(board, pScl, true));
+        require(muxBoard.instanceId, ch.sd, ch.sc);
+        require(id, pSda, pScl);
+        linked.get(id)!.add('I2C');
       }
     }
   }
@@ -852,13 +908,48 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     }
   }
 
+  // --- level shifters / buffers ---------------------------------------------------------------
+  // A 74AHCT125, a TXS0108 or a BSS138 board: the controller drives the low-voltage input side (A /
+  // LV) and the output side (Y / B / HV) drives the 5 V part. A link the resolver put on an output
+  // pin is moved to that channel's input (dev 2026-10-20: a 74AHCT125 Y1 was wired to an ESP32 pin,
+  // 5 V into a 3.3 V input).
+  const SHIFTER = /\b74A?HCT(?:125|126|245)\b|level.?shift|\bTX[SB]010[48]\b|\bBSS138\b/i;
+  const isShifter = (b: Board) => !isPlaceholderEntity(b.entity) && SHIFTER.test(`${b.label} ${b.record.identity.main_silicon ?? ''}`);
+  const channelOf = (name: string): { n: string; side: 'in' | 'out' | 'oe' } | null => {
+    const t = name.trim().toUpperCase().replace(/[\s_/~#-]/g, '');
+    const lead = /^(\d)(A|Y|OE)$/.exec(t);
+    if (lead) return { n: lead[1]!, side: lead[2] === 'A' ? 'in' : lead[2] === 'Y' ? 'out' : 'oe' };
+    const tail = /^(A|LV|Y|B|HV|OE)(\d)$/.exec(t);
+    if (tail) return { n: tail[2]!, side: tail[1] === 'A' || tail[1] === 'LV' ? 'in' : tail[1] === 'OE' ? 'oe' : 'out' };
+    return null;
+  };
+  const shifterPin = (b: Board, n: string, side: 'in' | 'out' | 'oe'): HardwarePin | null =>
+    b.record.pins.find((pin) => {
+      const c = channelOf(pin.pin_name);
+      return c?.n === n && c.side === side;
+    }) ?? null;
+  /** Pins tied to ground once the ground net exists (a buffer channel's output enable). */
+  const groundTies: Array<{ board: Board; pin: HardwarePin }> = [];
+
   // --- GPIO / ANALOG / PWM: the module pin the resolver named, a capable free controller pin ------
   for (const p of peripherals) {
     const board = boards.get(p.instanceId)!;
+    // An addressable LED strip's data line is wired below (through a buffer when one is on the bench).
+    if (placeholderKindOf(board.entity.hardwareEntityId) === 'PIXELS') continue;
     for (const link of p.links) {
       if (link.interface !== 'GPIO' && link.interface !== 'ANALOG' && link.interface !== 'PWM') continue;
-      const pPin = link.pinName ? board.pinsByName(link.pinName)[0] : undefined;
+      let pPin = link.pinName ? board.pinsByName(link.pinName)[0] : undefined;
       if (!pPin) continue; // validated upstream; a stale composition just skips the line
+      if (isShifter(board)) {
+        const c = channelOf(pPin.pin_name);
+        if (c?.side === 'out') pPin = shifterPin(board, c.n, 'in') ?? pPin;
+        // A buffer's output enable is tied low, not driven by a controller pin.
+        if (c?.side === 'oe') {
+          groundTies.push({ board, pin: pPin });
+          require(p.instanceId, pPin);
+          continue;
+        }
+      }
       // Power and ground pins are wired by the power plan below, never to a controller signal pin:
       // a supply output on a GPIO (5 V into a 3.3 V pin) would damage the controller.
       if (isPowerPin(pPin)) continue;
@@ -895,6 +986,83 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     }
   }
 
+  // --- addressable LED strips (WS2812B / NeoPixel) -----------------------------------------------
+  // DIN needs 0.7 x VDD (3.5 V at 5 V): from a 3.3 V controller it goes through a buffer channel
+  // (controller -> A, Y -> DIN, that channel's /OE to GND); a 5 V controller drives it directly.
+  const usedChannels = new Set<string>();
+  for (const p of peripherals) {
+    const strip = boards.get(p.instanceId)!;
+    if (placeholderKindOf(strip.entity.hardwareEntityId) !== 'PIXELS') continue;
+    const din = strip.pinsByName('DIN')[0];
+    if (!din) continue;
+    require(p.instanceId, din);
+    const net = `${p.instanceId.toUpperCase()}_DIN`;
+    const shifter = mcu.logicVolts() < 4.5 ? (peripherals.map((x) => boards.get(x.instanceId)!).find(isShifter) ?? null) : null;
+    const channels = shifter
+      ? [...new Set(shifter.record.pins.map((pin) => channelOf(pin.pin_name)?.n).filter((n): n is string => Boolean(n)))]
+          .map((n) => ({ n, a: shifterPin(shifter, n, 'in'), y: shifterPin(shifter, n, 'out') }))
+          .filter(
+            (c): c is { n: string; a: HardwarePin; y: HardwarePin } =>
+              Boolean(c.a && c.y) && !nets.hasMember(shifter.instanceId, c.y!.pin_id) && !usedChannels.has(`${shifter.instanceId}:${c.n}`)
+          )
+          // A channel the controller already drives first (the resolver linked it).
+          .sort((x, z) => Number(nets.hasMember(shifter.instanceId, z.a.pin_id)) - Number(nets.hasMember(shifter.instanceId, x.a.pin_id)))
+      : [];
+    const channel = channels[0];
+    if (shifter && channel) {
+      usedChannels.add(`${shifter.instanceId}:${channel.n}`);
+      if (!nets.hasMember(shifter.instanceId, channel.a.pin_id)) {
+        const mPin = freeGeneralPin(isGpioCapable);
+        if (!mPin) {
+          results.push(result('required_host_interface', 'BLOCKER', `No free GPIO pin on ${mcu.label} for ${strip.label} data.`, [mcu.instanceId, p.instanceId], [din.pin_id]));
+          continue;
+        }
+        usedMcuSignalPins.add(mPin.pin_id);
+        nets.add(`${p.instanceId.toUpperCase()}_DATA`, 'gpio', claim(mcu, mPin, true));
+        nets.add(`${p.instanceId.toUpperCase()}_DATA`, 'gpio', claim(shifter, channel.a, true));
+      }
+      nets.add(net, 'gpio', claim(shifter, channel.y, true));
+      nets.add(net, 'gpio', claim(strip, din, true));
+      const oe = shifterPin(shifter, channel.n, 'oe');
+      if (oe) groundTies.push({ board: shifter, pin: oe });
+      require(shifter.instanceId, channel.a, channel.y, oe);
+      linked.get(shifter.instanceId)!.add('GPIO');
+      linked.get(p.instanceId)!.add('GPIO');
+      results.push(
+        result(
+          'logic_voltage_compatibility',
+          'PASS',
+          `${strip.label} data: ${mcu.label} → ${shifter.label} ${channel.a.pin_name} → ${channel.y.pin_name} → DIN, at 5 V logic.`,
+          [p.instanceId, shifter.instanceId, mcu.instanceId],
+          [din.pin_id]
+        )
+      );
+      continue;
+    }
+    const mPin = freeGeneralPin(isGpioCapable);
+    if (!mPin) {
+      results.push(result('required_host_interface', 'BLOCKER', `No free GPIO pin on ${mcu.label} for ${strip.label} data.`, [mcu.instanceId, p.instanceId], [din.pin_id]));
+      continue;
+    }
+    usedMcuSignalPins.add(mPin.pin_id);
+    nets.add(net, 'gpio', claim(mcu, mPin, true));
+    nets.add(net, 'gpio', claim(strip, din, true));
+    linked.get(p.instanceId)!.add('GPIO');
+    const logic = mcu.logicVolts();
+    results.push(
+      logic >= 4.5
+        ? result('logic_voltage_compatibility', 'PASS', `${strip.label} DIN driven at ${logic} V by ${mcu.label} ${mPin.pin_name}.`, [p.instanceId, mcu.instanceId], [din.pin_id])
+        : result(
+            'logic_voltage_compatibility',
+            'BLOCKER',
+            `${strip.label} DIN needs 0.7 × VDD (3.5 V at 5 V), but ${mcu.label} ${mPin.pin_name} drives ${logic} V.`,
+            [p.instanceId, mcu.instanceId],
+            [din.pin_id, mPin.pin_id],
+            'Buffer DIN with a 74AHCT125 powered from 5 V (and a 330 Ω series resistor on DIN).'
+          )
+    );
+  }
+
   // --- power ---------------------------------------------------------------------------------------
   // Bench supplies (chargers, boost converters, regulators: boards that run on their own input and
   // expose a rated output) are chained from their records, then power the controller and the
@@ -910,6 +1078,11 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     require(board.instanceId, ground);
     return true;
   };
+  for (const { board, pin } of groundTies) {
+    if (!mcuGround) break;
+    nets.add('GND', 'ground', claim(mcu, mcuGround, false));
+    nets.add('GND', 'ground', claim(board, pin, true));
+  }
   const mcuRails = mcu.record.pins
     .filter((pin) => pin.direction === 'power_out' && mcu.isWireable(pin.pin_id))
     // The declared domain first: a pin named "3V" (QT Py) is a 3.3 V rail, which its name alone misreads as 3.0 V.
@@ -936,10 +1109,24 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
   const CHARGER = /charg|\bTP4056\b|\bMCP7383\d\b|\bBQ2\d{3}\b|\bLTC40\d\d\b/i;
   const isCharger = (b: Board) => !isPlaceholderEntity(b.entity) && CHARGER.test(`${b.label} ${b.record.identity.main_silicon ?? ''} ${b.record.identity.prototype_role ?? ''}`);
   const hasCharger = [...boards.values()].some(isCharger);
+
+  /**
+   * A high-side load switch (a MOSFET or pushbutton power-switch board: VIN → VOUT under a control
+   * pin) switches a pump or fan; its VIN is wired from the load's supply, not as a bench supply.
+   */
+  const LOAD_SWITCH = /mosfet|load switch|power switch|\bIRLZ?\d{2,}|\bIRF5\d\d|[np]-?channel/i;
+  const hasLoads = peripherals.some((p) => placeholderKindOf(p.entity.hardwareEntityId) === 'LOAD');
+  const switchPins = (b: Board): { vin: HardwarePin; vout: HardwarePin } | null => {
+    if (!hasLoads || isPlaceholderEntity(b.entity) || !LOAD_SWITCH.test(`${b.label} ${b.record.identity.main_silicon ?? ''}`)) return null;
+    const vin = b.record.pins.find((pin) => /^(VIN|V\+|VIN\+|IN\+)$/i.test(pin.pin_name.trim()) && b.isWireable(pin.pin_id));
+    const vout = b.record.pins.find((pin) => /^(VOUT|OUT|OUT\+|LOAD\+)$/i.test(pin.pin_name.trim()) && b.isWireable(pin.pin_id));
+    return vin && vout ? { vin, vout } : null;
+  };
+  const loadSwitches = new Set(peripherals.filter((p) => switchPins(boards.get(p.instanceId)!)).map((p) => p.instanceId));
   const controllerSources: RailSource[] = mcuRails.map((r) => ({ board: mcu, pin: r.pin, volts: r.volts, key: mcuRailKey(r.volts) }));
   const supplies = peripherals
     .map((p) => boards.get(p.instanceId)!)
-    .filter((b) => b.record.interfaces.host_requirement !== 'host_required' && !poweredByCable.has(b.instanceId))
+    .filter((b) => b.record.interfaces.host_requirement !== 'host_required' && !poweredByCable.has(b.instanceId) && !loadSwitches.has(b.instanceId))
     .map((b) => {
       const { supply_voltage_min_v: min, supply_voltage_max_v: max } = b.record.electrical;
       const range: [number, number] | undefined = kindOf(b) === 'BATTERY' && min != null && max != null ? [min, max] : undefined;
@@ -1175,12 +1362,17 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     ['MA+', 'MA-'], ['MB+', 'MB-'], ['M1A', 'M1B'], ['M2A', 'M2B'], ['M1+', 'M1-'], ['M2+', 'M2-'], ['MOTORA+', 'MOTORA-'], ['MOTORB+', 'MOTORB-'],
     ['1A', '1B'], ['2A', '2B'], ['A1', 'A2'], ['B1', 'B2'], ['OUTA', 'OUTB'], ['OUT+', 'OUT-'],
   ];
+  /** Pairs whose names are also logic channels (a 74AHCT125's A1/A2): they count only on a board that is a motor driver. */
+  const GENERIC_PAIRS = new Set(['1A', '2A', 'A1', 'B1', 'OUT+']);
+  const MOTOR_DRIVER = /motor|h-?bridge|stepper|\bL29[38]|\bDRV8\d{3}|\bTB6612|\bA4988|\bULN2[08]0[34]|\bTMC2\d{3}/i;
   const squash = (name: string) => name.toUpperCase().replace(/[\s_]/g, '');
   const motorPairs = (b: Board): Array<[HardwarePin, HardwarePin]> => {
-    if (isPlaceholderEntity(b.entity) || b === mcu) return [];
+    if (isPlaceholderEntity(b.entity) || b === mcu || isShifter(b)) return [];
+    const driver = MOTOR_DRIVER.test(`${b.label} ${b.record.identity.main_silicon ?? ''} ${b.record.identity.functional_categories.join(' ')}`);
     const byName = new Map(b.record.pins.filter((pin) => !isPowerPin(pin)).map((pin) => [squash(pin.pin_name), pin]));
     const pairs: Array<[HardwarePin, HardwarePin]> = [];
     for (const [a, z] of MOTOR_PAIRS) {
+      if (GENERIC_PAIRS.has(a) && !driver) continue;
       const pa = byName.get(a);
       const pz = byName.get(z);
       if (pa && pz && b.isWireable(pa.pin_id) && b.isWireable(pz.pin_id)) pairs.push([pa, pz]);
@@ -1188,6 +1380,7 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     return pairs;
   };
   const isDriver = (b: Board) => motorPairs(b).length > 0;
+
 
   /** Power for a placeholder: the controller's logic rail, or 12-24 V for a field-bus device; null when none fits. */
   const placeholderSupply = (board: Board): string | null => {
@@ -1211,12 +1404,18 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
   for (const p of peripherals) {
     const board = boards.get(p.instanceId)!;
     if (supplyIds.has(p.instanceId) || chargers.has(p.instanceId)) continue;
+    // A load switch takes its VIN from the load's supply below; here only its ground.
+    if (loadSwitches.has(p.instanceId)) {
+      joinGround(boards.get(p.instanceId)!);
+      peripheralRails.set(p.instanceId, null);
+      continue;
+    }
     const kind = kindOf(board);
     // Motors and switched loads are wired to their driver or relay below.
     if (kind === 'MOTOR' || kind === 'STEPPER' || kind === 'LOAD') continue;
     // A placeholder has no known supply: its kind's usual rail, stated as an assumption in the
     // placeholder summary (the tester: "placeholders get ground only, with no power").
-    if (isPlaceholderEntity(p.entity) && kind !== 'SERVO') {
+    if (isPlaceholderEntity(p.entity) && kind !== 'SERVO' && kind !== 'PIXELS') {
       joinGround(board);
       placeholderRails.set(p.instanceId, placeholderSupply(board));
       peripheralRails.set(p.instanceId, null);
@@ -1415,13 +1614,15 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     }
     if (kind !== 'LOAD') continue;
     const plus = load.record.pins.find((pin) => pin.signal_class === 'other')!;
-    const relay = peripherals
-      .map((x) => boards.get(x.instanceId)!)
-      .find((b) => !usedRelays.has(b.instanceId) && !isPlaceholderEntity(b.entity) && b.record.pins.some((pin) => RELAY_COM.test(pin.pin_name.trim())) && b.record.pins.some((pin) => RELAY_NO.test(pin.pin_name.trim())));
+    // A relay (supply on COM, NO to the load) or a high-side load switch (supply on VIN, VOUT to the load).
+    const switches = peripherals.map((x) => boards.get(x.instanceId)!).filter((b) => !usedRelays.has(b.instanceId) && !isPlaceholderEntity(b.entity));
+    const relayBoard = switches.find((b) => b.record.pins.some((pin) => RELAY_COM.test(pin.pin_name.trim())) && b.record.pins.some((pin) => RELAY_NO.test(pin.pin_name.trim())));
+    const switchBoard = relayBoard ? null : (switches.find((b) => loadSwitches.has(b.instanceId)) ?? null);
+    const relay = relayBoard ?? switchBoard;
     if (relay) {
       usedRelays.add(relay.instanceId);
-      const com = relay.record.pins.find((pin) => RELAY_COM.test(pin.pin_name.trim()))!;
-      const no = relay.record.pins.find((pin) => RELAY_NO.test(pin.pin_name.trim()))!;
+      const com = relayBoard ? relay.record.pins.find((pin) => RELAY_COM.test(pin.pin_name.trim()))! : switchPins(relay)!.vin;
+      const no = relayBoard ? relay.record.pins.find((pin) => RELAY_NO.test(pin.pin_name.trim()))! : switchPins(relay)!.vout;
       const volts = parseVolts(load.label);
       const all = [...supplyOutputs, ...controllerSources];
       const supply =
@@ -1437,7 +1638,13 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
         nets.add(rail, 'power', claim(supply.board, supply.pin, false));
         nets.add(rail, 'power', claim(relay, com, true));
         results.push(
-          result('required_power_rail', 'PASS', `${load.label} switched by ${relay.label}: ${rail} on COM, NO to the ${load.label.replace(/^\d+(?:\.\d+)? V /, '')} +, − to GND.`, [p.instanceId, relay.instanceId, supply.board.instanceId], [com.pin_id, no.pin_id])
+          result(
+            'required_power_rail',
+            'PASS',
+            `${load.label} switched by ${relay.label}: ${rail} on ${com.pin_name}, ${no.pin_name} to the ${load.label.replace(/^\d+(?:\.\d+)? V /, '')} +, − to GND.`,
+            [p.instanceId, relay.instanceId, supply.board.instanceId],
+            [com.pin_id, no.pin_id]
+          )
         );
       } else {
         results.push(
@@ -1447,7 +1654,7 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
             `${load.label} is switched by ${relay.label}, but the bench has no ${volts !== null ? `${volts} V ` : ''}supply for it.`,
             [p.instanceId, relay.instanceId],
             [com.pin_id],
-            `Connect a ${volts !== null ? `${volts} V ` : ''}supply to the relay's COM terminal.`
+            `Connect a ${volts !== null ? `${volts} V ` : ''}supply to ${relay.label} ${com.pin_name}.`
           )
         );
       }
@@ -1469,7 +1676,13 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
   // table), fixed-address devices first, and a device that has to move is strapped to its
   // alternate when its address pin is on the header.
   const i2cAddresses = new Map<string, I2cAssignment>();
-  const i2cDevices = peripherals.filter((p) => linked.get(p.instanceId)?.has('I2C') && !isPlaceholderEntity(p.entity));
+  // A device on a mux channel has that channel to itself: its default address, no clash.
+  for (const [id, n] of muxed) {
+    if (!linked.get(id)?.has('I2C')) continue;
+    const f = addressesFor(boards.get(id)!.entity.record);
+    i2cAddresses.set(id, { address: f?.addresses[0] ?? null, chip: f?.chip ?? null, options: f?.addresses ?? [], moved: false, strap: null, clashWith: [], channel: { mux: muxBoard!.instanceId, n } });
+  }
+  const i2cDevices = peripherals.filter((p) => linked.get(p.instanceId)?.has('I2C') && !isPlaceholderEntity(p.entity) && !(muxed.has(p.instanceId) && i2cAddresses.has(p.instanceId)));
   const addressFacts = new Map(i2cDevices.map((p) => [p.instanceId, addressesFor(p.entity.record)]));
   const strapPinOf = (p: AllocInstance): HardwarePin | null => {
     const f = addressFacts.get(p.instanceId);

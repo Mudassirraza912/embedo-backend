@@ -1,10 +1,22 @@
-/** Remove ```json fences and surrounding whitespace from a model response. */
-export const stripJsonFences = (text: string): string =>
-  text
-    .trim()
+/**
+ * Remove ```json fences and surrounding whitespace from a model response. A reply that starts with
+ * prose ("Looking at the rejection: ... ```json {...} ```") yields the fenced or bare JSON inside it
+ * (dev 2026-10-20: a resolver retry answered that way and the run failed on "root: Required").
+ */
+export const stripJsonFences = (text: string): string => {
+  const trimmed = text.trim();
+  if (!/^[{[]|^```/.test(trimmed)) {
+    const fenced = /```(?:json)?\s*([\s\S]*?)\s*```/i.exec(trimmed);
+    if (fenced && /^[{[]/.test(fenced[1]!.trim())) return fenced[1]!.trim();
+    const first = trimmed.indexOf('{');
+    const last = trimmed.lastIndexOf('}');
+    if (first !== -1 && last > first) return trimmed.slice(first, last + 1);
+  }
+  return trimmed
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```\s*$/i, '')
     .trim();
+};
 
 /**
  * Attempts to parse JSON, and if it fails due to truncation (e.g. LLM hitting max token limit mid-stream),
