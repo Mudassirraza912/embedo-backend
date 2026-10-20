@@ -1,7 +1,9 @@
 import { HardwarePin } from '../../hardware/hardware.schema.js';
 import { LibraryEntity } from '../../hardware/hardware-library.service.js';
+import { addressesFor } from '../../hardware/reference/i2c-addresses.js';
+import { isFiveVoltTolerant } from '../../hardware/reference/logic-inputs.js';
 import { Board, ContactRef, isReservedForSignal, parseVolts } from './prototype-board.js';
-import { isPlaceholderEntity } from './prototype-placeholders.js';
+import { isPlaceholderEntity, placeholderKindOf } from './prototype-placeholders.js';
 import {
   CompatibilityResult,
   LinkInterface,
@@ -38,6 +40,24 @@ export interface AllocationResult {
   linked: Map<string, Set<LinkInterface>>;
   /** Peripheral pins the design requires (power in, ground, linked interface pins). */
   requiredPins: Map<string, Set<string>>;
+  /** The address each I2C device uses on the shared bus. */
+  i2cAddresses: Map<string, I2cAssignment>;
+  /** The rail each placeholder was given (its kind's usual supply), or null when none fits. */
+  placeholderRails: Map<string, string | null>;
+}
+
+export interface I2cAssignment {
+  /** Null when neither the chip nor the record gives an address. */
+  address: string | null;
+  chip: string | null;
+  /** Every address the chip can take, its default first. */
+  options: string[];
+  /** Moved off its default to clear a clash. */
+  moved: boolean;
+  /** The address pin and the level the chosen address needs; wired when the pin is on the header. */
+  strap: { pin: string | null; level: 'GND' | 'VCC'; wired: boolean } | null;
+  /** Devices that already hold every address this one can take. */
+  clashWith: string[];
 }
 
 const slug = (text: string): string =>
@@ -213,11 +233,6 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
   const mcuRailKey = (volts: number) => `${mcu.instanceId}:rail:${volts}`;
 
   // --- controller pin finders ------------------------------------------------------------------
-  const freeSignalPin = (predicate: (pin: HardwarePin) => boolean): HardwarePin | null =>
-    mcu.record.pins.find(
-      (pin) => !usedMcuSignalPins.has(pin.pin_id) && !isReservedForSignal(pin) && mcu.isHeaderWireable(pin.pin_id) && predicate(pin)
-    ) ?? null;
-
   const hasFunction = (pin: HardwarePin, family: string, roles?: string[], instance?: number | null) =>
     mcu.functionsOf(pin).some(
       (f) => f.family === family && (roles === undefined || (f.role !== null && roles.includes(f.role))) && (instance === undefined || f.instance === instance)
@@ -243,11 +258,31 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     (labelledBusPins.has(pin.pin_id) ? 10 : 0) +
     mcu.functionsOf(pin).filter((f) => f.role !== null && ['I2C', 'SPI', 'UART', 'CAN'].includes(f.family)).length +
     (pin.signal_class === 'analog' ? 0.5 : 0);
-  const freeGeneralPin = (predicate: (pin: HardwarePin) => boolean): HardwarePin | null => {
+  const freeGeneralPin = (predicate: (pin: HardwarePin) => boolean, extraCost: (pin: HardwarePin) => number = () => 0): HardwarePin | null => {
     const candidates = mcu.record.pins.filter(
       (pin) => !usedMcuSignalPins.has(pin.pin_id) && !isReservedForSignal(pin) && mcu.isHeaderWireable(pin.pin_id) && predicate(pin)
     );
-    return candidates.map((pin, i) => ({ pin, cost: busCost(pin) + i / 10_000 })).sort((a, b) => a.cost - b.cost)[0]?.pin ?? null;
+    return candidates.map((pin, i) => ({ pin, cost: busCost(pin) + extraCost(pin) + i / 10_000 })).sort((a, b) => a.cost - b.cost)[0]?.pin ?? null;
+  };
+
+  /**
+   * A free pin for one role of a bus, keeping pins other buses need: a pin that is also the only
+   * CAN or I2C option is taken last (CAN pins are scarce, then I2C). Without this a UART took an
+   * STM32's FDCAN pins and the CAN transceiver had none left.
+   */
+  const BUS_WEIGHT: Record<string, number> = { CAN: 3, I2C: 2, SPI: 1, UART: 1 };
+  const freeBusPin = (family: string, predicate: (pin: HardwarePin) => boolean): HardwarePin | null => {
+    const candidates = mcu.record.pins.filter(
+      (pin) => !usedMcuSignalPins.has(pin.pin_id) && !isReservedForSignal(pin) && mcu.isHeaderWireable(pin.pin_id) && predicate(pin)
+    );
+    // Other buses' roles count by scarcity; another instance of the same bus counts once (UART3 on
+    // PB10/PB11 leaves PC11 for UART4).
+    const cost = (pin: HardwarePin) =>
+      mcu
+        .functionsOf(pin)
+        .filter((f) => f.role !== null && !claimedInstances.has(instanceKey(f.family, f.instance)))
+        .reduce((n, f) => n + (f.family !== family ? (BUS_WEIGHT[f.family] ?? 0) : 1), 0);
+    return candidates.map((pin, i) => ({ pin, cost: cost(pin) + i / 10_000 })).sort((a, b) => a.cost - b.cost)[0]?.pin ?? null;
   };
 
   /**
@@ -268,7 +303,7 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       const taken = new Set<string>();
       let complete = true;
       for (const [role, aliases] of Object.entries(roles)) {
-        const pin = freeSignalPin((p) => !taken.has(p.pin_id) && hasFunction(p, family, aliases, instance));
+        const pin = freeBusPin(family, (p) => !taken.has(p.pin_id) && hasFunction(p, family, aliases, instance));
         if (pin) {
           chosen[role] = pin;
           taken.add(pin.pin_id);
@@ -341,7 +376,18 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       );
       const chain: string[] = [mcu.instanceId];
 
-      for (const p of i2cPeripherals) {
+      // Socket-only boards with the most STEMMA QT ports first: when the controller has no QT port,
+      // the first one joins through a socket-to-header cable and the others daisy-chain from its
+      // spare port (one adapter cable, not one per board).
+      const socketOnly = (p: AllocInstance) => {
+        const board = boards.get(p.instanceId)!;
+        const d = board.interfaceDetails('I2C')[0] ?? {};
+        const sdaPin = board.pinFromDetail(d, 'sda_pin_id') ?? PERIPHERAL_NAMES.sda.flatMap((n) => board.pinsByName(n))[0];
+        return sdaPin && !board.isHeaderWireable(sdaPin.pin_id) ? board.cablePorts().length : 0;
+      };
+      const ordered = [...i2cPeripherals].sort((a, b) => socketOnly(b) - socketOnly(a));
+
+      for (const p of ordered) {
         const board = boards.get(p.instanceId)!;
         const details = board.interfaceDetails('I2C')[0] ?? {};
         const pSda = board.pinFromDetail(details, 'sda_pin_id') ?? PERIPHERAL_NAMES.sda.flatMap((n) => board.pinsByName(n))[0] ?? null;
@@ -445,6 +491,15 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
         nets.add(sclNet, 'i2c', claim(mcu, scl, false));
         nets.add(sclNet, 'i2c', sclMember);
         linked.get(p.instanceId)!.add('I2C');
+        // Joined through an adapter cable on one QT socket: its other sockets host the next boards.
+        const adapterConnector = board.contactsOf(pSda.pin_id).find((c) => c.viaAdapter && c.contact.contact_id === sdaMember.contactId)?.connector.connector_id;
+        if (adapterConnector && ports.length > 1) {
+          freePorts.set(
+            p.instanceId,
+            ports.filter((port) => port.connector.connector_id !== adapterConnector).map((port) => ({ connectorId: port.connector.connector_id, anchorId: port.anchorId }))
+          );
+          chain.push(p.instanceId);
+        }
       }
     }
   }
@@ -512,75 +567,10 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     }
   }
 
-  // --- UART: point to point, one controller UART per device, TX crossed to RX -------------------
-  /** The board's labelled UART (record details) first, then any free TX/RX-capable pair. */
-  const takeUart = (): { instance: number | null; pins: Record<string, HardwarePin> } | null => {
-    let bus: { instance: number | null; pins: Record<string, HardwarePin> } | null = null;
-    for (const details of mcu.interfaceDetails('UART')) {
-      const tx = mcu.pinFromDetail(details, 'tx_pin_id');
-      const rx = mcu.pinFromDetail(details, 'rx_pin_id');
-      const instance = tx ? (mcu.functionsOf(tx).find((f) => f.family === 'UART')?.instance ?? null) : null;
-      if (claimedInstances.has(instanceKey('UART', instance))) continue;
-      if (tx && rx && !usedMcuSignalPins.has(tx.pin_id) && !usedMcuSignalPins.has(rx.pin_id) && mcu.isWireable(tx.pin_id) && mcu.isWireable(rx.pin_id)) {
-        bus = { instance, pins: { tx, rx } };
-        break;
-      }
-    }
-    bus ??= pickBus('UART', { tx: ['TX'], rx: ['RX'] });
-    if (!bus && !claimedInstances.has(instanceKey('UART', null))) {
-      const byName = (names: string[]) => names.flatMap((n) => mcu.pinsByName(n)).find((p) => !usedMcuSignalPins.has(p.pin_id) && mcu.isWireable(p.pin_id)) ?? null;
-      const tx = byName(['TX', 'TXD', 'TX0']);
-      const rx = byName(['RX', 'RXD', 'RX0']);
-      if (tx && rx) bus = { instance: null, pins: { tx, rx } };
-    }
-    if (bus) claimedInstances.add(instanceKey('UART', bus.instance));
-    return bus;
-  };
-  /** How many UARTs the record shows, for an honest "no free UART" message. */
-  const uartCount = () => {
-    const instances = new Set<string>();
-    for (const pin of mcu.record.pins) for (const f of mcu.functionsOf(pin)) if (f.family === 'UART') instances.add(String(f.instance));
-    return instances.size;
-  };
-  const noFreeUart = (board: Board, p: AllocInstance, pins: string[]) =>
-    result(
-      'required_host_interface',
-      'BLOCKER',
-      `${mcu.label} has no free UART for ${board.label}${uartCount() > 0 ? ` (its record lists ${uartCount()} UART${uartCount() === 1 ? '' : 's'}, all in use)` : ''}.`,
-      [mcu.instanceId, p.instanceId],
-      pins,
-      'Use a controller with more UARTs, or move a module to I2C.'
-    );
-  const uartPeripherals = peripherals.filter((p) => p.links.some((l) => l.interface === 'UART'));
-  for (const p of uartPeripherals) {
-    const board = boards.get(p.instanceId)!;
-    const details = board.interfaceDetails('UART')[0] ?? {};
-    const pTx = board.pinFromDetail(details, 'tx_pin_id') ?? PERIPHERAL_NAMES.tx.flatMap((n) => board.pinsByName(n))[0] ?? null;
-    const pRx = board.pinFromDetail(details, 'rx_pin_id') ?? PERIPHERAL_NAMES.rx.flatMap((n) => board.pinsByName(n))[0] ?? null;
-    if (!pTx || !pRx) {
-      results.push(result('protocol_compatibility', 'BLOCKER', `${board.label} lists UART but its TX/RX pins are not identified in the record.`, [p.instanceId]));
-      continue;
-    }
-    require(p.instanceId, pTx, pRx);
-    const bus = takeUart();
-    if (!bus) {
-      results.push(noFreeUart(board, p, [pTx.pin_id, pRx.pin_id]));
-      continue;
-    }
-    const mTx = bus.pins['tx']!;
-    const mRx = bus.pins['rx']!;
-    usedMcuSignalPins.add(mTx.pin_id);
-    usedMcuSignalPins.add(mRx.pin_id);
-    const name = bus.instance !== null ? `UART${bus.instance}` : 'UART';
-    // Controller TX drives the module's RX, and the module's TX drives the controller's RX.
-    nets.add(`${name}_TX`, 'uart', claim(mcu, mTx, true));
-    nets.add(`${name}_TX`, 'uart', claim(board, pRx, true));
-    nets.add(`${name}_RX`, 'uart', claim(mcu, mRx, true));
-    nets.add(`${name}_RX`, 'uart', claim(board, pTx, true));
-    linked.get(p.instanceId)!.add('UART');
-  }
-
   // --- field buses: CAN and RS-485 ---------------------------------------------------------------
+  // CAN goes before the UARTs: CAN pins are the scarcest (an STM32H7 offers FDCAN1 only on pins
+  // UART4 can also use, and a UART took them on a 20-module bench). RS-485 needs a UART, so it
+  // follows the UART section.
   // A transceiver links the controller (CAN TX/RX, or a UART + a direction line for RS-485) to a
   // differential pair; every device on the bus joins that pair (multidrop). Pins are matched by the
   // record's interface details, else by their usual silkscreen names.
@@ -691,6 +681,74 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     }
     if (devices.length > 0 && wired === 0) results.push(needsTransceiver('CAN', devices, 'Add a 3.3 V CAN transceiver (e.g. SN65HVD230) between the controller and the bus.'));
     joinFieldBus('CAN', field, wired, ['CAN_H', 'CAN_L']);
+  }
+
+  // --- UART: point to point, one controller UART per device, TX crossed to RX -------------------
+  /** The board's labelled UART (record details) first, then any free TX/RX-capable pair. */
+  const takeUart = (): { instance: number | null; pins: Record<string, HardwarePin> } | null => {
+    let bus: { instance: number | null; pins: Record<string, HardwarePin> } | null = null;
+    for (const details of mcu.interfaceDetails('UART')) {
+      const tx = mcu.pinFromDetail(details, 'tx_pin_id');
+      const rx = mcu.pinFromDetail(details, 'rx_pin_id');
+      const instance = tx ? (mcu.functionsOf(tx).find((f) => f.family === 'UART')?.instance ?? null) : null;
+      if (claimedInstances.has(instanceKey('UART', instance))) continue;
+      if (tx && rx && !usedMcuSignalPins.has(tx.pin_id) && !usedMcuSignalPins.has(rx.pin_id) && mcu.isWireable(tx.pin_id) && mcu.isWireable(rx.pin_id)) {
+        bus = { instance, pins: { tx, rx } };
+        break;
+      }
+    }
+    bus ??= pickBus('UART', { tx: ['TX'], rx: ['RX'] });
+    if (!bus && !claimedInstances.has(instanceKey('UART', null))) {
+      const byName = (names: string[]) => names.flatMap((n) => mcu.pinsByName(n)).find((p) => !usedMcuSignalPins.has(p.pin_id) && mcu.isWireable(p.pin_id)) ?? null;
+      const tx = byName(['TX', 'TXD', 'TX0']);
+      const rx = byName(['RX', 'RXD', 'RX0']);
+      if (tx && rx) bus = { instance: null, pins: { tx, rx } };
+    }
+    if (bus) claimedInstances.add(instanceKey('UART', bus.instance));
+    return bus;
+  };
+  /** How many UARTs the record shows, for an honest "no free UART" message. */
+  const uartCount = () => {
+    const instances = new Set<string>();
+    for (const pin of mcu.record.pins) for (const f of mcu.functionsOf(pin)) if (f.family === 'UART') instances.add(String(f.instance));
+    return instances.size;
+  };
+  const noFreeUart = (board: Board, p: AllocInstance, pins: string[]) =>
+    result(
+      'required_host_interface',
+      'BLOCKER',
+      `${mcu.label} has no free UART for ${board.label}${uartCount() > 0 ? ` (its record lists ${uartCount()} UART${uartCount() === 1 ? '' : 's'}, all in use)` : ''}.`,
+      [mcu.instanceId, p.instanceId],
+      pins,
+      'Use a controller with more UARTs, or move a module to I2C.'
+    );
+  const uartPeripherals = peripherals.filter((p) => p.links.some((l) => l.interface === 'UART'));
+  for (const p of uartPeripherals) {
+    const board = boards.get(p.instanceId)!;
+    const details = board.interfaceDetails('UART')[0] ?? {};
+    const pTx = board.pinFromDetail(details, 'tx_pin_id') ?? PERIPHERAL_NAMES.tx.flatMap((n) => board.pinsByName(n))[0] ?? null;
+    const pRx = board.pinFromDetail(details, 'rx_pin_id') ?? PERIPHERAL_NAMES.rx.flatMap((n) => board.pinsByName(n))[0] ?? null;
+    if (!pTx || !pRx) {
+      results.push(result('protocol_compatibility', 'BLOCKER', `${board.label} lists UART but its TX/RX pins are not identified in the record.`, [p.instanceId]));
+      continue;
+    }
+    require(p.instanceId, pTx, pRx);
+    const bus = takeUart();
+    if (!bus) {
+      results.push(noFreeUart(board, p, [pTx.pin_id, pRx.pin_id]));
+      continue;
+    }
+    const mTx = bus.pins['tx']!;
+    const mRx = bus.pins['rx']!;
+    usedMcuSignalPins.add(mTx.pin_id);
+    usedMcuSignalPins.add(mRx.pin_id);
+    const name = bus.instance !== null ? `UART${bus.instance}` : 'UART';
+    // Controller TX drives the module's RX, and the module's TX drives the controller's RX.
+    nets.add(`${name}_TX`, 'uart', claim(mcu, mTx, true));
+    nets.add(`${name}_TX`, 'uart', claim(board, pRx, true));
+    nets.add(`${name}_RX`, 'uart', claim(mcu, mRx, true));
+    nets.add(`${name}_RX`, 'uart', claim(board, pTx, true));
+    linked.get(p.instanceId)!.add('UART');
   }
 
   // RS-485
@@ -814,7 +872,13 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
           : link.interface === 'PWM'
             ? (pin: HardwarePin) => hasFunction(pin, 'PWM')
             : isGpioCapable;
-      const mPin = link.interface === 'GPIO' ? freeGeneralPin(capable) : freeSignalPin(capable);
+      // A 5 V output (an HC-SR04 echo) lands on a 5 V tolerant pin when the controller has one; an
+      // enable/speed line (L298N ENA) on a PWM-capable pin, so speed control works.
+      const fiveVoltOut = pPin.direction === 'output' && (parseVolts(pPin.voltage_domain) ?? 0) > mcu.logicVolts() + 0.3;
+      const speedLine = /^(EN[AB]?|EN\d|PWM[A-Z0-9]*|SPEED)$/i.test(pPin.pin_name.trim());
+      const prefer = (pin: HardwarePin) =>
+        (fiveVoltOut && !isFiveVoltTolerant(pin.voltage_domain) ? 100 : 0) + (speedLine && !hasFunction(pin, 'PWM') ? 50 : 0);
+      const mPin = freeGeneralPin(capable, prefer);
       require(p.instanceId, pPin);
       if (!mPin) {
         results.push(
@@ -853,40 +917,79 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     .filter((r): r is { pin: HardwarePin; volts: number } => r.volts !== null && (r.volts === 3.3 || r.volts === 5));
   const mcuLogic = mcu.logicVolts();
   const peripheralRails = new Map<string, number | null>();
+  /** What powers each placeholder (a rail chosen for its kind), for the placeholder summary. */
+  const placeholderRails = new Map<string, string | null>();
 
   interface RailSource {
     board: Board;
     pin: HardwarePin;
     volts: number;
     key: string;
+    /** A battery's empty-to-full range: every voltage in it must suit the input it feeds. */
+    range?: [number, number];
+    /** The bench's outside supply (a DC input or a battery the brief names). */
+    outside?: boolean;
   }
+  const kindOf = (b: Board) => placeholderKindOf(b.entity.hardwareEntityId);
+  const isOutsideSource = (b: Board) => kindOf(b) === 'DCIN' || kindOf(b) === 'BATTERY';
+  const hasBattery = peripherals.some((p) => placeholderKindOf(p.entity.hardwareEntityId) === 'BATTERY');
+  const CHARGER = /charg|\bTP4056\b|\bMCP7383\d\b|\bBQ2\d{3}\b|\bLTC40\d\d\b/i;
+  const isCharger = (b: Board) => !isPlaceholderEntity(b.entity) && CHARGER.test(`${b.label} ${b.record.identity.main_silicon ?? ''} ${b.record.identity.prototype_role ?? ''}`);
+  const hasCharger = [...boards.values()].some(isCharger);
   const controllerSources: RailSource[] = mcuRails.map((r) => ({ board: mcu, pin: r.pin, volts: r.volts, key: mcuRailKey(r.volts) }));
   const supplies = peripherals
     .map((p) => boards.get(p.instanceId)!)
     .filter((b) => b.record.interfaces.host_requirement !== 'host_required' && !poweredByCable.has(b.instanceId))
-    .map((b) => ({
-      board: b,
-      inputs: b.record.pins.filter((pin) => pin.direction === 'power_in' && b.isWireable(pin.pin_id)),
-      outputs: b.record.pins
-        .filter((pin) => pin.direction === 'power_out' && b.isWireable(pin.pin_id))
-        .map((pin) => ({ board: b, pin, volts: parseVolts(pin.voltage_domain) ?? parseVolts(pin.pin_name), key: `${b.instanceId}:${pin.pin_id}` }))
-        .filter((o): o is RailSource => o.volts !== null && o.volts > 0),
-    }))
+    .map((b) => {
+      const { supply_voltage_min_v: min, supply_voltage_max_v: max } = b.record.electrical;
+      const range: [number, number] | undefined = kindOf(b) === 'BATTERY' && min != null && max != null ? [min, max] : undefined;
+      return {
+        board: b,
+        inputs: b.record.pins.filter((pin) => pin.direction === 'power_in' && b.isWireable(pin.pin_id)),
+        outputs: b.record.pins
+          .filter((pin) => pin.direction === 'power_out' && b.isWireable(pin.pin_id))
+          .map((pin): RailSource | null => {
+            const volts = parseVolts(pin.voltage_domain) ?? parseVolts(pin.pin_name);
+            return volts !== null && volts > 0 ? { board: b, pin, volts, key: `${b.instanceId}:${pin.pin_id}`, range, outside: isOutsideSource(b) } : null;
+          })
+          .filter((o): o is RailSource => o !== null),
+      };
+    })
     .filter((s) => s.outputs.length > 0);
   const supplyIds = new Set(supplies.map((s) => s.board.instanceId));
 
-  /** Joins a source pin and a consumer pin on the source's own rail net. */
+  /** Joins a source pin and a consumer pin on the source's own rail net (a battery's is VBAT). */
+  const railNameOf = (source: RailSource) =>
+    kindOf(source.board) === 'BATTERY' ? (railOwners.get('VBAT') && railOwners.get('VBAT') !== source.key ? `VBAT_${source.board.instanceId.toUpperCase()}` : (railOwners.set('VBAT', source.key), 'VBAT')) : railNetName(source.volts, source.key, source.board.instanceId);
   const wireRail = (source: RailSource, consumer: Board, pin: HardwarePin) => {
-    const name = railNetName(source.volts, source.key, source.board.instanceId);
+    const name = railNameOf(source);
     nets.add(name, 'power', claim(source.board, source.pin, false));
     nets.add(name, 'power', claim(consumer, pin, false));
     if (consumer !== mcu) require(consumer.instanceId, pin);
     if (source.board !== mcu) require(source.board.instanceId, source.pin);
+    return name;
   };
+  const fits = (s: RailSource, range: [number, number]) =>
+    s.range ? s.range[0] >= range[0] - VOLT_EPSILON && s.range[1] <= range[1] + VOLT_EPSILON : fitsRange(s.volts, range);
   /** The fitting source closest to the controller's logic level (3.3 V logic prefers a 3.3 V rail). */
   const pickSource = (sources: RailSource[], range: [number, number]): RailSource | null =>
-    sources.filter((s) => fitsRange(s.volts, range)).sort((a, b) => Math.abs(a.volts - mcuLogic) - Math.abs(b.volts - mcuLogic))[0] ?? null;
-  const sourceText = (s: RailSource) => `${s.board.label} ${s.pin.pin_name} (${Number(s.volts.toFixed(2))} V)`;
+    sources.filter((s) => fits(s, range)).sort((a, b) => Math.abs(a.volts - mcuLogic) - Math.abs(b.volts - mcuLogic))[0] ?? null;
+  const sourceText = (s: RailSource) =>
+    s.range ? `${s.board.label} (${s.range[0]}–${s.range[1]} V)` : `${s.board.label} ${s.pin.pin_name} (${Number(s.volts.toFixed(2))} V)`;
+
+  /**
+   * A converter's input range when its record gives none: a boost (step-up) converter only takes
+   * inputs below its output. (prod 2026-10-16: a PowerBoost 1000 was put on a 7.4 V 2S LiPo; with no
+   * input maximum in its record nothing flagged it.)
+   */
+  const BOOST = /boost|step[- ]?up|\bTPS6103\d|\bTPS6109\d|\bMT3608\b/i;
+  const isBoost = (b: Board) => BOOST.test(`${b.label} ${b.record.identity.main_silicon ?? ''}`);
+  const supplyInputRange = (b: Board, pin: HardwarePin, outVolts: number | null): [number, number] | null => {
+    const own = inputRange(b, pin);
+    if (own) return own;
+    if (isBoost(b) && outVolts !== null) return [b.record.electrical.supply_voltage_min_v ?? 0.9, Number((outVolts - 0.2).toFixed(2))];
+    return null;
+  };
 
   // 1. The supply chain: each supply takes its input from another supply's output (never in a
   //    loop); one that nothing on the bench can feed is a primary source with an outside input.
@@ -897,11 +1000,13 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
   };
   for (const s of supplies) {
     let chosen: { input: HardwarePin; source: RailSource; range: [number, number] } | null = null;
+    const out = s.outputs[0]?.volts ?? null;
     for (const input of s.inputs) {
-      const range = inputRange(s.board, input);
+      const range = supplyInputRange(s.board, input, out);
       if (!range) continue;
       const feeders = supplies.filter((o) => o !== s && !isUpstream(s.board.instanceId, o.board.instanceId)).flatMap((o) => o.outputs);
-      const source = pickSource(feeders, range);
+      // The bench's own input (battery, DC jack) first: a regulator is fed from the source, not from a sibling regulator.
+      const source = pickSource(feeders.filter((f) => f.outside), range) ?? pickSource(feeders, range);
       if (source) {
         chosen = { input, source, range };
         break;
@@ -921,56 +1026,98 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
           [chosen.source.pin.pin_id, chosen.input.pin_id]
         )
       );
-    } else {
-      const accepted = s.inputs
-        .map((pin) => {
-          const range = inputRange(s.board, pin);
-          return `${pin.pin_name}${range ? ` (${rangeText(range)})` : ''}`;
-        })
-        .join(' or ');
-      const listed = s.board.record.electrical.power_source_types;
-      peripheralRails.set(s.board.instanceId, null);
-      if (isPlaceholderEntity(s.board.entity)) {
-        // The bench's outside supply (e.g. a 12 V adapter), drawn so the first regulator's input is visible.
-        const v = Number(s.outputs[0]!.volts.toFixed(2));
-        results.push(
-          result('required_power_rail', 'WARNING', `${s.board.label} is the bench's outside supply: connect a ${v} V adapter or supply to it.`, [s.board.instanceId], [s.outputs[0]!.pin.pin_id])
-        );
-        continue;
-      }
+      continue;
+    }
+    peripheralRails.set(s.board.instanceId, null);
+    if (isOutsideSource(s.board)) {
+      // The supply the brief names (a 12 V adapter, a 2S LiPo): the bench's way in, by design.
+      const o = s.outputs[0]!;
       results.push(
         result(
           'required_power_rail',
-          'WARNING',
-          `${s.board.label} is the bench's power source: nothing on the bench feeds it, so connect ${accepted || 'its input'} from outside${listed.length > 0 ? ` (its record lists: ${listed.join(', ')})` : ''}.`,
+          'PASS',
+          kindOf(s.board) === 'BATTERY'
+            ? `${sourceText(o)} powers the bench${hasCharger ? '' : ': charge it before use'}.`
+            : `${s.board.label} is the bench's outside supply: connect a ${Number(o.volts.toFixed(2))} V adapter or supply to it.`,
           [s.board.instanceId],
-          s.inputs.map((pin) => pin.pin_id)
+          [o.pin.pin_id]
         )
       );
+      continue;
     }
+    // A converter the bench's own input cannot feed: say why (wrong range, or a boost on a higher voltage).
+    const outsideOut = supplies.filter((o) => o !== s && isOutsideSource(o.board)).flatMap((o) => o.outputs)[0];
+    const input = s.inputs[0];
+    const range = input ? supplyInputRange(s.board, input, out) : null;
+    if (outsideOut && input && range) {
+      const tooHigh = (outsideOut.range?.[1] ?? outsideOut.volts) > range[1];
+      results.push(
+        result(
+          'required_power_rail',
+          'BLOCKER',
+          isBoost(s.board) && out !== null && tooHigh
+            ? `${s.board.label} is a step-up (boost) converter: it needs less than its ${out} V output on ${input.pin_name}, but ${sourceText(outsideOut)} is above that, which would damage it.`
+            : `${s.board.label} ${input.pin_name} takes ${rangeText(range)}; ${sourceText(outsideOut)} is outside that range.`,
+          [s.board.instanceId, outsideOut.board.instanceId],
+          [input.pin_id],
+          tooHigh && out !== null
+            ? `Use a ${out} V step-down (buck) regulator rated for ${outsideOut.range ? `${outsideOut.range[1]}` : outsideOut.volts} V in${out === 5 ? ' (e.g. Pololu D24V22F5, 5.3–36 V in)' : ''}.`
+            : 'Use a regulator whose input range covers the supply.'
+        )
+      );
+      continue;
+    }
+    const accepted = s.inputs
+      .map((pin) => {
+        const r = inputRange(s.board, pin);
+        return `${pin.pin_name}${r ? ` (${rangeText(r)})` : ''}`;
+      })
+      .join(' or ');
+    const listed = s.board.record.electrical.power_source_types;
+    // A supply whose input is a plug (a USB-C breakout, a DC jack) is the bench's way in by design;
+    // one that needs a battery or a supply the bench does not show is reported.
+    const byConnector = s.inputs.length === 0 || (listed.some((t) => /usb|barrel|jack|wall|adapter|mains/i.test(t)) && !listed.some((t) => /batt|li-?po|li-?ion|solar/i.test(t)));
+    results.push(
+      result(
+        'required_power_rail',
+        byConnector ? 'PASS' : 'WARNING',
+        byConnector
+          ? `${s.board.label} is the bench's power source: plug ${listed.length > 0 ? listed.join(' / ') : 'its supply'} into it${accepted ? ` (${accepted})` : ''}.`
+          : `${s.board.label} is the bench's power source: nothing on the bench feeds it, so connect ${accepted || 'its input'} from outside${listed.length > 0 ? ` (its record lists: ${listed.join(', ')})` : ''}.`,
+        [s.board.instanceId],
+        s.inputs.map((pin) => pin.pin_id)
+      )
+    );
   }
   const supplyOutputs = supplies.flatMap((s) => s.outputs);
 
   // 2. The controller runs from a bench supply when one fits its power input.
+  let controllerFed = false;
   if (supplyOutputs.length > 0) {
     const rank = (pin: HardwarePin) => {
       const i = POWER_PIN_PREFERENCE.indexOf(pin.pin_name.toUpperCase());
       return i === -1 ? POWER_PIN_PREFERENCE.length : i;
     };
     const mcuInputs = mcu.record.pins.filter((pin) => pin.direction === 'power_in' && mcu.isWireable(pin.pin_id)).sort((a, b) => rank(a) - rank(b));
-    let powered = false;
-    for (const input of mcuInputs) {
+    // A regulated output on any input before the raw supply on any input: a Nucleo takes the buck's
+    // 5 V on E5V rather than 12 V straight into VIN, and a 3.3 V regulator the brief asks for is used.
+    const regulated = supplyOutputs.filter((s) => !s.outside);
+    const candidates = [
+      ...mcuInputs.map((input) => ({ input, pool: regulated })),
+      ...mcuInputs.map((input) => ({ input, pool: supplyOutputs })),
+    ];
+    for (const { input, pool } of candidates) {
       const range = inputRange(mcu, input);
-      const source = range ? pickSource(supplyOutputs, range) : null;
+      const source = range ? pickSource(pool, range) : null;
       if (!range || !source) continue;
       wireRail(source, mcu, input);
       results.push(
         result('required_power_rail', 'PASS', `${mcu.label} ${input.pin_name} (${rangeText(range)}) on ${sourceText(source)}.`, [mcu.instanceId, source.board.instanceId], [input.pin_id, source.pin.pin_id])
       );
-      powered = true;
+      controllerFed = true;
       break;
     }
-    if (!powered) {
+    if (!controllerFed) {
       const accepted = mcuInputs
         .map((pin) => {
           const range = inputRange(mcu, pin);
@@ -988,14 +1135,90 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       );
     }
   }
+  // A USB-powered controller passes USB 5 V out on its VBUS / 5V pin (Pico VBUS, DevKitC 5V), so
+  // 5 V modules can run from it. Not on a battery bench: there VBUS is live only while USB is in.
+  if (!controllerFed && !hasBattery) {
+    for (const pin of mcu.record.pins) {
+      if (pin.direction !== 'power_in' || !mcu.isWireable(pin.pin_id) || !/^(5V|VBUS|VUSB|USB|USB_5V)$/i.test(pin.pin_name.trim())) continue;
+      if ((parseVolts(pin.voltage_domain) ?? 5) !== 5) continue;
+      if (!controllerSources.some((s) => s.volts === 5)) controllerSources.push({ board: mcu, pin, volts: 5, key: mcuRailKey(5) });
+    }
+  }
 
-  // 3. Every other module: a fitting bench supply first, then a controller rail.
+  // 3. Chargers on a battery bench: BAT on the battery's own net, charged over the charger's input.
+  const batterySource = supplyOutputs.find((s) => kindOf(s.board) === 'BATTERY') ?? null;
+  const chargers = new Set<string>();
   for (const p of peripherals) {
     const board = boards.get(p.instanceId)!;
-    if (supplyIds.has(p.instanceId)) continue;
-    // A placeholder has no known supply: only a common ground (for its signals), never a guessed rail.
-    if (isPlaceholderEntity(p.entity)) {
-      if (p.links.length > 0) joinGround(board);
+    if (supplyIds.has(p.instanceId) || !batterySource || !isCharger(board)) continue;
+    const bat = board.record.pins.find((pin) => /^(BAT|BATT|VBAT|BAT\+|B\+|BATTERY)$/i.test(pin.pin_name.trim()) && board.isWireable(pin.pin_id));
+    if (!bat) continue;
+    chargers.add(p.instanceId);
+    joinGround(board);
+    const net = wireRail(batterySource, board, bat);
+    peripheralRails.set(p.instanceId, null);
+    const input = board.record.pins.find((pin) => pin.direction === 'power_in' && pin.pin_id !== bat.pin_id);
+    results.push(
+      result(
+        'required_power_rail',
+        'PASS',
+        `${board.label} charges ${batterySource.board.label}: ${bat.pin_name} on ${net}${input ? `; charge it through ${input.pin_name} (${board.record.electrical.power_source_types.join(', ') || 'its input'})` : ''}.`,
+        [p.instanceId, batterySource.board.instanceId],
+        [bat.pin_id]
+      )
+    );
+  }
+
+  /** A motor or load driver: its supply is the bench's own input (motor current), not the logic rail. */
+  const MOTOR_PAIRS: Array<[string, string]> = [
+    ['OUT1', 'OUT2'], ['OUT3', 'OUT4'], ['AO1', 'AO2'], ['BO1', 'BO2'], ['AOUT1', 'AOUT2'], ['BOUT1', 'BOUT2'],
+    ['MA+', 'MA-'], ['MB+', 'MB-'], ['M1A', 'M1B'], ['M2A', 'M2B'], ['M1+', 'M1-'], ['M2+', 'M2-'], ['MOTORA+', 'MOTORA-'], ['MOTORB+', 'MOTORB-'],
+    ['1A', '1B'], ['2A', '2B'], ['A1', 'A2'], ['B1', 'B2'], ['OUTA', 'OUTB'], ['OUT+', 'OUT-'],
+  ];
+  const squash = (name: string) => name.toUpperCase().replace(/[\s_]/g, '');
+  const motorPairs = (b: Board): Array<[HardwarePin, HardwarePin]> => {
+    if (isPlaceholderEntity(b.entity) || b === mcu) return [];
+    const byName = new Map(b.record.pins.filter((pin) => !isPowerPin(pin)).map((pin) => [squash(pin.pin_name), pin]));
+    const pairs: Array<[HardwarePin, HardwarePin]> = [];
+    for (const [a, z] of MOTOR_PAIRS) {
+      const pa = byName.get(a);
+      const pz = byName.get(z);
+      if (pa && pz && b.isWireable(pa.pin_id) && b.isWireable(pz.pin_id)) pairs.push([pa, pz]);
+    }
+    return pairs;
+  };
+  const isDriver = (b: Board) => motorPairs(b).length > 0;
+
+  /** Power for a placeholder: the controller's logic rail, or 12-24 V for a field-bus device; null when none fits. */
+  const placeholderSupply = (board: Board): string | null => {
+    const pin = board.record.pins.find((p) => p.direction === 'power_in' && board.isWireable(p.pin_id));
+    if (!pin) return null;
+    const all = [...supplyOutputs, ...controllerSources];
+    const stated = parseVolts(board.label);
+    const kind = kindOf(board);
+    const source =
+      stated !== null
+        ? (all.find((s) => Math.abs(s.volts - stated) < 0.3 || (s.range !== undefined && stated >= s.range[0] && stated <= s.range[1])) ?? null)
+        : kind === 'CAN' || kind === 'RS485'
+          ? ([...all].filter((s) => s.volts >= 9).sort((a, b) => b.volts - a.volts)[0] ?? null)
+          : pickSource(all, [mcuLogic - 0.2, mcuLogic + 0.2]);
+    if (!source) return null;
+    wireRail(source, board, pin);
+    return sourceText(source);
+  };
+
+  // 4. Every other module: a fitting bench supply first, then a controller rail.
+  for (const p of peripherals) {
+    const board = boards.get(p.instanceId)!;
+    if (supplyIds.has(p.instanceId) || chargers.has(p.instanceId)) continue;
+    const kind = kindOf(board);
+    // Motors and switched loads are wired to their driver or relay below.
+    if (kind === 'MOTOR' || kind === 'STEPPER' || kind === 'LOAD') continue;
+    // A placeholder has no known supply: its kind's usual rail, stated as an assumption in the
+    // placeholder summary (the tester: "placeholders get ground only, with no power").
+    if (isPlaceholderEntity(p.entity) && kind !== 'SERVO') {
+      joinGround(board);
+      placeholderRails.set(p.instanceId, placeholderSupply(board));
       peripheralRails.set(p.instanceId, null);
       continue;
     }
@@ -1042,7 +1265,7 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     }
     // Other self-powered boards (no rated output in the record) keep their own supply: feeding
     // them from a rail would be wrong. Their status signals (if linked) still need a common ground.
-    if (board.record.interfaces.host_requirement !== 'host_required') {
+    if (board.record.interfaces.host_requirement !== 'host_required' && !isDriver(board)) {
       if (p.links.length > 0) joinGround(board);
       results.push(
         result(
@@ -1082,11 +1305,8 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     }
     require(p.instanceId, powerPin);
 
-    // Supply range: the pin's own domain when numeric ("3V3"), else the record's supply range.
-    const pinVolts = parseVolts(powerPin.voltage_domain) ?? parseVolts(powerPin.pin_name);
-    const { supply_voltage_min_v: min, supply_voltage_max_v: max } = board.record.electrical;
-    const range: [number, number] | null =
-      pinVolts !== null ? [pinVolts - 0.2, pinVolts + 0.2] : min != null && max != null ? [min, max] : null;
+    // Supply range: the pin's own domain when numeric ("3V3"), else the record's rail for that pin, else its supply range.
+    const range = inputRange(board, powerPin);
 
     if (!range) {
       // Unstructured supply: wire nothing on a guess. UNKNOWN is never reported as a pass.
@@ -1107,20 +1327,25 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     // The rail closest to the controller's logic level wins, a bench supply before the controller's
     // own pin at the same voltage: a 3-5 V sensor on a 3.3 V controller runs from 3.3 V, so its
     // I/O matches the controller (the tester's 2026-10-15 report: sensors fed 5 V by the regulator
-    // while the controller's 3.3 V rail sat unused).
-    const source = pickSource([...supplyOutputs, ...controllerSources], range);
+    // while the controller's 3.3 V rail sat unused). A motor driver takes the bench's own input
+    // (motor current), else the highest rail it accepts.
+    const all = [...supplyOutputs, ...controllerSources];
+    const source = isDriver(board)
+      ? ([...all].filter((s) => fits(s, range)).sort((a, b) => Number(Boolean(b.outside)) - Number(Boolean(a.outside)) || b.volts - a.volts)[0] ?? null)
+      : pickSource(all, range);
     if (!source) {
-      const offered = [...supplyOutputs, ...controllerSources];
       results.push(
         result(
           'required_power_rail',
           'BLOCKER',
           `${board.label} needs ${range[0].toFixed(1)}–${range[1].toFixed(1)} V; ${
-            offered.length > 0 ? `the bench provides ${offered.map(sourceText).join(', ')}` : `${mcu.label} provides no wireable supply output`
+            all.length > 0 ? `the bench provides ${all.map(sourceText).join(', ')}` : `${mcu.label} provides no wireable supply output`
           }.`,
           [mcu.instanceId, p.instanceId],
           [powerPin.pin_id],
-          'Power it from a compatible supply or add a regulator.'
+          range[0] > 4 && all.every((s) => s.volts < range[0])
+            ? `Add a ${range[0] <= 5 && range[1] >= 5 ? '5 V' : `${range[0]}–${range[1]} V`} supply for it, or choose a version of the module that runs from ${mcuLogic} V.`
+            : 'Power it from a compatible supply or add a regulator.'
         )
       );
       peripheralRails.set(p.instanceId, null);
@@ -1132,11 +1357,163 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
       result(
         'required_power_rail',
         'PASS',
-        `${board.label} ${powerPin.pin_name} (${range[0].toFixed(1)}–${range[1].toFixed(1)} V) on ${source.board.label} ${source.pin.pin_name}.`,
+        `${board.label} ${powerPin.pin_name} (${range[0].toFixed(1)}–${range[1].toFixed(1)} V) on ${sourceText(source)}.`,
         [source.board.instanceId, p.instanceId],
         [powerPin.pin_id, source.pin.pin_id]
       )
     );
+  }
+
+  // --- motors and switched loads ------------------------------------------------------------------
+  // Each motor lands on a free driver output pair; a pump, fan or valve is switched by a relay
+  // (its supply on COM, NO to the load) or, failing that, by a free driver output.
+  const freePairs: Array<{ board: Board; pins: [HardwarePin, HardwarePin] }> = peripherals
+    .map((p) => boards.get(p.instanceId)!)
+    .flatMap((b) => motorPairs(b).map((pins) => ({ board: b, pins })));
+  const takePairs = (count: number): Array<{ board: Board; pins: [HardwarePin, HardwarePin] }> | null => {
+    // A stepper needs both its coils on one driver.
+    const byBoard = new Map<string, Array<{ board: Board; pins: [HardwarePin, HardwarePin] }>>();
+    for (const f of freePairs) byBoard.set(f.board.instanceId, [...(byBoard.get(f.board.instanceId) ?? []), f]);
+    const pick = [...byBoard.values()].find((list) => list.length >= count)?.slice(0, count) ?? null;
+    if (pick) for (const f of pick) freePairs.splice(freePairs.indexOf(f), 1);
+    return pick;
+  };
+  const wireLoadPair = (load: Board, loadPins: HardwarePin[], pair: { board: Board; pins: [HardwarePin, HardwarePin] }, netBase: string) => {
+    pair.pins.forEach((dp, i) => {
+      const name = `${netBase}_${i === 0 ? 'A' : 'B'}`;
+      nets.add(name, 'load', claim(pair.board, dp, true));
+      nets.add(name, 'load', claim(load, loadPins[i]!, true));
+    });
+    require(pair.board.instanceId, ...pair.pins);
+  };
+  const RELAY_COM = /^(COM|COM1|C)$/i;
+  const RELAY_NO = /^(NO|NO1|N\.O\.)$/i;
+  const usedRelays = new Set<string>();
+  for (const p of peripherals) {
+    const load = boards.get(p.instanceId)!;
+    const kind = kindOf(load);
+    if (kind === 'MOTOR' || kind === 'STEPPER') {
+      const coils = kind === 'STEPPER' ? 2 : 1;
+      const pairs = takePairs(coils);
+      if (!pairs) {
+        results.push(
+          result('required_host_interface', 'WARNING', `${load.label} has no free motor-driver output on the bench.`, [p.instanceId], [], `Add a motor driver${coils === 2 ? ' for a stepper (two H-bridges)' : ''}, or a second one for more motors.`)
+        );
+        continue;
+      }
+      const terminals = load.record.pins.filter((pin) => pin.signal_class === 'other');
+      pairs.forEach((pair, k) => wireLoadPair(load, terminals.slice(k * 2, k * 2 + 2), pair, `${p.instanceId.toUpperCase()}${coils === 2 ? (k === 0 ? '_COILA' : '_COILB') : ''}`));
+      results.push(
+        result(
+          'required_power_rail',
+          'PASS',
+          `${load.label} on ${pairs[0]!.board.label} ${pairs.map((x) => `${x.pins[0].pin_name}/${x.pins[1].pin_name}`).join(' + ')}.`,
+          [p.instanceId, pairs[0]!.board.instanceId]
+        )
+      );
+      continue;
+    }
+    if (kind !== 'LOAD') continue;
+    const plus = load.record.pins.find((pin) => pin.signal_class === 'other')!;
+    const relay = peripherals
+      .map((x) => boards.get(x.instanceId)!)
+      .find((b) => !usedRelays.has(b.instanceId) && !isPlaceholderEntity(b.entity) && b.record.pins.some((pin) => RELAY_COM.test(pin.pin_name.trim())) && b.record.pins.some((pin) => RELAY_NO.test(pin.pin_name.trim())));
+    if (relay) {
+      usedRelays.add(relay.instanceId);
+      const com = relay.record.pins.find((pin) => RELAY_COM.test(pin.pin_name.trim()))!;
+      const no = relay.record.pins.find((pin) => RELAY_NO.test(pin.pin_name.trim()))!;
+      const volts = parseVolts(load.label);
+      const all = [...supplyOutputs, ...controllerSources];
+      const supply =
+        (volts !== null ? all.find((s) => Math.abs(s.volts - volts) < 0.3 || (s.range !== undefined && volts >= s.range[0] && volts <= s.range[1])) : null) ??
+        (volts === null ? ([...supplyOutputs].filter((s) => s.outside).sort((a, b) => b.volts - a.volts)[0] ?? null) : null);
+      const switched = `${p.instanceId.toUpperCase()}_SW`;
+      nets.add(switched, 'load', claim(relay, no, true));
+      nets.add(switched, 'load', claim(load, plus, true));
+      require(relay.instanceId, no, com);
+      joinGround(load);
+      if (supply) {
+        const rail = railNameOf(supply);
+        nets.add(rail, 'power', claim(supply.board, supply.pin, false));
+        nets.add(rail, 'power', claim(relay, com, true));
+        results.push(
+          result('required_power_rail', 'PASS', `${load.label} switched by ${relay.label}: ${rail} on COM, NO to the ${load.label.replace(/^\d+(?:\.\d+)? V /, '')} +, − to GND.`, [p.instanceId, relay.instanceId, supply.board.instanceId], [com.pin_id, no.pin_id])
+        );
+      } else {
+        results.push(
+          result(
+            'required_power_rail',
+            'WARNING',
+            `${load.label} is switched by ${relay.label}, but the bench has no ${volts !== null ? `${volts} V ` : ''}supply for it.`,
+            [p.instanceId, relay.instanceId],
+            [com.pin_id],
+            `Connect a ${volts !== null ? `${volts} V ` : ''}supply to the relay's COM terminal.`
+          )
+        );
+      }
+      continue;
+    }
+    const pairs = takePairs(1);
+    if (pairs) {
+      wireLoadPair(load, [plus, load.record.pins.find((pin) => pin.direction === 'ground')!], pairs[0]!, p.instanceId.toUpperCase());
+      results.push(result('required_power_rail', 'PASS', `${load.label} driven by ${pairs[0]!.board.label} ${pairs[0]!.pins.map((x) => x.pin_name).join('/')}.`, [p.instanceId, pairs[0]!.board.instanceId]));
+      continue;
+    }
+    results.push(
+      result('required_host_interface', 'WARNING', `Nothing on the bench switches the ${load.label}.`, [p.instanceId], [], 'Add a relay or MOSFET module rated for it.')
+    );
+  }
+
+  // --- I2C addresses ------------------------------------------------------------------------------
+  // Every device on the shared bus gets its own address: the chip's datasheet addresses (reference
+  // table), fixed-address devices first, and a device that has to move is strapped to its
+  // alternate when its address pin is on the header.
+  const i2cAddresses = new Map<string, I2cAssignment>();
+  const i2cDevices = peripherals.filter((p) => linked.get(p.instanceId)?.has('I2C') && !isPlaceholderEntity(p.entity));
+  const addressFacts = new Map(i2cDevices.map((p) => [p.instanceId, addressesFor(p.entity.record)]));
+  const strapPinOf = (p: AllocInstance): HardwarePin | null => {
+    const f = addressFacts.get(p.instanceId);
+    const board = boards.get(p.instanceId)!;
+    return f?.strap ? (board.record.pins.find((pin) => f.strap!.pin.test(pin.pin_name.trim()) && board.isHeaderWireable(pin.pin_id) && !nets.hasMember(p.instanceId, pin.pin_id)) ?? null) : null;
+  };
+  const order = [...i2cDevices].sort(
+    (a, b) => (addressFacts.get(a.instanceId)?.addresses.length ?? 99) - (addressFacts.get(b.instanceId)?.addresses.length ?? 99) || Number(Boolean(strapPinOf(a))) - Number(Boolean(strapPinOf(b)))
+  );
+  const takenAddress = new Map<string, string>();
+  for (const p of order) {
+    const f = addressFacts.get(p.instanceId);
+    if (!f) {
+      i2cAddresses.set(p.instanceId, { address: null, chip: null, options: [], moved: false, strap: null, clashWith: [] });
+      continue;
+    }
+    const choice = f.addresses.find((a) => !takenAddress.has(a));
+    if (!choice) {
+      i2cAddresses.set(p.instanceId, { address: f.addresses[0]!, chip: f.chip, options: f.addresses, moved: false, strap: null, clashWith: f.addresses.map((a) => takenAddress.get(a)!).filter(Boolean) });
+      continue;
+    }
+    takenAddress.set(choice, p.instanceId);
+    const moved = choice !== f.addresses[0];
+    let strap: I2cAssignment['strap'] = null;
+    const level = moved ? f.strap?.levels[choice] : undefined;
+    if (moved && level) {
+      const board = boards.get(p.instanceId)!;
+      const pin = strapPinOf(p);
+      let wired = false;
+      if (pin && level === 'GND' && mcuGround) {
+        nets.add('GND', 'ground', claim(mcu, mcuGround, false));
+        nets.add('GND', 'ground', claim(board, pin, true));
+        wired = true;
+      } else if (pin && level === 'VCC') {
+        const rail = nets.list().find((n) => n.class === 'power' && n.members.some((m) => m.instanceId === p.instanceId && board.pinsById.get(m.pinId)?.direction === 'power_in'));
+        if (rail) {
+          nets.add(rail.name, 'power', claim(board, pin, true));
+          wired = true;
+        }
+      }
+      if (wired && pin) require(p.instanceId, pin);
+      strap = { pin: pin?.pin_name ?? null, level, wired };
+    }
+    i2cAddresses.set(p.instanceId, { address: choice, chip: f.chip, options: f.addresses, moved, strap, clashWith: [] });
   }
 
   // --- jumper wires: every member of a net runs to the net's hub ----------------------------------
@@ -1209,5 +1586,7 @@ export function allocatePins(controller: AllocInstance, peripherals: AllocInstan
     peripheralRails,
     linked,
     requiredPins,
+    i2cAddresses,
+    placeholderRails,
   };
 }

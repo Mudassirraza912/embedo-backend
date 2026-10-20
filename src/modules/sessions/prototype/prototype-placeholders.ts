@@ -23,8 +23,19 @@ export const PLACEHOLDER_PREFIX = 'PLACEHOLDER-';
 /** LibraryEntity.recordOrigin of a placeholder (never a stored record origin). */
 export const PLACEHOLDER_ORIGIN = 'placeholder';
 
-export const PLACEHOLDER_KINDS = ['I2C', 'SPI', 'UART', 'GPIO', 'ANALOG', 'PWM', 'CAN', 'CANXCVR', 'RS485', 'RS485XCVR', 'DCIN', 'NONE'] as const;
+export const PLACEHOLDER_KINDS = [
+  'I2C', 'SPI', 'UART', 'GPIO', 'ANALOG', 'PWM', 'CAN', 'CANXCVR', 'RS485', 'RS485XCVR', 'DCIN', 'NONE',
+  'BATTERY', 'MOTOR', 'STEPPER', 'LOAD', 'SERVO',
+] as const;
 export type PlaceholderKind = (typeof PLACEHOLDER_KINDS)[number];
+
+/**
+ * Off-board parts the brief names (the supply, a battery, motors, a pump, servos). They are drawn
+ * and wired like boards but are not modules to buy from the library: real parts the engineer
+ * brings, shown as "Outside part" rather than "Choose a part".
+ */
+export const OUTSIDE_KINDS: ReadonlySet<PlaceholderKind> = new Set(['DCIN', 'BATTERY', 'MOTOR', 'STEPPER', 'LOAD', 'SERVO']);
+export const isOutsideKind = (kind: PlaceholderKind | null | undefined): boolean => kind != null && OUTSIDE_KINDS.has(kind);
 
 interface KindDef {
   /** How the placeholder links to the controller (or its field bus); null = not linked. */
@@ -69,7 +80,39 @@ const KINDS: Record<PlaceholderKind, KindDef> = {
   // An outside supply feeding the bench's first regulator (e.g. a 12 V adapter); volts from its name.
   DCIN: { link: null, label: 'outside supply', pins: [{ name: '+V', cls: 'power', dir: 'power_out', domain: null }, GND], interfaces: [] },
   NONE: { link: null, label: '', pins: [power('VIN'), GND], interfaces: [] },
+  // A battery pack: a supply whose range (empty to full) comes from its name ("7.4 V 2S LiPo").
+  BATTERY: { link: null, label: 'Battery', pins: [{ name: 'BAT+', cls: 'power', dir: 'power_out', domain: null }, { ...GND, name: 'BAT-' }], interfaces: [] },
+  // Loads: their terminals land on a driver's outputs or a relay's contacts, never on the controller.
+  MOTOR: { link: null, label: 'DC motor', pins: [sig('M+', 'bidirectional', 'other'), sig('M-', 'bidirectional', 'other')], interfaces: [] },
+  STEPPER: {
+    link: null,
+    label: 'Stepper motor',
+    pins: [sig('A+', 'bidirectional', 'other'), sig('A-', 'bidirectional', 'other'), sig('B+', 'bidirectional', 'other'), sig('B-', 'bidirectional', 'other')],
+    interfaces: [],
+  },
+  LOAD: { link: null, label: 'Load', pins: [sig('LOAD+', 'input', 'other'), { ...GND, name: 'LOAD-' }], interfaces: [] },
+  SERVO: { link: 'PWM', linkPin: 'SIG', label: 'Servo', pins: [power('V+'), GND, sig('SIG', 'input')], interfaces: [] },
 };
+
+/** Battery chemistry ranges per cell, empty to full. */
+const CELL_RANGE: Array<[RegExp, number, [number, number]]> = [
+  [/lifepo4|lfp/i, 3.2, [2.5, 3.65]],
+  [/li-?po|li-?ion|lithium|18650/i, 3.7, [3.0, 4.2]],
+  [/nimh|nicd/i, 1.2, [1.0, 1.45]],
+  [/alkaline|\baa\b|\baaa\b/i, 1.5, [0.9, 1.6]],
+];
+
+/** A battery's voltage range from its label ("7.4 V 2S LiPo battery" → 6.0-8.4 V); null when unknown. */
+export function batteryRangeOf(label: string): [number, number] | null {
+  const volts = voltsIn(label);
+  const cells = Number(/\b(\d)\s*S(?:\d+P)?\b/i.exec(label)?.[1] ?? NaN);
+  const chem = CELL_RANGE.find(([re]) => re.test(label));
+  if (chem) {
+    const n = Number.isFinite(cells) ? cells : volts !== null ? Math.max(1, Math.round(volts / chem[1])) : 1;
+    return [Number((chem[2][0] * n).toFixed(2)), Number((chem[2][1] * n).toFixed(2))];
+  }
+  return volts !== null ? [Number((volts * 0.85).toFixed(2)), Number((volts * 1.15).toFixed(2))] : null;
+}
 
 const TRANSCEIVER = /transceiver|xcvr|\bphy\b|line driver|interface (?:board|module)|to ttl|ttl to/i;
 const CAN_TEXT = /\bcan ?open\b|\bcan[ -]?(?:bus|fd|2\.0|node|interface|controller|transceiver|sensor|device)\b|\bcan\b(?= *\(|$)/i;
@@ -135,31 +178,39 @@ export function placeholderEntity(hardwareEntityId: string, name: string): Libra
   if (!kind) return null;
   const def = KINDS[kind];
   const label = cleanName(name);
-  const volts = kind === 'DCIN' ? voltsIn(label) : null;
-  const pins = def.pins.map((p) => (kind === 'DCIN' && p.dir === 'power_out' ? { ...p, domain: volts !== null ? `${volts}V` : null } : p));
+  const outside = isOutsideKind(kind);
+  const battery = kind === 'BATTERY' ? batteryRangeOf(label) : null;
+  const volts = kind === 'DCIN' || kind === 'LOAD' ? voltsIn(label) : kind === 'BATTERY' ? (voltsIn(label) ?? (battery ? Number(((battery[0] + battery[1]) / 2).toFixed(1)) : null)) : null;
+  const pins = def.pins.map((p) => ((kind === 'DCIN' || kind === 'BATTERY') && p.dir === 'power_out' ? { ...p, domain: volts !== null ? `${volts}V` : null } : p));
+  // Hobby servos run from 4.8-6 V; a battery reports its empty-to-full range.
+  const supply: [number | null, number | null] = kind === 'SERVO' ? [4.8, 6] : battery ? battery : [null, null];
   const board: BoardDef = {
     id: hardwareEntityId,
     family: 'FAM-PLACEHOLDER',
     name: label,
-    vendor: 'Placeholder',
+    vendor: outside ? 'Outside part' : 'Placeholder',
     sku: null,
-    group: 'Placeholder',
-    categories: [kind === 'DCIN' ? 'Power' : 'Interface'],
-    role: 'Placeholder',
-    silicon: def.label ? `Placeholder · ${def.label}` : 'Placeholder',
+    group: outside ? 'Outside part' : 'Placeholder',
+    categories: [kind === 'DCIN' || kind === 'BATTERY' ? 'Power' : kind === 'MOTOR' || kind === 'STEPPER' || kind === 'LOAD' || kind === 'SERVO' ? 'Motor/Actuation' : 'Interface'],
+    role: outside ? 'Outside part' : 'Placeholder',
+    silicon: outside ? def.label || 'Outside part' : def.label ? `Placeholder · ${def.label}` : 'Placeholder',
     secondary: [],
-    hostRequirement: kind === 'DCIN' || kind === 'NONE' ? 'optional_host' : 'host_required',
+    hostRequirement: kind === 'SERVO' ? 'host_required' : outside || kind === 'NONE' ? 'optional_host' : 'host_required',
     requiredHostInterfaces: def.link && kind !== 'CAN' && kind !== 'RS485' ? [def.link] : [],
-    supply: [null, null],
+    supply,
     logic: 'not specified',
-    powerSources: kind === 'DCIN' ? ['external'] : [],
-    rails: [],
+    powerSources: kind === 'DCIN' || kind === 'BATTERY' ? ['external'] : [],
+    rails: kind === 'SERVO' ? [{ rail_name: 'V+', voltage_min_v: 4.8, voltage_max_v: 6 }] : [],
     pins,
     connectors: [{ ref: 'J1', type: `pin_header_1x${pins.length}_2.54mm`, mode: 'individual_contacts', edge: 'bottom', contacts: pins.map((p, i) => [String(i + 1), p.name]) }],
     interfaces: def.interfaces,
     ecosystem: [],
     sources: [],
-    notes: ['Placeholder: not a real part. Choose a module for this need; its pins and supply here are generic.'],
+    notes: [
+      outside
+        ? 'Outside part named in the brief: supplied by you, not a library module. Its terminals are generic.'
+        : 'Placeholder: not a real part. Choose a module for this need; its pins and supply here are generic.',
+    ],
   };
   const record = hardwareRecordSchema.parse(
     buildRecord(board, {

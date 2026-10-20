@@ -19,7 +19,7 @@ import { HardwareRecord } from './hardware.schema.js';
 export const BENCH_ART_VERSION = 'bench-2';
 
 type Edge = 'left' | 'right' | 'top' | 'bottom';
-export type BenchKind = 'mcu' | 'display' | 'relay' | 'gps' | 'storage' | 'sensor' | 'chip' | 'placeholder';
+export type BenchKind = 'mcu' | 'display' | 'relay' | 'gps' | 'storage' | 'sensor' | 'chip' | 'placeholder' | 'outside';
 
 export interface BenchArt {
   svg: string;
@@ -112,6 +112,8 @@ export function benchKind(record: HardwareRecord, isController: boolean): BenchK
   const id = record.identity;
   // A labelled stand-in for a module the library does not have (prototype-placeholders.ts).
   if (id.group === 'Placeholder') return 'placeholder';
+  // An off-board part the brief names (battery, motor, pump, DC input): drawn as the part, not a board.
+  if (id.group === 'Outside part') return 'outside';
   const text = [id.product_name, id.group, ...(id.functional_categories ?? []), id.prototype_role ?? '', id.main_silicon ?? ''].join(' ').toLowerCase();
   if (isController || /controller board|main controller|microcontroller/.test(text)) return 'mcu';
   if (/oled|lcd|tft|display|e-?ink|e-?paper|screen/.test(text)) return 'display';
@@ -131,6 +133,7 @@ const FEATURE_SIZE: Record<BenchKind, [number, number]> = {
   sensor: [110, 76],
   chip: [104, 76],
   placeholder: [170, 64],
+  outside: [170, 64],
 };
 
 const stripParen = (s: string) => s.replace(/\s*\(.*\)\s*$/, '').trim();
@@ -202,7 +205,7 @@ function renderWithPalette(record: HardwareRecord, isController: boolean): Bench
   const ifaces = [...new Set(record.interfaces.interfaces.map((i) => i.type.toUpperCase()).filter((t) => ['I2C', 'SPI', 'UART', 'I2S', 'CAN', 'RS485', 'USB'].includes(t)))]
     .map((t) => (t === 'I2C' ? 'I²C' : t === 'RS485' ? 'RS-485' : t))
     .slice(0, 2);
-  const subtitleParts = kind === 'mcu' ? [silicon, id.vendor] : kind === 'placeholder' ? [silicon] : [silicon, ...(ifaces.length > 0 ? ifaces : [id.vendor])];
+  const subtitleParts = kind === 'mcu' ? [silicon, id.vendor] : kind === 'placeholder' || kind === 'outside' ? [silicon] : [silicon, ...(ifaces.length > 0 ? ifaces : [id.vendor])];
   const subtitle = subtitleParts.filter(Boolean).join(' · ');
   const title = id.product_name;
 
@@ -259,8 +262,8 @@ function renderWithPalette(record: HardwareRecord, isController: boolean): Bench
   // --- board -----------------------------------------------------------------------------------------
   out.push(`<g id="${g('board')}">`);
   out.push(`<rect x="${x0 - 3}" y="${y0 - 3}" width="${bw + 6}" height="${bh + 6}" rx="17" fill="none" stroke="${C.cyan}" stroke-opacity="0.07" stroke-width="6"/>`);
-  const placeholder = kind === 'placeholder';
-  // A placeholder is not a board: dashed outline, no sheen, no mount holes.
+  const placeholder = kind === 'placeholder' || kind === 'outside';
+  // A placeholder (or an outside part) is not a board: dashed outline, no sheen, no mount holes.
   out.push(
     `<rect x="${x0}" y="${y0}" width="${bw}" height="${bh}" rx="14" fill="url(#${g('pcb')})" fill-opacity="${placeholder ? 0.55 : 1}" stroke="${C.edge}" stroke-opacity="${placeholder ? 0.95 : 0.75}" stroke-width="1.6"${placeholder ? ' stroke-dasharray="9 6"' : ''}/>`
   );
@@ -451,6 +454,29 @@ function feature(kind: BenchKind, cx: number, cy: number, w: number, h: number, 
       out.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="8" fill="none" stroke="${C.silk}" stroke-opacity="0.6" stroke-width="1.4" stroke-dasharray="5 4"/>`);
       out.push(`<text x="${cx}" y="${cy - 3}" fill="${C.text}" font-family="${SANS}" font-size="12.5" font-weight="700" text-anchor="middle" letter-spacing="1.4">PLACEHOLDER</text>`);
       out.push(`<text x="${cx}" y="${cy + 14}" fill="${C.sub}" font-family="${MONO}" font-size="10.5" text-anchor="middle">Choose a part</text>`);
+      break;
+    }
+    case 'outside': {
+      // The part itself, by what it is: a battery pack, a motor, a DC plug, or a generic load.
+      const name = `${record.identity.product_name} ${record.identity.main_silicon ?? ''}`.toLowerCase();
+      const ix = x + 14;
+      if (/battery/.test(name)) {
+        out.push(`<rect x="${ix}" y="${cy - 16}" width="52" height="32" rx="5" fill="${C.inner}" stroke="${C.silk}" stroke-opacity="0.8" stroke-width="1.6"/>`);
+        out.push(`<rect x="${ix + 52}" y="${cy - 7}" width="6" height="14" rx="2" fill="${C.silk}" fill-opacity="0.8"/>`);
+        out.push(`<text x="${ix + 26}" y="${cy + 5}" fill="${C.power}" font-family="${MONO}" font-size="13" font-weight="700" text-anchor="middle">+ −</text>`);
+      } else if (/motor|servo|stepper/.test(name)) {
+        out.push(`<circle cx="${ix + 26}" cy="${cy}" r="20" fill="${C.inner}" stroke="${C.silk}" stroke-opacity="0.8" stroke-width="1.6"/>`);
+        out.push(`<text x="${ix + 26}" y="${cy + 6}" fill="${C.text}" font-family="${SANS}" font-size="17" font-weight="700" text-anchor="middle">M</text>`);
+      } else if (/dc input|supply|adapter/.test(name)) {
+        out.push(`<rect x="${ix}" y="${cy - 12}" width="40" height="24" rx="6" fill="${C.inner}" stroke="${C.silk}" stroke-opacity="0.8" stroke-width="1.6"/>`);
+        out.push(`<circle cx="${ix + 20}" cy="${cy}" r="6" fill="none" stroke="${C.power}" stroke-width="2"/>`);
+        out.push(`<line x1="${ix + 40}" y1="${cy}" x2="${ix + 56}" y2="${cy}" stroke="${C.silk}" stroke-opacity="0.8" stroke-width="3"/>`);
+      } else {
+        out.push(`<circle cx="${ix + 26}" cy="${cy}" r="20" fill="${C.inner}" stroke="${C.silk}" stroke-opacity="0.8" stroke-width="1.6"/>`);
+        out.push(`<path d="M${ix + 14} ${cy}q6 -10 12 0t12 0" fill="none" stroke="${C.cyan}" stroke-width="2.2"/>`);
+      }
+      out.push(`<text x="${ix + 72}" y="${cy - 3}" fill="${C.text}" font-family="${SANS}" font-size="12" font-weight="700" letter-spacing="1.2">OUTSIDE PART</text>`);
+      out.push(`<text x="${ix + 72}" y="${cy + 13}" fill="${C.sub}" font-family="${MONO}" font-size="10.5">Off-board, you supply it</text>`);
       break;
     }
     case 'sensor': {

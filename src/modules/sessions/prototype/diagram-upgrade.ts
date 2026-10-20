@@ -4,7 +4,7 @@ import { hardwareLibraryService, LibraryEntity } from '../../hardware/hardware-l
 import { benchSvgRef } from './prototype-assembler.js';
 import { LAYOUT_VERSION, layoutPrototype } from './prototype-layout.js';
 import { isPrototypeArchitecture, PrototypeArchitecture } from './prototype.types.js';
-import { isPlaceholderId, withPlaceholderEntities } from './prototype-placeholders.js';
+import { isOutsideKind, isPlaceholderId, PlaceholderKind, withPlaceholderEntities } from './prototype-placeholders.js';
 
 /**
  * Prototype payloads are normalised when served (nothing is written back to the database):
@@ -45,8 +45,12 @@ export function upgradeWithEntities<T>(value: T, libraryEntities: Map<string, Li
         anchors: art?.anchors ?? new Map(),
         inset: art?.inset ?? 0,
         edges: art?.edges,
-        badge: null,
-        outsideSupply: i.placeholder?.kind === 'DCIN',
+        // I2C address badges are kept; library review badges (before 2026-10-14) are dropped.
+        badge: (() => {
+          const kept = a.moduleDiagram?.modules?.find((m) => m.instanceId === i.instanceId)?.badge;
+          return kept && /I²C/.test(kept) ? kept : null;
+        })(),
+        outsideSupply: isOutsideKind(i.placeholder?.kind as PlaceholderKind | undefined),
       };
     }),
     nets: a.nets,
@@ -87,7 +91,7 @@ export function scrubReviewState<T>(value: T): T {
   const moduleDiagram = d
     ? {
         ...d,
-        modules: d.modules.map((m) => (m.badge ? { ...m, badge: null } : m)),
+        modules: d.modules.map((m) => (m.badge && !/I²C/.test(m.badge) ? { ...m, badge: null } : m)),
         wires: d.wires.map((w) => (w.dashed && !w.blocked ? { ...w, dashed: false } : w)),
         ...(d.buses
           ? {

@@ -1,8 +1,9 @@
 import { HardwarePin } from '../../hardware/hardware.schema.js';
+import { isFiveVoltTolerant, logicInputFor } from '../../hardware/reference/logic-inputs.js';
 import { Board, parseVolts } from './prototype-board.js';
 import { AllocationResult, AllocInstance } from './prototype-allocator.js';
 import { CompatibilityResult, RuleStatus } from './prototype.types.js';
-import { isPlaceholderEntity, placeholderKindOf } from './prototype-placeholders.js';
+import { isOutsideKind, isPlaceholderEntity, placeholderKindOf } from './prototype-placeholders.js';
 
 /**
  * Composition-wide rules that need the finished net list (truth file §10, plan D5 step 5).
@@ -42,72 +43,74 @@ export function evaluateCompatibility(controller: AllocInstance, allPeripherals:
   const out: CompatibilityResult[] = [];
   // Placeholders have generic pins and no facts: they are wired for the protocol design but never
   // checked as if they were parts. One summary result says what they are.
-  // The outside supply ("12 V DC input") is drawn as a block but is not a missing module.
-  const placeholders = allPeripherals.filter((p) => isPlaceholderEntity(p.entity) && placeholderKindOf(p.entity.hardwareEntityId) !== 'DCIN');
+  // Outside parts (the 12 V input, a battery, motors, a pump) are drawn as blocks but are not missing modules.
+  const placeholders = allPeripherals.filter((p) => isPlaceholderEntity(p.entity) && !isOutsideKind(placeholderKindOf(p.entity.hardwareEntityId)));
   const peripherals = allPeripherals.filter((p) => !isPlaceholderEntity(p.entity));
   const mcu = new Board(controller.instanceId, controller.entity);
   const boards = new Map<string, Board>([[mcu.instanceId, mcu], ...allPeripherals.map((p) => [p.instanceId, new Board(p.instanceId, p.entity)] as const)]);
   const pinOf = (instanceId: string, pinId: string): HardwarePin | undefined => boards.get(instanceId)?.pinsById.get(pinId);
 
-  // bus_address_conflict — every I2C device on the shared bus needs its own address.
+  // bus_address_conflict — every I2C device on the shared bus needs its own address. The allocator
+  // gave each one an address from its chip's datasheet set (moving one to its alternate, and
+  // strapping it when its address pin is on the header); this reports what it did.
   const onBus = peripherals.filter((p) => allocation.linked.get(p.instanceId)?.has('I2C'));
   if (onBus.length > 0) {
-    const byAddress = new Map<string, Array<{ p: AllocInstance; alternates: string[]; altNote: string | null }>>();
-    const unknown: AllocInstance[] = [];
+    const label = (id: string) => boards.get(id)?.label ?? id;
+    const busPinsOf = (ids: Set<string>) =>
+      allocation.nets.filter((n) => n.class === 'i2c').flatMap((n) => n.members.filter((m) => ids.has(m.instanceId)).map((m) => m.pinId));
+    let clashes = 0;
+    let unknown = 0;
     for (const p of onBus) {
-      const iface = p.entity.record.interfaces.interfaces.find((i) => /I2C|STEMMA|QWIIC/i.test(i.type) && i.addresses.length > 0);
-      const details = (iface?.details ?? {}) as Record<string, unknown>;
-      const address = typeof details['default_address'] === 'string' ? details['default_address'] : iface?.addresses[0];
-      if (!address) {
-        unknown.push(p);
+      const a = allocation.i2cAddresses.get(p.instanceId);
+      if (!a || a.address === null) {
+        unknown += 1;
+        out.push(make('bus_address_conflict', 'UNKNOWN', `${label(p.instanceId)} has no I2C address in its record.`, [p.instanceId], [], "Check the address in the board's documentation."));
         continue;
       }
-      const key = address.toLowerCase();
-      const list = byAddress.get(key) ?? [];
-      list.push({
-        p,
-        alternates: (iface?.addresses ?? []).filter((a) => a.toLowerCase() !== key),
-        altNote: typeof details['alt_address'] === 'string' ? details['alt_address'] : null,
+      if (a.clashWith.length > 0) {
+        clashes += 1;
+        const ids = new Set([p.instanceId, ...a.clashWith]);
+        out.push(
+          make(
+            'bus_address_conflict',
+            'BLOCKER',
+            `${label(p.instanceId)} can only use ${a.options.join(' or ')}, and ${a.clashWith.map(label).join(', ')} already ${a.clashWith.length === 1 ? 'uses' : 'use'} ${a.options.length === 1 ? 'it' : 'them'}.`,
+            [...ids],
+            [...new Set(busPinsOf(ids))],
+            'Add an I2C multiplexer (e.g. TCA9548A) or put one of them on a second I2C bus.'
+          )
+        );
+        continue;
+      }
+      if (a.moved && a.strap && !a.strap.wired) {
+        out.push(
+          make(
+            'bus_address_conflict',
+            'WARNING',
+            `Set ${label(p.instanceId)} to ${a.address}: its default ${a.options[0]} is taken on the bus.`,
+            [p.instanceId],
+            [],
+            `Tie its ${a.strap.pin ?? 'address'} pin to ${a.strap.level === 'GND' ? 'GND' : 'its supply'} (or close its address jumper) for ${a.address}.`
+          )
+        );
+      } else if (a.moved && !a.strap) {
+        out.push(
+          make('bus_address_conflict', 'WARNING', `Set ${label(p.instanceId)} to ${a.address}: its default ${a.options[0]} is taken on the bus.`, [p.instanceId], [], "Select the alternate address as the board's documentation describes.")
+        );
+      }
+    }
+    if (clashes === 0 && unknown === 0) {
+      const entries = onBus.map((p) => {
+        const a = allocation.i2cAddresses.get(p.instanceId)!;
+        return `${a.address} ${label(p.instanceId)}${a.moved && a.strap?.wired ? ` (${a.strap.pin} to ${a.strap.level === 'GND' ? 'GND' : 'V+'})` : ''}`;
       });
-      byAddress.set(key, list);
-    }
-    for (const [address, devices] of byAddress) {
-      if (devices.length < 2) continue;
-      const movable = devices.find((d) => d.alternates.length > 0);
-      // The clashing devices' bus pins, so their pin rows and links show the conflict.
-      const ids = new Set(devices.map((d) => d.p.instanceId));
-      const busPins = allocation.nets
-        .filter((n) => n.class === 'i2c')
-        .flatMap((n) => n.members.filter((m) => ids.has(m.instanceId)).map((m) => m.pinId));
-      out.push(
-        make(
-          'bus_address_conflict',
-          'BLOCKER',
-          `${devices.length} devices share I2C address ${address}: ${devices.map((d) => d.p.instanceId).join(', ')}.`,
-          [...ids],
-          [...new Set(busPins)],
-          movable
-            ? `Set ${movable.p.instanceId} to ${movable.alternates[0]}${movable.altNote ? ` (${movable.altNote})` : ''}, or add an I2C multiplexer.`
-            : 'Add an I2C multiplexer (e.g. TCA9548A) — these boards have no alternate address.'
-        )
-      );
-    }
-    for (const p of unknown) {
-      out.push(make('bus_address_conflict', 'UNKNOWN', `${p.entity.record.identity.product_name} has no I2C address in its record.`, [p.instanceId]));
-    }
-    if (![...byAddress.values()].some((d) => d.length > 1) && unknown.length === 0) {
-      out.push(
-        make(
-          'bus_address_conflict',
-          'PASS',
-          `I2C bus: ${[...byAddress.entries()].map(([a, d]) => `${a} (${d[0]!.p.instanceId})`).join(', ')}.`,
-          onBus.map((p) => p.instanceId)
-        )
-      );
+      out.push(make('bus_address_conflict', 'PASS', `I2C bus, every address unique: ${entries.join(', ')}.`, onBus.map((p) => p.instanceId)));
     }
   }
 
-  // logic_voltage_compatibility — signal pins on one net must share a logic level.
+  // logic_voltage_compatibility — every signal must be read correctly in its direction. A 3.3 V
+  // controller drives a 5 V module whose inputs are TTL level (L298N: high above 2.3 V); a 5 V
+  // output into the controller needs a 5 V tolerant pin, a divider or a level shifter.
   const mcuLogic = mcu.logicVolts();
   for (const p of peripherals) {
     const board = boards.get(p.instanceId)!;
@@ -115,39 +118,108 @@ export function evaluateCompatibility(controller: AllocInstance, allPeripherals:
     const rail = allocation.peripheralRails.get(p.instanceId) ?? null;
     let checked = 0;
     let failed = 0;
+    const notes = new Set<string>();
     for (const net of allocation.nets) {
       if (!SIGNAL_CLASSES.has(net.class)) continue;
       const mine = net.members.filter((m) => m.instanceId === p.instanceId);
       const hub = net.members.find((m) => m.instanceId === mcu.instanceId);
       if (mine.length === 0 || !hub) continue;
-      const hubVolts = parseVolts(pinOf(hub.instanceId, hub.pinId)?.voltage_domain) ?? mcuLogic;
+      const hubPin = pinOf(hub.instanceId, hub.pinId);
+      const hubVolts = parseVolts(hubPin?.voltage_domain) ?? mcuLogic;
+      const hubTolerant = isFiveVoltTolerant(hubPin?.voltage_domain);
       for (const m of mine) {
         checked += 1;
-        if (shifted) continue;
+        const pin = pinOf(m.instanceId, m.pinId);
+        const declared = parseVolts(pin?.voltage_domain);
         // A domain like "VIN" means the pin follows the module's supply.
-        const volts = parseVolts(pinOf(m.instanceId, m.pinId)?.voltage_domain) ?? rail;
+        const volts = declared ?? rail;
+        const direction = pin?.direction === 'input' ? 'in' : pin?.direction === 'output' ? 'out' : 'both';
         if (volts === null) {
+          if (shifted) continue;
           out.push(make('logic_voltage_compatibility', 'UNKNOWN', `${board.label} ${m.pinName} has no known logic level.`, [p.instanceId], [m.pinId]));
           failed += 1;
-        } else if (Math.abs(volts - hubVolts) > 0.3) {
+          continue;
+        }
+        if (Math.abs(volts - hubVolts) <= 0.3) continue;
+        // On-board level shifting covers the pin unless the record says it drives a fixed higher level.
+        if (shifted && !(direction === 'out' && declared !== null && volts > hubVolts && !hubTolerant)) continue;
+        const pair = `${board.label} ${m.pinName} (${volts} V) and ${mcu.label} ${hub.pinName} (${hubVolts} V)`;
+        if (volts > hubVolts && direction === 'in') {
+          // The controller drives a higher-voltage input: fine when the part reads its logic high low enough.
+          const input = logicInputFor(board.record, m.pinName);
+          if (input?.kind === 'ttl' && input.vih !== undefined && input.vih <= hubVolts - 0.5) {
+            notes.add(`${input.note}, so ${hubVolts} V drives ${m.pinName}`);
+            continue;
+          }
+          if (input?.kind === 'relay') {
+            out.push(
+              make(
+                'logic_voltage_compatibility',
+                'WARNING',
+                `${board.label} ${m.pinName} is a ${volts} V relay input driven at ${hubVolts} V by ${mcu.label} ${hub.pinName}: ${input.note}, so it may not switch reliably.`,
+                [p.instanceId, mcu.instanceId],
+                [m.pinId, hub.pinId],
+                `Use a relay board rated for ${hubVolts} V logic, or drive ${m.pinName} through an NPN transistor (e.g. 2N2222 with a 1 kΩ base resistor).`
+              )
+            );
+            failed += 1;
+            continue;
+          }
+          out.push(
+            input?.kind === 'cmos5'
+              ? make('logic_voltage_compatibility', 'BLOCKER', `${pair}: ${input.note}, so ${hubVolts} V is not a valid high.`, [p.instanceId, mcu.instanceId], [m.pinId, hub.pinId], `Buffer ${m.pinName} with a 74AHCT125 powered from ${volts} V.`)
+              : make(
+                  'logic_voltage_compatibility',
+                  'UNKNOWN',
+                  `${pair}: the record does not give ${m.pinName}'s input-high threshold, so it is unverified whether ${hubVolts} V reads as high.`,
+                  [p.instanceId, mcu.instanceId],
+                  [m.pinId, hub.pinId],
+                  `Check ${m.pinName}'s input-high voltage (VIH) in the datasheet; above ${(hubVolts - 0.5).toFixed(1)} V it needs a 74AHCT125 buffer.`
+                )
+          );
+          failed += 1;
+          continue;
+        }
+        if (volts > hubVolts && direction === 'out') {
+          if (hubTolerant) {
+            notes.add(`${mcu.label} ${hub.pinName} is 5 V tolerant, so it takes ${m.pinName}'s ${volts} V output`);
+            continue;
+          }
           out.push(
             make(
               'logic_voltage_compatibility',
               'BLOCKER',
-              `${board.label} ${m.pinName} (${volts} V) and ${mcu.label} ${hub.pinName} (${hubVolts} V) use different logic levels.`,
+              `${pair}: ${m.pinName} drives ${volts} V into a ${hubVolts} V controller pin that is not 5 V tolerant.`,
               [p.instanceId, mcu.instanceId],
               [m.pinId, hub.pinId],
-              'Add a bidirectional level shifter between them, or power the module from the controller logic rail.'
+              `Add a voltage divider on ${m.pinName} (e.g. 10 kΩ in series, 20 kΩ to GND) or a level shifter, or power the module from ${hubVolts} V if it supports it.`
             )
           );
           failed += 1;
+          continue;
         }
+        if (volts < hubVolts && direction === 'out' && volts >= 0.6 * hubVolts) {
+          notes.add(`${mcu.label} reads ${m.pinName}'s ${volts} V output as high`);
+          continue;
+        }
+        out.push(
+          make(
+            'logic_voltage_compatibility',
+            'BLOCKER',
+            `${pair} use different logic levels.`,
+            [p.instanceId, mcu.instanceId],
+            [m.pinId, hub.pinId],
+            direction === 'both'
+              ? 'Add a bidirectional level shifter (BSS138-based, e.g. Adafruit 757), or power the module from the controller logic rail.'
+              : `Add a level shifter or voltage divider on ${m.pinName}, or power the module from the controller logic rail.`
+          )
+        );
+        failed += 1;
       }
     }
     if (checked > 0 && failed === 0) {
-      out.push(
-        make('logic_voltage_compatibility', 'PASS', `${board.label} signals match ${mcu.label} (${shifted ? 'level shifted on board' : `${mcuLogic} V`}).`, [p.instanceId, mcu.instanceId])
-      );
+      const how = notes.size > 0 ? [...notes].join('; ') : shifted ? 'level shifted on board' : `${mcuLogic} V`;
+      out.push(make('logic_voltage_compatibility', 'PASS', `${board.label} signals match ${mcu.label} (${how}).`, [p.instanceId, mcu.instanceId]));
     }
   }
 
@@ -183,7 +255,10 @@ export function evaluateCompatibility(controller: AllocInstance, allPeripherals:
   for (const net of allocation.nets) {
     if (net.class === 'ground') continue;
     const directions = net.members.map((m) => ({ m, dir: pinOf(m.instanceId, m.pinId)?.direction }));
-    const supplies = directions.filter((d) => d.dir === 'power_out');
+    // On the battery's net a charger's BAT terminal charges the battery: it is not a second supply.
+    const isBattery = (id: string) => placeholderKindOf(boards.get(id)?.entity.hardwareEntityId ?? '') === 'BATTERY';
+    const batteryNet = net.members.some((m) => isBattery(m.instanceId));
+    const supplies = directions.filter((d) => d.dir === 'power_out' && (!batteryNet || isBattery(d.m.instanceId)));
     // Shared bus lines are driven by one device at a time by design: SPI MISO (tri-state, chip
     // select picks the driver), I2C (open drain), CAN and RS-485 pairs (bus arbitration / half
     // duplex). Two outputs there are not a conflict (a 3-device SPI bus used to fail this check).
@@ -242,16 +317,23 @@ export function evaluateCompatibility(controller: AllocInstance, allPeripherals:
   }
 
   if (placeholders.length > 0) {
+    // Power is wired from each placeholder's usual rail (logic rail, or 12-24 V for a field device): an assumption until a part is chosen.
+    const rails = new Map<string, string[]>();
+    for (const p of placeholders) {
+      const rail = allocation.placeholderRails.get(p.instanceId) ?? 'not wired (no suitable supply on the bench)';
+      rails.set(rail, [...(rails.get(rail) ?? []), p.entity.record.identity.product_name]);
+    }
+    const power = [...rails.entries()].map(([rail, names]) => `${names.length === placeholders.length ? 'all' : names.join(', ')} on ${rail}`).join('; ');
     out.push(
       make(
         'placeholder_module',
         'WARNING',
         `${placeholders.length} block${placeholders.length === 1 ? ' is a placeholder' : 's are placeholders'} (no matching module in the library): ${placeholders
           .map((p) => p.entity.record.identity.product_name)
-          .join(', ')}. Their pins are generic and their power is not wired.`,
+          .join(', ')}. Their pins are generic; power is wired as a starting point (${power}).`,
         placeholders.map((p) => p.instanceId),
         [],
-        'Choose a real module for each placeholder; its supply and pins are then wired and checked from its record.'
+        "Choose a real module for each placeholder; its supply and pins are then wired and checked from its record."
       )
     );
   }
@@ -263,6 +345,8 @@ export function evaluateCompatibility(controller: AllocInstance, allPeripherals:
     for (const accessory of instance.entity.record.dependencies.required_accessories) {
       const name = accessoryName(accessory);
       if (NOT_AN_ACCESSORY.test(name)) continue;
+      // A STEMMA QT / Qwiic cable for a board whose I2C is wired: the bench already has that cable or adapter (Source lists it).
+      if (/stemma|qwiic|\bqt\b|jst[- ]?sh/i.test(name) && allocation.linked.get(instance.instanceId)?.has('I2C')) continue;
       out.push(
         make(
           'dependency_presence',

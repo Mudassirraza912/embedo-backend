@@ -139,20 +139,19 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
     expect(unreviewed.connections.map((c) => c.state)).toEqual(p.connections.map((c) => c.state));
     expect(unreviewed.connections.every((c) => c.state === 'drawn')).toBe(true);
     expect(unreviewed.moduleDiagram.wires.every((w) => !w.dashed)).toBe(true);
-    expect(unreviewed.moduleDiagram.modules.every((m) => m.badge === null)).toBe(true);
+    // The only badges are I2C addresses, never review status.
+    expect(unreviewed.moduleDiagram.modules.every((m) => m.badge === null || /^I²C 0x[0-9A-F]{2}$/.test(m.badge))).toBe(true);
     expect(unreviewed.moduleDiagram.legendCard?.dashedNote).toBe(false);
     expect(assemblePrototype(composition, entities, options).stateHash).toBe(assemblePrototype(composition, entities, options).stateHash);
   });
 
   it('marks an I2C address clash as a conflict on the pin rows and blocks those links', () => {
+    // Three BME280s: two take 0x77 and 0x76, the third has no address left.
     const p = assemblePrototype(
       {
         kind: 'prototype_composition',
         controller: { instanceId: 'mcu', hardwareEntityId: FIXTURE_IDS.qtPy },
-        modules: [
-          { instanceId: 'bme1', hardwareEntityId: FIXTURE_IDS.bme280, role: '', links: [{ interface: 'I2C' }] },
-          { instanceId: 'bme2', hardwareEntityId: FIXTURE_IDS.bme280, role: '', links: [{ interface: 'I2C' }] },
-        ],
+        modules: ['bme1', 'bme2', 'bme3'].map((instanceId) => ({ instanceId, hardwareEntityId: FIXTURE_IDS.bme280, role: '', links: [{ interface: 'I2C' as const }] })),
         gaps: [],
       },
       entities,
@@ -160,7 +159,9 @@ describe('prototype payload: module diagram, pin list and hardware library', () 
     );
     expect(p.compatibility.counts.BLOCKER).toBe(1);
     expect(p.pinList.summary.conflict).toBeGreaterThan(0);
-    expect(p.connections.every((c) => c.state === 'blocked')).toBe(true);
+    expect(p.connections.some((c) => c.state === 'blocked')).toBe(true);
+    // Each device shows its address on the diagram.
+    expect(p.moduleDiagram.modules.filter((m) => m.badge?.startsWith('I²C')).map((m) => m.badge).sort()).toEqual(['I²C 0x76', 'I²C 0x77', 'I²C 0x77']);
   });
 
   it('exports a standalone SVG with per-instance id prefixes', () => {

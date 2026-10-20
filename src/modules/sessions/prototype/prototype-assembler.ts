@@ -1,8 +1,10 @@
 import crypto from 'node:crypto';
 import { LibraryEntity } from '../../hardware/hardware-library.service.js';
-import { allocatePins, AllocInstance, inputRange } from './prototype-allocator.js';
+import { allocatePins, AllocInstance, I2cAssignment, inputRange } from './prototype-allocator.js';
 import { Board, parseVolts } from './prototype-board.js';
+import { OutsidePartSpec, outsidePartsOf } from './prototype-outside-parts.js';
 import {
+  isOutsideKind,
   isPlaceholderEntity,
   isPlaceholderId,
   PlaceholderKind,
@@ -44,12 +46,15 @@ export interface AssembleOptions {
    * bench that nothing else can feed is then drawn fed from a "12 V DC input" block.
    */
   externalSupplyVolts?: number | null;
+  /** The brief's own words: the battery, motors, servos and loads it names are drawn as outside parts. */
+  brief?: string;
 }
 
 /** The outside supply a brief states: "12V input", "24 V DC supply", "powered from 12V". */
 export function externalSupplyVoltsOf(text: string): number | null {
+  // A battery is its own outside part (prototype-outside-parts.ts), not a DC input.
   const m =
-    /(\d+(?:\.\d+)?)\s*v(?:dc)?\b\s*(?:dc\s*)?(?:input|in\b|supply|adapter|power(?:\s+input)?|battery|feed)/i.exec(text) ??
+    /(\d+(?:\.\d+)?)\s*v(?:dc)?\b\s*(?:dc\s*)?(?:input|in\b|supply|adapter|power(?:\s+input)?|feed)/i.exec(text) ??
     /(?:input|supply|powered\s+(?:from|by)|fed\s+(?:from|by))\s*(?:of|at|from)?\s*(\d+(?:\.\d+)?)\s*v\b/i.exec(text);
   const v = m ? Number(m[1]) : NaN;
   return Number.isFinite(v) && v >= 3 && v <= 60 ? v : null;
@@ -70,6 +75,7 @@ const PLACEHOLDER_WORDS: Array<[RegExp, string]> = [
 const KIND_WORD: Record<PlaceholderKind, string> = {
   I2C: 'i2c_dev', SPI: 'spi_dev', UART: 'serial', GPIO: 'io', ANALOG: 'analog', PWM: 'pwm',
   CAN: 'can_dev', CANXCVR: 'can_xcvr', RS485: 'modbus', RS485XCVR: 'rs485_xcvr', DCIN: 'dcin', NONE: 'module',
+  BATTERY: 'battery', MOTOR: 'motor', STEPPER: 'stepper', LOAD: 'load', SERVO: 'servo',
 };
 
 /**
@@ -92,6 +98,18 @@ function placeholderInstanceId(gap: { need: string; suggestion: string }, kind: 
   return id;
 }
 
+
+/**
+ * A module's label with its chip when the product name does not say it: "Monochrome 0.96" 128x64
+ * OLED Graphic Display (SSD1306)". The tester could not tell which display driver a generic OLED
+ * board used.
+ */
+function withChipName(entity: LibraryEntity): string {
+  const name = entity.record.identity.product_name;
+  const chip = (entity.record.identity.main_silicon ?? '').replace(/\s*\(.*\)\s*$/, '').trim().split(/\s+/).pop() ?? '';
+  const partNumber = /^[A-Z]{1,6}-?\d[A-Z0-9-]{1,12}$/i.test(chip);
+  return partNumber && !name.toUpperCase().includes(chip.toUpperCase()) ? `${name} (${chip})` : name;
+}
 
 /** Where the frontend loads a board's bench art from (hash = cache key). */
 export function benchSvgRef(art: BenchArt, hardwareEntityId: string, isController: boolean, svgBasePath: string, label?: string): PrototypeSvgRef {
@@ -133,7 +151,7 @@ export function assemblePrototype(
   const toInstance = (instanceId: string, entity: LibraryEntity, role: string | null, isController: boolean): PrototypeInstance => ({
     instanceId,
     hardwareEntityId: entity.hardwareEntityId,
-    label: entity.record.identity.product_name,
+    label: isController || isPlaceholderEntity(entity) ? entity.record.identity.product_name : withChipName(entity),
     role,
     isController,
     reviewStatus: entity.reviewStatus,
@@ -205,6 +223,38 @@ export function assemblePrototype(
     }
   }
 
+  // Outside parts the brief names (battery, motors, servos, pump): drawn and wired to what drives
+  // them, unless a placed board already is that part.
+  if (controllerEntity && options.brief) {
+    const placedText = libraryModules.map((m) => entities.get(m.hardwareEntityId)!.record.identity.product_name.toLowerCase()).join(' | ');
+    const alreadyPlaced = (spec: OutsidePartSpec) =>
+      spec.kind === 'BATTERY'
+        ? /battery|li-?po|li-?ion|18650/.test(placedText) && libraryModules.some((m) => /battery|li-?po|li-?ion|18650/i.test(entities.get(m.hardwareEntityId)!.record.identity.product_name) && !/charg/i.test(entities.get(m.hardwareEntityId)!.record.identity.product_name))
+        : spec.kind === 'LOAD'
+          ? new RegExp(`\\b${spec.stem}\\b`).test(placedText)
+          : spec.kind === 'SERVO'
+            ? /\bservo\b(?!.*(?:driver|controller|hat))/.test(placedText)
+            : /\b(?:dc|gear|stepper) motor\b(?!.*(?:driver|controller|shield))/.test(placedText);
+    for (const spec of outsidePartsOf(options.brief)) {
+      if (alreadyPlaced(spec)) continue;
+      let n = 1;
+      while (taken.has(`${spec.stem}${n}`)) n++;
+      const instanceId = `${spec.stem}${n}`;
+      taken.add(instanceId);
+      const entity = placeholderEntity(placeholderId(spec.kind, instanceId), spec.label);
+      if (!entity) continue;
+      allEntities.set(entity.hardwareEntityId, entity);
+      placeholderModules.push({
+        instanceId,
+        hardwareEntityId: entity.hardwareEntityId,
+        role: 'Outside part named in the brief',
+        links: placeholderLinks(spec.kind),
+        kind: spec.kind,
+        gap: { gapId: '', category: spec.kind === 'BATTERY' ? 'Power' : 'Motor/Actuation', need: spec.label, suggestion: '' },
+      });
+    }
+  }
+
   const modules = [...libraryModules, ...placeholderModules];
   const instances: PrototypeInstance[] = [];
   if (controllerEntity && composition.controller) {
@@ -229,6 +279,7 @@ export function assemblePrototype(
   let connections: PrototypeConnection[] = [];
   let results: CompatibilityResult[] = [];
   let requiredPins = new Map<string, Set<string>>();
+  let i2cAddresses = new Map<string, I2cAssignment>();
 
   if (controllerEntity && composition.controller) {
     const controller: AllocInstance = { instanceId: composition.controller.instanceId, entity: controllerEntity, links: [] };
@@ -254,6 +305,7 @@ export function assemblePrototype(
     }
     nets = allocation.nets;
     requiredPins = allocation.requiredPins;
+    i2cAddresses = allocation.i2cAddresses;
 
     const failing = results.filter((r) => r.status === 'BLOCKER' || r.status === 'UNKNOWN');
     const pinsOf = (c: (typeof allocation.connections)[number]): Set<string> => {
@@ -294,8 +346,9 @@ export function assemblePrototype(
         anchors: art.anchors,
         inset: art.inset,
         edges: art.edges,
-        badge: null,
-        outsideSupply: i.placeholder?.kind === 'DCIN',
+        // Each I2C device's address on the shared bus, so the bus can be read off the diagram.
+        badge: i2cAddresses.get(i.instanceId)?.address ? `I²C ${i2cAddresses.get(i.instanceId)!.address}` : null,
+        outsideSupply: isOutsideKind(i.placeholder?.kind as PlaceholderKind | undefined),
       };
     }),
     nets,

@@ -17,7 +17,8 @@ export const PROTOTYPE_SCHEMA_VERSION = '1.0';
 export const LINK_INTERFACES = ['I2C', 'SPI', 'UART', 'GPIO', 'ANALOG', 'PWM', 'CAN', 'RS485'] as const;
 export type LinkInterface = (typeof LINK_INTERFACES)[number];
 
-export type NetClass = 'power' | 'ground' | 'i2c' | 'spi' | 'uart' | 'can' | 'rs485' | 'gpio' | 'analog' | 'pwm';
+/** "load": a motor's or pump's terminals on its driver or relay (carries load current, not logic). */
+export type NetClass = 'power' | 'ground' | 'i2c' | 'spi' | 'uart' | 'can' | 'rs485' | 'gpio' | 'analog' | 'pwm' | 'load';
 export type RuleStatus = 'PASS' | 'WARNING' | 'BLOCKER' | 'UNKNOWN';
 /** drawn = shown as a wire; proposed = mapping shown but a board awaits wiring review; blocked = a rule failed. */
 export type ConnectionState = 'drawn' | 'proposed' | 'blocked';

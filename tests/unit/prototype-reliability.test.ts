@@ -278,7 +278,8 @@ describe('checks summary: counts come from check records, review status never sh
 
     const clean = scrubReviewState(old);
     expect(clean.connections.every((c) => c.state === 'drawn')).toBe(true);
-    expect(clean.moduleDiagram.modules.every((m) => m.badge === null)).toBe(true);
+    // Review badges are gone; only I2C address badges remain.
+    expect(clean.moduleDiagram.modules.every((m) => m.badge === null || /^I²C 0x[0-9A-F]{2}$/.test(m.badge))).toBe(true);
     expect(clean.moduleDiagram.wires.every((w) => !w.dashed)).toBe(true);
     expect(clean.moduleDiagram.legendCard!.dashedNote).toBe(false);
     expect(clean.pinList.rows.some((r) => r.status === 'proposed' || r.note === 'awaiting wiring review')).toBe(false);
