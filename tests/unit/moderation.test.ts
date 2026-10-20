@@ -147,6 +147,21 @@ describe('Governance & Safety Moderation Service', () => {
     );
     expect(result.allowed).toBe(true);
   });
+
+  it('allows short conversational follow-ups without calling Tier 3 domain classifier (add all of these)', async () => {
+    tier3Spy.mockClear();
+    const res1 = await moderationService.screenText('add all of these', { anonIdentifier: 'test-ip' });
+    expect(res1.allowed).toBe(true);
+    expect(tier3Spy).not.toHaveBeenCalled();
+
+    const res2 = await moderationService.screenText('add 30 more module', { anonIdentifier: 'test-ip' });
+    expect(res2.allowed).toBe(true);
+    expect(tier3Spy).not.toHaveBeenCalled();
+
+    const res3 = await moderationService.screenText('recommend some module', { anonIdentifier: 'test-ip' });
+    expect(res3.allowed).toBe(true);
+    expect(tier3Spy).not.toHaveBeenCalled();
+  });
 });
 
 describe('tier 3 classifier output parsing', () => {

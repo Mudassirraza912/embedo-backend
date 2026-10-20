@@ -44,9 +44,31 @@ Classify whether the user's request asks for hardware whose primary purpose is c
 - skimmers, cloners, lock/alarm bypass devices, or tools intended for theft or unauthorized access
 - hardware to cause physical harm or evade law enforcement
 
-Legitimate engineering language is NOT harmful: "kill switch", "tamper detection", "lock controller", "RFID reader", "intrusion alarm", "motor driver", "security camera", "signal generator", "RF module", "jam detection". Only flag clear, intentional misuse.
+MANDATORY RULES:
+1. Conversational commands, design iterations, follow-ups, and instructions (e.g. "add all of these", "add these", "add recommended modules", "recommend some module", "add 30 more modules", "proceed", "yes", "implement this", "make changes", "update design") are standard user interactions and MUST NEVER be flagged as harmful or illegal.
+2. Standard industrial, environmental, automotive, medical, agricultural, and IoT sensors/modules (gas/air quality sensors such as MQ-2/MQ-7/MQ-135, particulate sensors, humidity/temp sensors like DHT22/BME280/SHT40, optical/magnetic rotary encoders, Hall effect limit sensors, PID controllers, motor drivers, relays, solenoids, load cells, CAN/RS-485 transceivers, battery management ICs) are normal engineering components and MUST NEVER be flagged.
+3. Legitimate engineering language is NOT harmful: "kill switch", "tamper detection", "lock controller", "RFID reader", "intrusion alarm", "motor driver", "security camera", "signal generator", "RF module", "jam detection". Only flag clear, intentional, undeniable misuse.
 
 Respond ONLY with JSON: {"flagged": boolean, "category": string, "reason": string}. Keep "reason" under 25 words.`;
+
+/**
+ * Detects short conversational follow-ups (e.g. "add all of these", "proceed", "yes please",
+ * "recommend some module", "add 30 more modules"). These are conversational commands that refer
+ * to previous context and never constitute standalone hardware misuse. Skipping Tier 3 eliminates
+ * out-of-context classifier hallucinations and saves ~1.5s per turn.
+ */
+export function isBenignConversationalFollowUp(text: string): boolean {
+  const trimmed = text.trim();
+  const words = trimmed.split(/\s+/);
+  if (words.length <= 12 && trimmed.length <= 80) {
+    const SUSPICIOUS_PATTERN =
+      /\b(bomb|weapon|gun|missile|explosiv|detonat|ied|jammer|jamming|disrupt|skimmer|cloner|wiretap|eavesdrop|spy|surveillance|hack|bypass|tamper|theft|lethal|deauth|attack)\b/i;
+    if (!SUSPICIOUS_PATTERN.test(trimmed)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Three-tier governance:
@@ -83,6 +105,9 @@ export class ModerationService {
 
   private async checkTier3(text: string, sessionId?: string): Promise<{ flagged: boolean; category?: string; reason?: string } | null> {
     if (!env.MODERATION_TIER3_ENABLED) return null;
+    if (isBenignConversationalFollowUp(text)) {
+      return { flagged: false, category: 'none', reason: '' };
+    }
     try {
       const result = await aiRouterService.executeTask({
         taskCase: 'M',

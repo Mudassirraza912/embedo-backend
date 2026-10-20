@@ -129,7 +129,9 @@ export async function buildCanonicalDesignGraph(
   /** Present for refinements: the design being revised and every change it already contains. */
   revision?: { baseline: unknown; appliedChanges: string[] },
   /** Suggestions the user was shown last time — offer fresh ideas instead of the same chips again. */
-  avoidSuggestions: string[] = []
+  avoidSuggestions: string[] = [],
+  /** Recent assistant context/recommendations for resolving referential follow-ups (e.g. "add all of these") */
+  recentAssistantContext?: string
 ): Promise<{ graph: CanonicalDesignGraph; rawResponse: string }> {
   const systemPrompt = `You are Sol, the lead embedded systems architect at Embedo.ai.
 Your goal is to synthesize a production-grade, electrically consistent Canonical Design Graph for an embedded hardware system based on user specifications.
@@ -247,8 +249,9 @@ CRITICAL HARDWARE RULES:
       * Differential signals swing symmetrically positive and negative relative to bus lines (A vs B).
       * NEVER use a single N-channel MOSFET (such as 2N7002 or BSS138) to switch the 120 Ω termination resistor directly! The MOSFET's intrinsic body diode conducts whenever the line voltage dips below source/drain, severely clipping differential RS-485/CAN logic levels and corrupting data packets.
       * MANDATE a bidirectional Solid-State Relay (PhotoMOS / Opto-MOSFET, e.g. Panasonic AQY212GS, IXYS CPC1017N) or an ultra-miniature telecommunication signal relay (e.g. Kemet EC2-3NU, Omron G6K-2F). Bidirectional PhotoMOS uses dual back-to-back MOSFETs to block both AC polarities when OFF, presenting zero body diode clipping and >100 MΩ OFF isolation.
-24. Architecture Scope, Granularity & Token Economy (MANDATORY):
-    - Synthesize a clean functional block diagram containing primary ICs and major functional subsystems (typically 7 to 12 nodes total, e.g. Power Input/Protection, Primary Buck/Boost Regulator, Isolated DC-DC if isolated, MCU/Controller, Analog Front-End / Sensors, Transceiver/Radio, Actuation/Switches, UI/Indicators).
+24. Architecture Scope, Scalability & Granularity:
+    - Synthesize a comprehensive, production-grade functional block diagram containing primary ICs and major functional subsystems.
+    - Scalability & Multi-Module Requests: When the user requests to add multiple modules or sensors, or expand into complex industrial setups (e.g. "add 30 more modules", "add all of these", "include 10 recommended sensors"), you MUST expand the architecture fully to accommodate all requested components (adding sensor channels, motor drivers, communication ICs, IO expanders such as MCP23017 or I2C multiplexers like TCA9548A if pins/addresses require, power regulators, and BOM lines). Do NOT artificially clamp or omit requested modules. For typical compact requests, 7 to 14 nodes is standard, but for rich multi-module or expanded systems, expand up to 20-35+ nodes as demanded by the engineer's requirements.
     - DO NOT decompose individual jellybean passive components (0402 bypass capacitors, pull-up resistors, burden resistors, voltage divider resistors) or individual TVS diodes into separate standalone graph nodes. Integrate them into the matching functional block's description or BOM.
     - Node rationale: EXACTLY 1-2 concise sentences (<= 30 words). Focus directly on part selection and key electrical justification.
     - Node sublabel: Concise 2-4 words (e.g. '3.3V 1A Synchronous Buck', 'Isolated RS-485 Transceiver').
@@ -259,6 +262,11 @@ CRITICAL HARDWARE RULES:
 
   const userPrompt = `Synthesize the Canonical Design Graph for the following hardware intent:
 ${JSON.stringify(intent, null, 2)}
+${
+  recentAssistantContext
+    ? `\nRECENT ASSISTANT RECOMMENDATIONS / CONTEXT (use this to resolve referential follow-ups like "add all of these", "these", "recommended modules", etc.):\n${recentAssistantContext}\n`
+    : ''
+}
 
 ${
   revision
