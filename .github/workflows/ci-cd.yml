@@ -48,6 +48,7 @@ jobs:
       REDIS_URL: redis://localhost:6379
       JWT_ACCESS_SECRET: ci-only-access-secret-that-is-at-least-32-chars-long
       CORS_ORIGIN: http://localhost:5173
+      GOOGLE_CLIENT_ID: mock-google-client-id-for-ci
     steps:
       - uses: actions/checkout@v4
         with:
