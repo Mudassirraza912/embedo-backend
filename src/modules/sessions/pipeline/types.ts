@@ -182,6 +182,9 @@ export interface ValidationSummary {
   checked?: boolean;
   rulesChecked?: number;
   coverage?: number;
+  scope?: string;
+  lastChecked?: string;
+  ruleVersion?: string;
   errorCount: number;
   warningCount: number;
   issues: Array<{

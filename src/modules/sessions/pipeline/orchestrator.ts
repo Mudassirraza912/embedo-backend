@@ -479,26 +479,58 @@ export async function runGenerationPipeline(
     recordStep('rendering', 'Rendering', 'running');
     emitSessionEvent.stageUpdate(sessionId, { step: 6, label: 'Projecting functional, power & protocol diagrams', progress: 90 });
 
+    const deriveDomain = (code: string, message: string) => {
+      const c = (code || '').toUpperCase();
+      const m = (message || '').toLowerCase();
+      if (c.includes('CELLULAR') || c.includes('MODEM') || c.includes('LORA') || c.includes('RADIO')) return 'cellular';
+      if (c.includes('UART') || c.includes('RS485') || c.includes('CAN') || c.includes('SPI') || c.includes('I2C') || c.includes('USB') || c.includes('INTERFACE') || c.includes('DISCONNECTED')) return 'interfaces';
+      if (c.includes('POWER') || c.includes('BUCK') || c.includes('VOLTAGE') || c.includes('RAIL') || c.includes('DCDC') || c.includes('BATTERY') || c.includes('CAPACITOR') || c.includes('CURRENT') || m.includes('power') || m.includes('rail')) return 'power';
+      if (c.includes('MCU') || c.includes('CONTROLLER') || c.includes('PIN')) return 'mcu';
+      if (c.includes('CLOCK') || c.includes('CRYSTAL') || c.includes('EXTREME_COLD')) return 'clock';
+      return 'compatibility';
+    };
+
+    const deriveViews = (domain: string) => {
+      switch (domain) {
+        case 'power':
+        case 'cellular':
+          return ['Power Tree', 'FBD', 'Components'];
+        case 'interfaces':
+        case 'compatibility':
+          return ['FBD', 'Protocol Map', 'Components'];
+        case 'mcu':
+        case 'clock':
+        default:
+          return ['FBD', 'Components'];
+      }
+    };
+
     const projectedArchitecture = projectArchitecture(finalizedGraph);
     projectedArchitecture.validation = {
       isValid: validation.isValid,
       checked: true,
       rulesChecked: 14,
       coverage: 100,
+      scope: 'Architecture electrical & protocol topology',
+      lastChecked: new Date().toISOString(),
+      ruleVersion: '1.4',
       errorCount: validation.issues.filter((i) => i.severity === 'error').length,
       warningCount: validation.issues.filter((i) => i.severity === 'warning').length,
-      issues: validation.issues.map((i, idx) => ({
-        id: `drc-${idx + 1}-${i.code.toLowerCase().replace(/_/g, '-')}`,
-        code: i.code,
-        severity: i.severity === 'error' ? 'critical' : 'warning',
-        category: i.severity === 'error' ? 'compatibility' : 'interfaces',
-        domain: i.severity === 'error' ? 'compatibility' : 'interfaces',
-        title: i.code.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()),
-        message: i.message,
-        recommendation: i.message,
-        affectedViews: ['FBD', 'Power Tree', 'Components'],
-        nodeId: i.nodeId,
-      })),
+      issues: validation.issues.map((i, idx) => {
+        const domain = deriveDomain(i.code, i.message);
+        return {
+          id: `drc-${idx + 1}-${i.code.toLowerCase().replace(/_/g, '-')}`,
+          code: i.code,
+          severity: i.severity === 'error' ? 'critical' : 'warning',
+          category: domain,
+          domain: domain,
+          title: i.code.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase()),
+          message: i.message,
+          recommendation: i.message,
+          affectedViews: deriveViews(domain),
+          nodeId: i.nodeId,
+        };
+      }),
     };
     recordStep('rendering', 'Rendering', 'completed');
 
@@ -538,6 +570,10 @@ export async function runGenerationPipeline(
 
     const versionCard = (tag: string) => ({
         content: `✨ **Hardware Architecture Synthesized (${tag})**\n\n- **Controller**: ${projectedArchitecture.projectMeta.controller}\n- **Tagline**: ${projectedArchitecture.projectMeta.tagline}\n- **Total BOM Components**: ${projectedArchitecture.bom.length}\n- **Diagrams Generated**: Functional Block, Power Tree, Protocol Map${
+          validation.issues.length > 0
+            ? `\n- **Validation Checks**: ${validation.issues.filter((i) => i.severity === 'error').length} critical, ${validation.issues.filter((i) => i.severity === 'warning').length} review warnings`
+            : '\n- **Validation Checks**: 14/14 automated checks passed (100% coverage)'
+        }${
           warningCount > 0 ? `\n- **Auto-repairs applied**: ${warningCount}` : ''
         }`,
         metadata: {
