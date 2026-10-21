@@ -131,6 +131,8 @@ jobs:
             IdentitiesOnly yes
             StrictHostKeyChecking yes
             ServerAliveInterval 30
+            ConnectTimeout 60
+            ConnectionAttempts 5
           EOF
 
       - name: Upload source to ${{ env.APP_DIR }}.incoming
