@@ -32,7 +32,25 @@ export const createApp = (): Express => {
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
 
-  const allowedOrigins = env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean);
+  const explicitOrigins = env.CORS_ORIGIN.split(',').map((o) => o.trim()).filter(Boolean);
+  const corsOriginValidator = (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+    if (!origin) return callback(null, true);
+    if (explicitOrigins.includes(origin)) return callback(null, true);
+    try {
+      const url = new URL(origin);
+      if (
+        url.hostname === 'embedo.ai' ||
+        url.hostname.endsWith('.embedo.ai') ||
+        url.hostname === 'localhost' ||
+        url.hostname === '127.0.0.1'
+      ) {
+        return callback(null, true);
+      }
+    } catch {
+      // invalid origin URL
+    }
+    return callback(new Error(`Origin ${origin} not allowed by CORS`));
+  };
 
   // Security & standard middlewares
   app.use(
@@ -41,7 +59,7 @@ export const createApp = (): Express => {
       contentSecurityPolicy: env.NODE_ENV === 'production' ? undefined : false,
     })
   );
-  app.use(cors({ origin: allowedOrigins, credentials: true, exposedHeaders: ['X-Embedo-Version', 'X-Request-Id'] }));
+  app.use(cors({ origin: corsOriginValidator, credentials: true, exposedHeaders: ['X-Embedo-Version', 'X-Request-Id'] }));
   app.use(cookieParser());
   app.use(`${env.API_PREFIX}/admin/components/ingest/json`, express.json({ limit: '12mb' }));
   app.use(express.json({ limit: '1mb' }));
@@ -87,7 +105,12 @@ export const createApp = (): Express => {
   });
 
   // Public Service Status endpoint for status.embedo.ai (ESD-2 / ESD-3 / ESD-4 / ESD-5)
-  app.get(`${env.API_PREFIX}/status`, async (_req: Request, res: Response) => {
+  // Status page is public telemetry: allow all origins with preflight support
+  const publicCors = cors({ origin: '*', methods: ['GET', 'OPTIONS'] });
+  const subscribeCors = cors({ origin: '*', methods: ['POST', 'DELETE', 'OPTIONS'] });
+
+  app.options(`${env.API_PREFIX}/status`, publicCors);
+  app.get(`${env.API_PREFIX}/status`, publicCors, async (_req: Request, res: Response) => {
     try {
       const telemetry = await computeLiveServiceTelemetry();
       res.status(200).json(telemetry);
@@ -98,7 +121,8 @@ export const createApp = (): Express => {
   });
 
   // Public status subscription endpoints (ESD-8)
-  app.post(`${env.API_PREFIX}/status/subscribe`, async (req: Request, res: Response) => {
+  app.options(`${env.API_PREFIX}/status/subscribe`, subscribeCors);
+  app.post(`${env.API_PREFIX}/status/subscribe`, subscribeCors, async (req: Request, res: Response) => {
     const { email, webhookUrl } = (req.body || {}) as { email?: string; webhookUrl?: string };
     if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       await addSubscriber('email', email);
@@ -113,7 +137,7 @@ export const createApp = (): Express => {
     res.status(400).json({ error: 'Valid email address or webhook URL required.' });
   });
 
-  app.delete(`${env.API_PREFIX}/status/subscribe`, async (req: Request, res: Response) => {
+  app.delete(`${env.API_PREFIX}/status/subscribe`, subscribeCors, async (req: Request, res: Response) => {
     const { email, webhookUrl } = (req.body || {}) as { email?: string; webhookUrl?: string };
     if (email) await removeSubscriber('email', email);
     if (webhookUrl) await removeSubscriber('webhook', webhookUrl);
