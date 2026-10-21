@@ -1,10 +1,8 @@
-import { routeMessage } from '../../src/modules/sessions/conversation-router.service.js';
 import {
   isExpansionRequest,
   extractExpansionCount,
   getExpansionCataloguePrompt,
   expandDesignGraphWithModules,
-  EXPANSION_CATALOGUE,
 } from '../../src/modules/sessions/pipeline/expansion-engine.js';
 import { validateAndRepairDesignGraph } from '../../src/modules/sessions/pipeline/validator.js';
 import { describeGraphChanges } from '../../src/modules/sessions/pipeline/refinement-history.js';
