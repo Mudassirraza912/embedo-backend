@@ -1,3 +1,5 @@
+import type { BenchKnowledge } from '../../ekab/ekab-knowledge.service.js';
+
 /**
  * Prototype mode payload: the `architecture` of a session whose type is "prototype".
  * Persisted on design_sessions.architecture, snapshotted per version, and sent with `done`.
@@ -99,6 +101,8 @@ export interface CompatibilityResult {
   suggestedFix: string | null;
   instanceIds: string[];
   pinIds: string[];
+  /** EKAB record ids (in `domainKnowledge.records`) behind this check. Since 2026-10-21. */
+  knowledgeRefs?: string[];
 }
 
 export type Point = [number, number];
@@ -284,6 +288,12 @@ export interface PrototypeArchitecture {
   moduleDiagram: ModuleDiagram;
   pinList: PinList;
   hardwareLibrary: { entries: HardwareLibraryEntry[] };
+  /**
+   * Snapshot of the promoted EKAB (Track B) records relevant to this bench, taken when the version
+   * was generated: what was known then, with trust state, conditions and sources. Absent when the
+   * knowledge base had nothing relevant. Since 2026-10-21.
+   */
+  domainKnowledge?: BenchKnowledge;
 }
 
 /** What the resolver chose, stored as the version's designGraph so refinements can build on it. */

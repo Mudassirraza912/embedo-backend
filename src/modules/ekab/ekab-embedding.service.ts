@@ -107,18 +107,26 @@ export const ekabEmbeddingService = {
     return { embedded, unchanged, failed, skipped: false };
   },
 
-  /** Nearest eligible records to a query among the given row ids (null when vectors are unavailable). */
-  async rank(query: string, candidateIds: string[], limit: number): Promise<string[] | null> {
-    if (!this.configured || candidateIds.length === 0 || !query.trim()) return null;
+  /**
+   * Nearest records to a query among those that may reach reasoning: promoted release, ACTIVE,
+   * not quarantined, VERIFIED/CONDITIONAL (§18 step 8). Null when vectors are unavailable.
+   */
+  async rankEligible(query: string, limit: number): Promise<string[] | null> {
+    if (!this.configured || !query.trim()) return null;
     try {
       const result = await modelProviderService.embedBatch([query.slice(0, 4000)]);
       const vector = result.embeddings[0];
       if (!vector || vector.length !== OPENAI_EMBEDDING_DIMENSIONS) return null;
       const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-        SELECT "id"::text AS id
-        FROM "ekab_records"
-        WHERE "embedding" IS NOT NULL AND "id" IN (${Prisma.join(candidateIds.map((id) => Prisma.sql`${id}::uuid`))})
-        ORDER BY "embedding" <=> ${toVector(vector)}::vector
+        SELECT r."id"::text AS id
+        FROM "ekab_records" r
+        JOIN "ekab_releases" rel ON rel."id" = r."release_pk"
+        WHERE r."embedding" IS NOT NULL
+          AND rel."ingestion_state" = 'PROMOTED'
+          AND r."lifecycle_status" = 'ACTIVE'
+          AND r."quarantined" = false
+          AND r."trust_state" IN (${Prisma.join([...REASONING_TRUST_STATES])})
+        ORDER BY r."embedding" <=> ${toVector(vector)}::vector
         LIMIT ${limit}`);
       return rows.map((r) => r.id);
     } catch (err) {
