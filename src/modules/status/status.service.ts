@@ -247,6 +247,7 @@ export async function computeLiveServiceTelemetry() {
   let dbStatus: 'up' | 'down' = 'up';
   let redisStatus: 'up' | 'down' = 'up';
   let activeModelsCount = 0;
+  let aiHealthStatus: 'up' | 'degraded' | 'credit_exhausted' = 'up';
   let sessionsCheck: 'up' | 'down' = 'up';
   let usersCheck: 'up' | 'down' = 'up';
 
@@ -269,6 +270,32 @@ export async function computeLiveServiceTelemetry() {
     activeModelsCount = await prisma.modelRoute.count({ where: { isActive: true } });
   } catch {
     activeModelsCount = 0;
+  }
+
+  // Detect upstream AI provider credit exhaustion and elevated error rates (ESD-2 / ESD-4)
+  try {
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    const recentAiCalls = await prisma.aiCall.findMany({
+      where: { createdAt: { gte: fifteenMinutesAgo } },
+      select: { errorMessage: true, schemaPass: true },
+      take: 20,
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (recentAiCalls.length > 0) {
+      const quotaErrors = recentAiCalls.filter(
+        (c) => c.errorMessage && /insufficient_quota|credit_balance_exhausted|quota|billing|exceeded your current quota/i.test(c.errorMessage)
+      );
+      const failedCalls = recentAiCalls.filter((c) => c.schemaPass === false || Boolean(c.errorMessage));
+
+      if (quotaErrors.length >= 2 || (quotaErrors.length > 0 && quotaErrors.length === recentAiCalls.length)) {
+        aiHealthStatus = 'credit_exhausted';
+      } else if (failedCalls.length / recentAiCalls.length >= 0.5) {
+        aiHealthStatus = 'degraded';
+      }
+    }
+  } catch {
+    // Non-blocking telemetry inspection
   }
 
   try {
@@ -294,11 +321,19 @@ export async function computeLiveServiceTelemetry() {
     if (def.service_id === 'embedo-app') {
       if (dbStatus === 'down' || redisStatus === 'down') status = 'degraded';
     } else if (def.service_id === 'architect') {
-      if (dbStatus === 'down' || activeModelsCount === 0) status = 'degraded';
+      if (dbStatus === 'down' || activeModelsCount === 0 || aiHealthStatus === 'credit_exhausted') {
+        status = aiHealthStatus === 'credit_exhausted' ? 'partial_outage' : 'degraded';
+      } else if (aiHealthStatus === 'degraded') {
+        status = 'degraded';
+      }
     } else if (def.service_id === 'prototype') {
       if (dbStatus === 'down') status = 'degraded';
     } else if (def.service_id === 'ai-generation') {
-      if (activeModelsCount === 0) status = 'degraded';
+      if (activeModelsCount === 0 || aiHealthStatus === 'credit_exhausted') {
+        status = aiHealthStatus === 'credit_exhausted' ? 'partial_outage' : 'degraded';
+      } else if (aiHealthStatus === 'degraded') {
+        status = 'degraded';
+      }
     } else if (def.service_id === 'projects-storage') {
       if (sessionsCheck === 'down' || dbStatus === 'down') status = 'degraded';
     } else if (def.service_id === 'authentication') {
