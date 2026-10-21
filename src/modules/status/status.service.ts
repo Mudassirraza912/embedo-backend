@@ -402,40 +402,64 @@ export async function addSubscriber(
   type: 'email' | 'webhook',
   target: string,
   topics?: string[]
-): Promise<{ id: string; unsubscribeToken: string }> {
+): Promise<{ id: string; unsubscribeToken: string; alreadySubscribed?: boolean }> {
   const normalizedTarget = target.trim().toLowerCase();
   const unsubscribeToken = crypto.randomBytes(24).toString('hex');
   const verifyToken = crypto.randomBytes(24).toString('hex');
 
-  // 1. Durable PostgreSQL storage via Prisma (ESD-8)
   let subscriberId = '';
   let token = unsubscribeToken;
+  let wasAlreadyActive = false;
+
   try {
-    const subscriber = await prisma.statusSubscriber.upsert({
+    const existing = await prisma.statusSubscriber.findUnique({
       where: {
         channel_target: {
           channel: type,
           target: normalizedTarget,
         },
       },
-      create: {
-        channel: type,
-        target: normalizedTarget,
-        isVerified: type === 'webhook', // Webhooks are active immediately
-        active: true,
-        verifyToken,
-        unsubscribeToken,
-        topics: topics || undefined,
-      },
-      update: {
-        active: true,
-        unsubscribedAt: null,
-        topics: topics || undefined,
-      },
     });
-    subscriberId = subscriber.id;
-    if (subscriber.unsubscribeToken) {
-      token = subscriber.unsubscribeToken;
+
+    if (existing && existing.active) {
+      wasAlreadyActive = true;
+      subscriberId = existing.id;
+      if (existing.unsubscribeToken) {
+        token = existing.unsubscribeToken;
+      }
+      if (topics) {
+        await prisma.statusSubscriber.update({
+          where: { id: existing.id },
+          data: { topics },
+        });
+      }
+    } else {
+      const subscriber = await prisma.statusSubscriber.upsert({
+        where: {
+          channel_target: {
+            channel: type,
+            target: normalizedTarget,
+          },
+        },
+        create: {
+          channel: type,
+          target: normalizedTarget,
+          isVerified: type === 'webhook',
+          active: true,
+          verifyToken,
+          unsubscribeToken,
+          topics: topics || undefined,
+        },
+        update: {
+          active: true,
+          unsubscribedAt: null,
+          topics: topics || undefined,
+        },
+      });
+      subscriberId = subscriber.id;
+      if (subscriber.unsubscribeToken) {
+        token = subscriber.unsubscribeToken;
+      }
     }
   } catch (err) {
     logger.error({ err }, `Could not persist ${type} subscriber in database`);
@@ -449,14 +473,14 @@ export async function addSubscriber(
     logger.warn({ err }, `Could not sync ${type} subscriber to redis`);
   }
 
-  // 3. Dispatch confirmation email asynchronously (ESD-8)
-  if (type === 'email' && emailService.isConfigured) {
+  // 3. Dispatch confirmation email asynchronously (only if new or reactivating, ESD-8)
+  if (type === 'email' && emailService.isConfigured && !wasAlreadyActive) {
     emailService.sendStatusSubscriptionConfirmation(normalizedTarget, token).catch((err) => {
       logger.warn({ err, target: normalizedTarget }, 'Could not deliver status subscription confirmation email');
     });
   }
 
-  return { id: subscriberId, unsubscribeToken: token };
+  return { id: subscriberId, unsubscribeToken: token, alreadySubscribed: wasAlreadyActive };
 }
 
 export async function removeSubscriber(type: 'email' | 'webhook', target: string): Promise<void> {

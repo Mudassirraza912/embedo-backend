@@ -130,8 +130,11 @@ export const createApp = (): Express => {
       const result = await addSubscriber('email', email, topics);
       res.status(200).json({
         success: true,
-        message: 'Subscribed to status updates successfully.',
+        message: result.alreadySubscribed
+          ? 'You are already subscribed to status updates.'
+          : 'Subscribed to status updates successfully.',
         unsubscribeToken: result.unsubscribeToken,
+        alreadySubscribed: result.alreadySubscribed,
       });
       return;
     }
