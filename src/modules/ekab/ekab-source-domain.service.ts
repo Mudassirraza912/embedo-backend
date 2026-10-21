@@ -12,7 +12,8 @@ type Actor = { label: string };
 
 /**
  * Suggested starting list. Added only when an admin clicks "Add recommended sites", so a site the
- * admin removed is not put back by a deploy.
+ * admin removed is not put back by a deploy. Four of them (TI, RFC Editor, Espressif docs, Zephyr
+ * docs) are also inserted once by the `20261021120000_ekab_trusted_sources` migration.
  */
 export const RECOMMENDED_SOURCE_DOMAINS: SourceDomainInput[] = [
   { host: '.rfc-editor.org', publisher: 'IETF (RFC Editor)', defaultSourceType: 'STANDARD', accessState: 'PUBLIC', notes: 'Published RFCs (IP, transport, CoAP, MQTT-SN references, TLS…). Free to read.' },
@@ -26,7 +27,8 @@ export const RECOMMENDED_SOURCE_DOMAINS: SourceDomainInput[] = [
   { host: '.nxp.com', publisher: 'NXP Semiconductors', defaultSourceType: 'APP_NOTE', accessState: 'PUBLIC', notes: 'Application notes and user manuals (e.g. the I²C-bus specification).' },
   { host: '.st.com', publisher: 'STMicroelectronics', defaultSourceType: 'APP_NOTE', accessState: 'PUBLIC', notes: 'Application notes and reference manuals.' },
   { host: '.microchip.com', publisher: 'Microchip Technology', defaultSourceType: 'APP_NOTE', accessState: 'PUBLIC', notes: 'Application notes and datasheets.' },
-  { host: 'docs.zephyrproject.org', publisher: 'Zephyr Project', defaultSourceType: 'OFFICIAL_DOC', accessState: 'PUBLIC', notes: 'Official RTOS documentation.' },
+  { host: 'docs.zephyrproject.org', publisher: 'Zephyr Project', defaultSourceType: 'OFFICIAL_DOC', accessState: 'PUBLIC', notes: 'Official RTOS and driver documentation. robots.txt allows only /latest/… pages, so use /latest/ links.' },
+  { host: 'docs.espressif.com', publisher: 'Espressif Systems', defaultSourceType: 'OFFICIAL_DOC', accessState: 'PUBLIC', notes: 'ESP-IDF programming guide and peripheral docs (I2C, SPI, UART, TWAI/CAN) for ESP32 controllers.' },
   { host: '.freertos.org', publisher: 'FreeRTOS', defaultSourceType: 'OFFICIAL_DOC', accessState: 'PUBLIC', notes: 'Official kernel documentation.' },
   { host: '.ieee.org', publisher: 'IEEE', defaultSourceType: 'STANDARD', accessState: 'RESTRICTED', notes: 'Standards text is behind login/paywall and automated downloading is not permitted. Metadata only; recorded as a gap.' },
   { host: '.iec.ch', publisher: 'IEC', defaultSourceType: 'STANDARD', accessState: 'RESTRICTED', notes: 'Paid standards. Metadata only; recorded as a gap.' },
