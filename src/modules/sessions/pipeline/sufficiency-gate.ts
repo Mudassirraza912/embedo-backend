@@ -174,7 +174,7 @@ export function checkSufficiency(intent: StructuredIntent, rawInputText?: string
       suggestedDefaults['powerSource'] = defaultPower;
       if (!intent.constraints) intent.constraints = {};
       intent.constraints.powerSource = defaultPower;
-      if (!intent.subsystems) intent.subsystems = {} as any;
+      if (!intent.subsystems) intent.subsystems = {};
       if (!intent.subsystems.power || intent.subsystems.power.length === 0) {
         intent.subsystems.power = [defaultPower];
       }
