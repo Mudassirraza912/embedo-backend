@@ -11,6 +11,7 @@ import { CanonicalDesignGraph, ProjectedArchitecture, StructuredIntent, structur
 import { ApplyMode, persistNewVersion, proposalCardText, proposeVersion, versionTagOf } from '../version.service.js';
 import { getAppliedChangeLineage, filterAppliedSuggestions, compactGraphForRevision, describeGraphChanges, isSameChange } from './refinement-history.js';
 import { recoverConversationContext } from './conversation-context.js';
+import { isExpansionRequest, extractExpansionCount, expandDesignGraphWithModules } from './expansion-engine.js';
 
 // A reworded clarification must still be about the missing field; otherwise the gate's own
 // question is used. Fields without an entry here accept any wording.
@@ -420,11 +421,15 @@ export async function runGenerationPipeline(
     // it so; if that is unchanged too, the user is asked for a concrete change further below.
     if (revision && baselineGraph && describeGraphChanges(baselineGraph, rawGraph).length === 0) {
       log.warn({ request: revisionNotes }, 'Refinement returned the baseline unchanged; retrying once');
+      const isExpansion = isExpansionRequest(revisionNotes ?? '');
+      const expansionHint = isExpansion
+        ? `\n\nSYSTEM EXPANSION DIRECTIVE: The user requested an expansion of modules ("${revisionNotes}"). You MUST add multiple real peripheral ICs (e.g. TCA9548APWR I2C mux, BME280 environmental, ICM-42688-P IMU, INA226 power monitor, W25Q128 Flash, etc.) to the graph, connect them to the MCU and power rail, and add them to the BOM.`
+        : '';
       ({ graph: rawGraph } = await buildCanonicalDesignGraph(
         structuredIntent,
         grounding,
         sessionId,
-        `${revisionNotes}\n\nYOUR PREVIOUS ANSWER RETURNED THE BASELINE UNCHANGED — that is not acceptable. Make at least one real change to nodes, part numbers, power rails or connections that fulfils this request. If the request is to enhance or improve an existing feature (e.g. GPS, battery, regulator, interface), upgrade the component part number(s) to higher-precision / higher-performance alternatives or add supporting circuitry. Do not describe a change in engineeringDecisions that is not in the graph, and do not "add" something the baseline already has.`,
+        `${revisionNotes}\n\nYOUR PREVIOUS ANSWER RETURNED THE BASELINE UNCHANGED — that is not acceptable. Make at least one real change to nodes, part numbers, power rails or connections that fulfils this request. If the request is to enhance or improve an existing feature (e.g. GPS, battery, regulator, interface), upgrade the component part number(s) to higher-precision / higher-performance alternatives or add supporting circuitry. Do not describe a change in engineeringDecisions that is not in the graph, and do not "add" something the baseline already has.${expansionHint}`,
         revision,
         previousSuggestions,
         recentAssistantContext
@@ -447,7 +452,16 @@ export async function runGenerationPipeline(
       recordStep('assigning_pins', 'Assigning pins', 'failed', `Critical validation errors: ${critical.join(', ')}`);
       throw new RetryablePipelineError(`Design graph failed electrical validation: ${critical.join(', ')}`);
     }
-    const finalizedGraph = validation.repairedGraph;
+    let finalizedGraph = validation.repairedGraph;
+    if (revision && baselineGraph && describeGraphChanges(baselineGraph, finalizedGraph).length === 0) {
+      if (isExpansionRequest(revisionNotes ?? '')) {
+        const count = extractExpansionCount(revisionNotes ?? '', 10);
+        log.info({ count, request: revisionNotes }, 'Synthesizing dynamic multi-module architectural expansion');
+        finalizedGraph = expandDesignGraphWithModules(baselineGraph, count, revisionNotes);
+        const reparation = validateAndRepairDesignGraph(finalizedGraph);
+        finalizedGraph = reparation.repairedGraph;
+      }
+    }
     // Never offer a chip for a change this design already has (including the one just applied).
     finalizedGraph.suggestedRefinements = filterAppliedSuggestions(finalizedGraph.suggestedRefinements, [
       ...appliedLineage,
@@ -594,6 +608,24 @@ export async function runGenerationPipeline(
           validationPass: validation.isValid,
           validationIssues: validation.issues,
           executionSteps,
+          keyComponents: (finalizedGraph.nodes ?? [])
+            .filter((n) => n.partNumber)
+            .slice(0, 16)
+            .map((n) => ({
+              id: n.id,
+              name: n.label,
+              partNumber: n.partNumber,
+              manufacturer: n.manufacturer,
+              category: n.category,
+              sublabel: n.sublabel,
+            })),
+          bomSummary: (finalizedGraph.bom ?? []).slice(0, 16).map((b) => ({
+            partNumber: b.partNumber,
+            manufacturer: b.manufacturer,
+            category: b.category,
+            description: b.description,
+            unitCostUsd: b.unitCostUsd,
+          })),
         },
       });
 

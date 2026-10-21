@@ -4,6 +4,7 @@ import { CanonicalDesignGraph, StructuredIntent, NODE_CATEGORIES, EDGE_TYPES, No
 import { GroundingContext } from './rag-grounder.js';
 import { logger } from '../../../config/logger.js';
 import { stripJsonFences, safeParseOrRepairJson } from './json-utils.js';
+import { isExpansionRequest, extractExpansionCount, getExpansionCataloguePrompt } from './expansion-engine.js';
 
 // The model regularly reaches for a near-synonym of an allowed enum value ("actuation" for a relay,
 // "sensor" for "sensing", "wireless" for "connectivity"). Rejecting the whole graph for one
@@ -279,10 +280,19 @@ CRITICAL HARDWARE RULES:
       * High-Speed Ethernet: Always connect the controller's internal MAC (RGMII/RMII/MII) to a dedicated Gigabit or 10/100 PHY (e.g. KSZ9031RNX, DP83867, LAN8720A) paired with an RJ45 connector with integrated magnetics. For small MCUs without an on-chip MAC, use an SPI Ethernet controller (e.g. W5500).
       * Industrial Fieldbuses (CAN / CAN FD & RS-485): Controllers provide digital logic (CAN TX/RX, UART TX/RX); ALWAYS place dedicated transceivers (e.g. TCAN1042 / TJA1051 for CAN FD; ISO1500 / ADM2483 / MAX485 for RS-485) between the controller and physical bus lines. Galvanically isolated transceivers must be used for industrial and high-voltage equipment.
       * Cellular Modems (LTE-M, NB-IoT, 4G Cat 1/4): Connect to host via high-speed USB 2.0 or UART. Supply via dedicated 3.8V rail with >= 2A-3A peak pulse rating and bulk capacitance.
-      * Flash & OS Storage: MPUs require eMMC (via 8-bit SDMMC/MMC) or MicroSD card for OS rootfs boot; MCUs use on-chip flash or external SPI NOR Flash (W25Qxx).`;
+      * Flash & OS Storage: MPUs require eMMC (via 8-bit SDMMC/MMC) or MicroSD card for OS rootfs boot; MCUs use on-chip flash or external SPI NOR Flash (W25Qxx).
+26. Intentional DRC / Validation Testing Requests:
+    - If the user explicitly asks to generate a diagram or architecture where validation does not pass or to test DRC validation (e.g. "make a diagram where validation is not passed for the DRC", "test DRC rules", "generate a flawed architecture with electrical errors"):
+      * Synthesize a realistic embedded design that intentionally incorporates detectable DRC violations (for example: pairing a 2x AA alkaline battery with a buck-only converter like AP63203WU-7; or powering an automotive 12V transient rail with a 28V-max buck like TPS54202; or feeding 5V directly to a cellular modem VBAT pin like Quectel BG95; or cascading an AD8232 into an ADS1292R).
+      * Note in engineeringDecisions that these specific electrical flaws were deliberately incorporated to exercise the Design Rule Check (DRC) verification engine.`;
 
   const userPrompt = `Synthesize the Canonical Design Graph for the following hardware intent:
 ${JSON.stringify(intent, null, 2)}
+${
+  isExpansionRequest(iterationNotes ?? '') || isExpansionRequest(intent.purpose ?? '')
+    ? getExpansionCataloguePrompt(extractExpansionCount(iterationNotes || intent.purpose || '', 10))
+    : ''
+}
 ${
   recentAssistantContext
     ? `\nRECENT ASSISTANT RECOMMENDATIONS / CONTEXT (use this to resolve referential follow-ups like "add all of these", "these", "recommended modules", etc.):\n${recentAssistantContext}\n`
