@@ -231,12 +231,16 @@ function pickTopics(records: CachedRecord[], topics: TopicKey[], perTopic: numbe
   return [...out.values()];
 }
 
+/** "Title, Rev. O, p. 26" — the revision only when the title does not already carry it. */
+export const sourceText = (src: KnowledgeSource) =>
+  [src.title, src.revision && !(src.title ?? '').includes(src.revision) ? src.revision : null, src.locator].filter(Boolean).join(', ');
+
 export const toCitation = ({ id: _id, haystack: _h, ...citation }: CachedRecord): KnowledgeCitation => citation;
 
 /** One line per record for prompts. CONDITIONAL records always carry their conditions. */
 export function citationLine(c: KnowledgeCitation): string {
   const src = c.sources[0];
-  const where = src ? ` (Source: ${[src.title, src.revision, src.locator].filter(Boolean).join(', ')})` : '';
+  const where = src ? ` (Source: ${sourceText(src)})` : '';
   const when = c.trustState === 'CONDITIONAL' ? `, only when: ${[...c.conditions, ...c.excludes.map((e) => `not ${e}`)].join('; ') || 'see source'}` : '';
   return `- [${c.recordId} r${c.revision ?? 1}, ${c.trustState}${when}] ${c.statement}${where}`;
 }
@@ -255,7 +259,7 @@ export function knowledgeFooter(records: KnowledgeCitation[]): string {
   if (records.length === 0) return '';
   const lines = records.map((c) => {
     const src = c.sources[0];
-    const where = src ? [src.title, src.revision, src.locator].filter(Boolean).join(', ') : null;
+    const where = src ? sourceText(src) : null;
     const when = c.trustState === 'CONDITIONAL' ? ` Only when: ${[...c.conditions, ...c.excludes.map((e) => `not ${e}`)].join('; ') || 'see the source'}.` : '';
     return `- “${c.statement}” — ${c.trustState === 'VERIFIED' ? 'Verified' : 'Conditional'}.${when}${where ? ` Source: ${where}.` : ''} (${c.recordId})`;
   });
