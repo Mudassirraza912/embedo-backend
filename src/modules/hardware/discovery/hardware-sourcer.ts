@@ -541,6 +541,8 @@ export interface SourcingInput {
   needController: boolean;
   /** Products already sourced in this run; never proposed again. */
   exclude?: string[];
+  /** Promoted EKAB records relevant to the brief (citationLine format), or null. */
+  engineeringRules?: string | null;
 }
 
 export interface SourcedBoard {
@@ -598,6 +600,9 @@ async function proposeProducts(input: SourcingInput, needs: NeedLine[], otherNee
     }`,
     otherNeeds.length > 0 ? `\nSOURCED SEPARATELY (do not propose for these): ${otherNeeds.join('; ')}` : '',
     '',
+    input.engineeringRules
+      ? `\nENGINEERING RULES (Embedo's reviewed knowledge base; follow them when choosing products; a CONDITIONAL rule holds only under its conditions):\n${input.engineeringRules}\n`
+      : '',
     `REQUEST:\n${input.requestText.slice(0, 6000)}`,
     input.exclude && input.exclude.length > 0 ? `\nALREADY SOURCED (do not propose again): ${input.exclude.join('; ')}` : '',
   ].join('\n');

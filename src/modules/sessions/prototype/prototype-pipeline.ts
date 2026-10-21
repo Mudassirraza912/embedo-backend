@@ -5,6 +5,7 @@ import { logger } from '../../../config/logger.js';
 import { emitSessionEvent } from '../../realtime/socket.js';
 import { hardwareLibraryService } from '../../hardware/hardware-library.service.js';
 import { persistNewVersion, proposalCardText, proposeVersion } from '../version.service.js';
+import { citationLine, ekabKnowledgeService } from '../../ekab/ekab-knowledge.service.js';
 import { GENERATION_HOLD_MESSAGE } from '../pipeline/sufficiency-gate.js';
 import { NonRetryablePipelineError, PipelineExecutionOptions, PipelineExecutionResult } from '../pipeline/orchestrator.js';
 import { catalogueLine, isControllerGap, PrototypeResolverError, RESOLVER_TASK_CASE, resolvePrototype, retrieveCatalogue } from './prototype-resolver.js';
@@ -121,6 +122,8 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       ? [currentComposition.controller?.hardwareEntityId, ...currentComposition.modules.map((m) => m.hardwareEntityId)].filter((id): id is string => Boolean(id))
       : [];
     const retrievalText = `${requestText}\n${turns.slice(-4).map((t) => t.content).join('\n')}`;
+    // Promoted EKAB rules the brief touches (deterministic match; empty when the knowledge base is).
+    const engineeringRules = (await ekabKnowledgeService.forText(`${session.intentText}\n${requestText}`)).map(citationLine).join('\n') || null;
     const resolve = async (allowSubstituteController = false) => {
       const catalogue = await retrieveCatalogue(library, retrievalText, keepIds);
       emitSessionEvent.aiCallStarted(sessionId, RESOLVER_TASK_CASE);
@@ -131,6 +134,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
         current: currentComposition,
         currentBench: current ? describeBench(current) : null,
         allowSubstituteController,
+        engineeringRules,
         sessionId,
       });
       emitSessionEvent.aiCallCompleted(sessionId, { taskCase: RESOLVER_TASK_CASE, schemaPass: true, latencyMs: resolved.latencyMs });
@@ -162,6 +166,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
           gaps: output?.gaps ?? [],
           needController: !output?.controller,
           exclude: sourcing?.sourced.map((b) => `${b.productName} (${b.vendor})`) ?? [],
+          engineeringRules,
         });
       } catch (err) {
         log.warn({ err, round }, 'Hardware sourcing failed; continuing with the library only');
@@ -257,6 +262,9 @@ ${requestText}`),
       brief: `${session.intentText}
 ${requestText}`,
     });
+    // The knowledge behind the checks, as it stands now (stored with the version).
+    const domainKnowledge = await ekabKnowledgeService.forBench(payload);
+    if (domainKnowledge) payload.domainKnowledge = domainKnowledge;
     const counts = payload.compatibility.counts;
     const cables = payload.connections.filter((c) => c.kind === 'cable').length;
     const wires = payload.connections.length - cables;

@@ -341,6 +341,8 @@ export interface ResolverInput {
   currentBench?: string | null;
   /** Set when a named controller could not be found: the resolver may pick the closest one and must say so. */
   allowSubstituteController?: boolean;
+  /** Promoted EKAB records relevant to the brief (citationLine format), or null. */
+  engineeringRules?: string | null;
   sessionId: string;
 }
 
@@ -374,6 +376,9 @@ export async function resolvePrototype(input: ResolverInput): Promise<ResolverRe
     input.catalogue.some((e) => e.isController) ? null : 'NOTE: LIBRARY has no controller board. Return controller null, no modules, and a Processing gap for the controller.\n',
     input.current ? `CURRENT DESIGN:\n${describeCurrentDesign(input.current)}\n` : null,
     input.current && input.currentBench ? `CURRENT WIRING (read-only, produced by the allocator from the records):\n${input.currentBench}\n` : null,
+    input.engineeringRules
+      ? `ENGINEERING RULES (Embedo's reviewed knowledge base; apply them when choosing boards and links; a CONDITIONAL rule holds only under its conditions):\n${input.engineeringRules}\n`
+      : null,
     `REQUEST:\n${input.requestText}`,
     input.allowSubstituteController
       ? '\nSUBSTITUTE: the controller the engineer named could not be found or sourced. Choose the LIBRARY controller closest to it (buses, UART/CAN count, logic level), and say in "notes" that it stands in for the named one.'

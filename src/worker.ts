@@ -4,6 +4,7 @@ import { createAiPipelineWorker } from './jobs/ai-pipeline.queue.js';
 import { createExportWorker } from './jobs/export.queue.js';
 import { createComponentRefreshWorker } from './jobs/component-refresh.queue.js';
 import { createDatasheetIngestWorker } from './jobs/datasheet-ingest.queue.js';
+import { createEkabWorker } from './jobs/ekab.queue.js';
 import { prisma } from './db/prisma.js';
 import { redis } from './db/redis.js';
 import { closeRealtimeConnections } from './modules/realtime/redis-events.js';
@@ -25,6 +26,7 @@ const startWorker = async () => {
     const exportWorker = createExportWorker();
     const componentWorker = createComponentRefreshWorker();
     const datasheetWorker = createDatasheetIngestWorker();
+    const ekabWorker = createEkabWorker();
 
     logger.info('✓ All BullMQ workers initialized and listening for jobs.');
 
@@ -41,7 +43,7 @@ const startWorker = async () => {
       forceTimer.unref();
 
       try {
-        await Promise.all([aiWorker.close(), exportWorker.close(), componentWorker.close(), datasheetWorker.close()]);
+        await Promise.all([aiWorker.close(), exportWorker.close(), componentWorker.close(), datasheetWorker.close(), ekabWorker.close()]);
         logger.info('Workers closed.');
 
         await closeRealtimeConnections();
