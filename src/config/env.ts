@@ -43,6 +43,10 @@ const envSchema = z
     // Google Sign-In. When unset, /auth/google is refused (never skips audience verification).
     GOOGLE_CLIENT_ID: optionalString,
 
+    // GitHub Sign-In. When unset, /auth/github is refused.
+    GITHUB_CLIENT_ID: optionalString,
+    GITHUB_CLIENT_SECRET: optionalString,
+
     // Model route cache TTL (seconds). Changes to model_routes propagate within this window without a restart.
     ROUTE_CACHE_TTL_SECONDS: z.coerce.number().int().nonnegative().default(60),
 

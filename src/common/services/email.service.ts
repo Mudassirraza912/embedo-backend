@@ -85,6 +85,87 @@ class EmailService {
     await this.send({ to, subject: 'Reset your Embedo.ai password', text, html });
   }
 
+  async sendOtpVerification(to: string, otpCode: string): Promise<void> {
+    const text = `Your Embedo.ai verification code is: ${otpCode}\n\nThis code expires in 10 minutes.\n\nIf you did not request this verification code, please ignore this email.`;
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #021316; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #021316; padding: 40px 16px;">
+    <tr>
+      <td align="center">
+        <!-- Main Card Container -->
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 560px; background-color: #06262B; border: 1px solid #075F69; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+          
+          <!-- Brand Header -->
+          <tr>
+            <td style="padding: 26px 32px 20px 32px; border-bottom: 1px solid rgba(7, 95, 105, 0.4);">
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td>
+                    <span style="font-size: 15px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: #20E6E0;">
+                      EMBEDO<span style="color: #EAF6F6;">.AI</span>
+                    </span>
+                  </td>
+                  <td align="right">
+                    <span style="display: inline-block; padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; background-color: rgba(32, 230, 224, 0.12); color: #20E6E0; border: 1px solid rgba(32, 230, 224, 0.3);">
+                      Account Verification
+                    </span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Main Content -->
+          <tr>
+            <td style="padding: 32px 32px 28px 32px;">
+              <h1 style="color: #EAF6F6; font-size: 20px; font-weight: 600; margin: 0 0 14px 0;">Verify your email address</h1>
+              <p style="color: #9CD7D5; font-size: 14px; line-height: 1.65; margin: 0 0 24px 0;">
+                Welcome to Embedo.ai! Use the 5-digit verification code below to verify your email address and activate your account.
+              </p>
+
+              <!-- OTP Code Display Card -->
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="margin: 24px 0 28px 0;">
+                <tr>
+                  <td align="center" style="background-color: #021316; border: 1px solid #075F69; border-radius: 12px; padding: 22px 28px;">
+                    <div style="font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; font-size: 38px; font-weight: 700; letter-spacing: 14px; color: #20E6E0; text-align: center; text-indent: 14px;">
+                      ${otpCode}
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <p style="color: #67B7B4; font-size: 13px; line-height: 1.6; margin: 0 0 16px 0;">
+                ⏱ <strong>This code expires in 10 minutes.</strong> For your security, never share this code with anyone.
+              </p>
+              <p style="color: #4A5C62; font-size: 12px; line-height: 1.5; margin: 0;">
+                If you did not attempt to create an Embedo account, no action is needed. Your email will not be registered without this code.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 18px 32px 22px 32px; background-color: rgba(2, 19, 22, 0.6); border-top: 1px solid rgba(7, 95, 105, 0.3);">
+              <p style="color: #4A5C62; font-size: 11px; margin: 0; line-height: 1.5;">
+                Embedo.ai — Automated embedded systems architecture & engineering.<br>
+                Security assurance: All sessions and identity verifications are cryptographically enforced.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    await this.send({ to, subject: `Your Embedo verification code: ${otpCode}`, text, html });
+  }
+
   async sendStatusSubscriptionConfirmation(to: string, unsubscribeToken: string): Promise<void> {
     const unsubUrl = `https://status.embedo.ai/unsubscribe?token=${encodeURIComponent(unsubscribeToken)}`;
     const text = `You have been subscribed to Embedo system status and incident alerts.\n\nWhenever an operational event, maintenance, or service disruption affects Embedo services (Embedo App, Architect Mode, AI Generation, Authentication, Storage), you will receive notifications here.\n\nLive dashboard: https://status.embedo.ai\n\nTo unsubscribe: ${unsubUrl}`;

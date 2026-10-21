@@ -7,7 +7,25 @@ import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 import { AppError } from '../../common/errors/AppError.js';
 import { emailService } from '../../common/services/email.service.js';
-import { RegisterInput, LoginInput, GoogleAuthInput, ForgotPasswordInput, ResetPasswordInput } from './auth.validation.js';
+import {
+  RegisterInput,
+  VerifyOtpInput,
+  ResendOtpInput,
+  LoginInput,
+  GoogleAuthInput,
+  GithubAuthInput,
+  ForgotPasswordInput,
+  ResetPasswordInput,
+} from './auth.validation.js';
+
+export type RegisterResult =
+  | {
+      status: 'pending_verification';
+      message: string;
+      email: string;
+      cooldownSeconds: number;
+    }
+  | AuthResult;
 
 export interface TokenPayload {
   userId: string;
@@ -106,35 +124,142 @@ export class AuthService {
     };
   }
 
-  async register(input: RegisterInput): Promise<AuthResult> {
-    const email = input.email.toLowerCase();
+  async register(input: RegisterInput): Promise<RegisterResult> {
+    const email = input.email.toLowerCase().trim();
 
     const existing = await prisma.user.findFirst({ where: { email, deletedAt: null }, select: { id: true } });
     if (existing) {
       throw new AppError(409, 'CONFLICT', 'An account with this email already exists');
     }
 
+    if (input.otp) {
+      return this.verifyOtp({ email, otp: input.otp });
+    }
+
+    const cooldown = await redis.get(`otp_cooldown:${email}`);
+    if (cooldown) {
+      throw new AppError(429, 'RATE_LIMITED', 'Please wait 30 seconds before requesting another code');
+    }
+
+    const otp = crypto.randomInt(10000, 100000).toString();
     const hashedPassword = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
+
+    const pendingData = {
+      otpHash: this.hashToken(otp),
+      email,
+      hashedPassword,
+      fullName: input.fullName || null,
+      expertiseLevel: input.expertiseLevel || null,
+      attemptsRemaining: 5,
+      createdAt: Date.now(),
+    };
+
+    await redis.set(`pending_reg:${email}`, JSON.stringify(pendingData), 'EX', 600);
+    await redis.set(`otp_cooldown:${email}`, '1', 'EX', 30);
+
+    try {
+      await emailService.sendOtpVerification(email, otp);
+      logger.info({ email }, 'Verification OTP email dispatched');
+    } catch (err) {
+      logger.error({ err, email }, 'Failed to deliver verification OTP email');
+    }
+
+    return {
+      status: 'pending_verification',
+      message: 'Verification code sent to your email',
+      email,
+      cooldownSeconds: 30,
+    };
+  }
+
+  async verifyOtp(input: VerifyOtpInput): Promise<AuthResult> {
+    const email = input.email.toLowerCase().trim();
+    const raw = await redis.get(`pending_reg:${email}`);
+    if (!raw) {
+      throw new AppError(400, 'BAD_REQUEST', 'Verification code has expired or is invalid. Please sign up again.');
+    }
+
+    const pending = JSON.parse(raw);
+    if (pending.attemptsRemaining <= 0) {
+      await redis.del(`pending_reg:${email}`);
+      throw new AppError(400, 'BAD_REQUEST', 'Too many incorrect attempts. Please request a new verification code.');
+    }
+
+    const inputHash = this.hashToken(input.otp);
+    if (inputHash !== pending.otpHash) {
+      pending.attemptsRemaining -= 1;
+      const ttl = await redis.ttl(`pending_reg:${email}`);
+      if (ttl > 0) {
+        await redis.set(`pending_reg:${email}`, JSON.stringify(pending), 'EX', ttl);
+      }
+      throw new AppError(400, 'BAD_REQUEST', `Incorrect verification code. ${pending.attemptsRemaining} attempt(s) remaining.`);
+    }
+
+    await redis.del([`pending_reg:${email}`, `otp_cooldown:${email}`]);
+
+    const existing = await prisma.user.findFirst({ where: { email, deletedAt: null }, select: { id: true } });
+    if (existing) {
+      throw new AppError(409, 'CONFLICT', 'An account with this email already exists');
+    }
 
     try {
       const user = await prisma.user.create({
         data: {
           email,
-          hashedPassword,
-          expertiseLevel: input.expertiseLevel || null,
+          hashedPassword: pending.hashedPassword,
+          expertiseLevel: pending.expertiseLevel || null,
           dataConsent: true,
           dataConsentDate: new Date(),
           role: 'user',
         },
       });
+      logger.info({ userId: user.id, email }, 'User account created and verified successfully');
       return this.issueSession(user);
     } catch (err: unknown) {
-      // Concurrent registration on the same email: the unique index is the source of truth.
       if (typeof err === 'object' && err !== null && 'code' in err && (err as { code: string }).code === 'P2002') {
         throw new AppError(409, 'CONFLICT', 'An account with this email already exists');
       }
       throw err;
     }
+  }
+
+  async resendOtp(input: ResendOtpInput): Promise<{ success: boolean; message: string; cooldownSeconds: number }> {
+    const email = input.email.toLowerCase().trim();
+    const cooldown = await redis.get(`otp_cooldown:${email}`);
+    if (cooldown) {
+      throw new AppError(429, 'RATE_LIMITED', 'Please wait 30 seconds before requesting another code');
+    }
+
+    const existing = await prisma.user.findFirst({ where: { email, deletedAt: null }, select: { id: true } });
+    if (existing) {
+      throw new AppError(409, 'CONFLICT', 'An account with this email already exists. Please sign in.');
+    }
+
+    const raw = await redis.get(`pending_reg:${email}`);
+    if (!raw) {
+      throw new AppError(400, 'BAD_REQUEST', 'No pending registration found for this email. Please sign up first.');
+    }
+
+    const pending = JSON.parse(raw);
+    const otp = crypto.randomInt(10000, 100000).toString();
+    pending.otpHash = this.hashToken(otp);
+    pending.attemptsRemaining = 5;
+
+    await redis.set(`pending_reg:${email}`, JSON.stringify(pending), 'EX', 600);
+    await redis.set(`otp_cooldown:${email}`, '1', 'EX', 30);
+
+    try {
+      await emailService.sendOtpVerification(email, otp);
+      logger.info({ email }, 'Verification OTP resent');
+    } catch (err) {
+      logger.error({ err, email }, 'Failed to deliver resent verification OTP email');
+    }
+
+    return {
+      success: true,
+      message: 'A new verification code has been sent',
+      cooldownSeconds: 30,
+    };
   }
 
   async login(input: LoginInput): Promise<AuthResult> {
@@ -323,6 +448,135 @@ export class AuthService {
             dataConsentDate: new Date(),
             role: 'user',
             authIdentities: { create: { provider: 'google', providerUserId: googleSub } },
+          },
+        });
+      }
+    }
+
+    if (user.suspendedAt) {
+      throw new AppError(403, 'ACCOUNT_SUSPENDED', 'Your account has been suspended due to policy violations');
+    }
+
+    return this.issueSession(user);
+  }
+
+  async loginWithGithub(input: GithubAuthInput): Promise<AuthResult> {
+    if (!env.GITHUB_CLIENT_ID || !env.GITHUB_CLIENT_SECRET) {
+      throw new AppError(503, 'PROVIDER_UNAVAILABLE', 'GitHub sign-in is not configured on this server');
+    }
+
+    let tokenData: { access_token?: string; error?: string; error_description?: string };
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      try {
+        const res = await fetch('https://github.com/login/oauth/access_token', {
+          method: 'POST',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            client_id: env.GITHUB_CLIENT_ID,
+            client_secret: env.GITHUB_CLIENT_SECRET,
+            code: input.code,
+            redirect_uri: input.redirectUri,
+          }),
+          signal: controller.signal,
+        });
+        if (!res.ok) throw new Error('GitHub token exchange failed');
+        tokenData = (await res.json()) as { access_token?: string; error?: string; error_description?: string };
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      throw new AppError(401, 'UNAUTHORIZED', 'Invalid or expired GitHub authorization code');
+    }
+
+    if (!tokenData.access_token) {
+      throw new AppError(401, 'UNAUTHORIZED', tokenData.error_description || 'Invalid or expired GitHub authorization code');
+    }
+
+    const ghAccessToken = tokenData.access_token;
+    let ghUser: { id: number; login: string; email?: string | null };
+    try {
+      const userRes = await fetch('https://api.github.com/user', {
+        headers: {
+          Authorization: `Bearer ${ghAccessToken}`,
+          'User-Agent': 'Embedo-App',
+          Accept: 'application/vnd.github.v3+json',
+        },
+      });
+      if (!userRes.ok) throw new Error('Failed to fetch GitHub profile');
+      ghUser = (await userRes.json()) as { id: number; login: string; email?: string | null };
+    } catch {
+      throw new AppError(401, 'UNAUTHORIZED', 'Could not retrieve GitHub user profile');
+    }
+
+    let email = ghUser.email ? ghUser.email.toLowerCase().trim() : '';
+    if (!email) {
+      try {
+        const emailsRes = await fetch('https://api.github.com/user/emails', {
+          headers: {
+            Authorization: `Bearer ${ghAccessToken}`,
+            'User-Agent': 'Embedo-App',
+            Accept: 'application/vnd.github.v3+json',
+          },
+        });
+        if (emailsRes.ok) {
+          const emailsList = (await emailsRes.json()) as Array<{ email: string; primary: boolean; verified: boolean }>;
+          const primary = emailsList.find((e) => e.primary && e.verified) || emailsList.find((e) => e.verified);
+          if (primary) email = primary.email.toLowerCase().trim();
+        }
+      } catch {
+        // Fallthrough
+      }
+    }
+
+    if (!email) {
+      throw new AppError(400, 'BAD_REQUEST', 'Your GitHub account does not have a verified email address');
+    }
+
+    const githubSub = String(ghUser.id);
+
+    let user = await prisma.user.findFirst({
+      where: { deletedAt: null, authIdentities: { some: { provider: 'github', providerUserId: githubSub } } },
+    });
+
+    if (!user) {
+      const byEmail = await prisma.user.findFirst({ where: { email, deletedAt: null } });
+
+      if (byEmail) {
+        if (byEmail.hashedPassword && !input.linkAccount) {
+          throw new AppError(
+            409,
+            'ACCOUNT_LINK_REQUIRED',
+            'An account with this email already exists using password login. Would you like to link your GitHub account to it?',
+            { email }
+          );
+        }
+
+        const existingIdentity = await prisma.authIdentity.findFirst({
+          where: { userId: byEmail.id, provider: 'github' },
+        });
+        if (!existingIdentity) {
+          await prisma.authIdentity.create({
+            data: { userId: byEmail.id, provider: 'github', providerUserId: githubSub },
+          });
+        }
+        user = byEmail;
+      } else {
+        if (input.dataConsent !== true) {
+          throw new AppError(400, 'CONSENT_REQUIRED', 'Data consent is required to create an Embedo account');
+        }
+        user = await prisma.user.create({
+          data: {
+            email,
+            expertiseLevel: input.expertiseLevel || null,
+            dataConsent: true,
+            dataConsentDate: new Date(),
+            role: 'user',
+            authIdentities: { create: { provider: 'github', providerUserId: githubSub } },
           },
         });
       }

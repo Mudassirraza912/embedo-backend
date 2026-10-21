@@ -3,10 +3,21 @@ import { z } from 'zod';
 export const registerSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(8, 'Password must be at least 8 characters long').max(72, 'Password cannot exceed 72 characters'),
+  fullName: z.string().max(100).optional(),
   expertiseLevel: z.enum(['student', 'hobbyist', 'professional', 'expert']).optional(),
+  otp: z.string().regex(/^\d{5}$/, 'Verification code must be 5 digits').optional(),
   dataConsent: z.literal(true, {
     errorMap: () => ({ message: 'Data consent is required to register and use Embedo' }),
   }),
+});
+
+export const verifyOtpSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  otp: z.string().regex(/^\d{5}$/, 'Verification code must be 5 digits'),
+});
+
+export const resendOtpSchema = z.object({
+  email: z.string().email('Invalid email address'),
 });
 
 export const loginSchema = z.object({
@@ -26,6 +37,14 @@ export const googleAuthSchema = z.object({
   linkAccount: z.boolean().optional(),
 });
 
+export const githubAuthSchema = z.object({
+  code: z.string().min(1, 'GitHub authorization code is required'),
+  redirectUri: z.string().optional(),
+  expertiseLevel: z.enum(['student', 'hobbyist', 'professional', 'expert']).optional(),
+  dataConsent: z.boolean().optional(),
+  linkAccount: z.boolean().optional(),
+});
+
 export const forgotPasswordSchema = z.object({
   email: z.string().email('Invalid email address'),
 });
@@ -36,8 +55,10 @@ export const resetPasswordSchema = z.object({
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;
+export type VerifyOtpInput = z.infer<typeof verifyOtpSchema>;
+export type ResendOtpInput = z.infer<typeof resendOtpSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type GoogleAuthInput = z.infer<typeof googleAuthSchema>;
+export type GithubAuthInput = z.infer<typeof githubAuthSchema>;
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
-

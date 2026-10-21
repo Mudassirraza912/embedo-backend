@@ -16,12 +16,39 @@ export class AuthController {
   register = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const result = await authService.register(req.body);
+      if ('status' in result) {
+        res.status(200).json(result);
+        return;
+      }
+
+      this.setRefreshCookie(res, result.refreshToken);
+      res.status(201).json({
+        user: result.user,
+        accessToken: result.accessToken,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  verifyOtp = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await authService.verifyOtp(req.body);
       this.setRefreshCookie(res, result.refreshToken);
 
       res.status(201).json({
         user: result.user,
         accessToken: result.accessToken,
       });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  resendOtp = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await authService.resendOtp(req.body);
+      res.status(200).json(result);
     } catch (err) {
       next(err);
     }
@@ -44,6 +71,20 @@ export class AuthController {
   google = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const result = await authService.loginWithGoogle(req.body);
+      this.setRefreshCookie(res, result.refreshToken);
+
+      res.status(200).json({
+        user: result.user,
+        accessToken: result.accessToken,
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  github = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const result = await authService.loginWithGithub(req.body);
       this.setRefreshCookie(res, result.refreshToken);
 
       res.status(200).json({
@@ -112,6 +153,7 @@ export class AuthController {
   getConfig = async (_req: Request, res: Response, _next: NextFunction): Promise<void> => {
     res.status(200).json({
       googleClientId: env.GOOGLE_CLIENT_ID || null,
+      githubClientId: env.GITHUB_CLIENT_ID || null,
     });
   };
 }
