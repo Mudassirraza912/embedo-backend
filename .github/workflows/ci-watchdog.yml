@@ -1,0 +1,58 @@
+name: CI watchdog
+
+# GitHub sometimes drops or badly delays push events (2026-10-21: "Webhooks - degraded performance";
+# a push to the frontend's `development` landed on GitHub but no CI/CD run started). This job runs on
+# GitHub's scheduler, which does not depend on push webhooks: every 10 minutes it looks at the head
+# commit of each deploy branch and, when that commit has no CI/CD run, starts one with
+# workflow_dispatch (same verify + deploy jobs as a push).
+#
+# Guards:
+#  - commits younger than 5 minutes are left alone, so a normal push always starts its own run;
+#  - commits older than 3 days are left alone (old run records expire; never redeploy stale code);
+#  - runs are matched by commit AND branch (main and development can share a commit).
+# Scheduled workflows only run from the default branch, so this file must be on `main`.
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: ci-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Start CI/CD for deploy-branch heads that have no run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ci-cd.yml
+          BRANCHES: main development
+          MIN_AGE_SECONDS: 300
+          MAX_AGE_SECONDS: 259200
+        run: |
+          set -euo pipefail
+          now=$(date +%s)
+          for branch in $BRANCHES; do
+            sha=$(gh api "repos/$REPO/commits/$branch" --jq .sha 2>/dev/null || true)
+            if [ -z "$sha" ]; then echo "$branch: no such branch"; continue; fi
+            committed=$(gh api "repos/$REPO/commits/$sha" --jq .commit.committer.date)
+            age=$(( now - $(date -d "$committed" +%s) ))
+            if [ "$age" -lt "$MIN_AGE_SECONDS" ]; then echo "$branch ${sha:0:7}: ${age}s old, leaving it to the push run"; continue; fi
+            if [ "$age" -gt "$MAX_AGE_SECONDS" ]; then echo "$branch ${sha:0:7}: older than 3 days, not touched"; continue; fi
+            runs=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW/runs?head_sha=$sha&branch=$branch&per_page=1" --jq .total_count)
+            if [ "$runs" -gt 0 ]; then
+              echo "$branch ${sha:0:7}: has $runs run(s)"
+            else
+              echo "::warning::$branch ${sha:0:7} has no $WORKFLOW run (push event lost?); starting one"
+              gh workflow run "$WORKFLOW" --repo "$REPO" --ref "$branch"
+            fi
+          done
