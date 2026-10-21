@@ -3,8 +3,8 @@ import { env } from '../../config/env.js';
 import { logger } from '../../config/logger.js';
 
 /**
- * Outbound email. Configured via SMTP_* env vars. When not configured, `isConfigured` is false
- * and callers must decide how to degrade — this service never pretends a message was sent.
+ * Outbound email service.
+ * High-fidelity HTML emails themed to match the Embedo app & status page design system.
  */
 class EmailService {
   private transporter: Transporter | null = null;
@@ -33,7 +33,7 @@ class EmailService {
       throw new Error('Email transport is not configured');
     }
     await this.transporter.sendMail({
-      from: env.MAIL_FROM || env.SMTP_USER || 'no-reply@embedo.ai',
+      from: env.MAIL_FROM || env.SMTP_USER || 'Embedo <noreply@embedo.ai>',
       to: params.to,
       subject: params.subject,
       text: params.text,
@@ -42,36 +42,133 @@ class EmailService {
   }
 
   async sendPasswordReset(to: string, resetUrl: string): Promise<void> {
-    await this.send({
-      to,
-      subject: 'Reset your Embedo.ai password',
-      text: `We received a request to reset your Embedo.ai password.\n\nReset it here (link expires in 1 hour):\n${resetUrl}\n\nIf you did not request this, you can ignore this email.`,
-      html: `<p>We received a request to reset your Embedo.ai password.</p><p><a href="${resetUrl}">Reset your password</a> (link expires in 1 hour)</p><p>If you did not request this, you can ignore this email.</p>`,
-    });
+    const text = `We received a request to reset your Embedo.ai password.\n\nReset your password here (link expires in 1 hour):\n${resetUrl}\n\nIf you did not request this, you can ignore this email.`;
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #021316; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #021316; padding: 40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 560px; background-color: #06262B; border: 1px solid #075F69; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+          <tr>
+            <td style="padding: 28px 32px 20px 32px; border-bottom: 1px solid rgba(7, 95, 105, 0.4);">
+              <span style="font-size: 15px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: #20E6E0;">
+                EMBEDO<span style="color: #EAF6F6;">.AI</span>
+              </span>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 32px 32px 28px 32px;">
+              <h1 style="color: #EAF6F6; font-size: 20px; font-weight: 600; margin: 0 0 14px 0;">Reset Your Password</h1>
+              <p style="color: #9CD7D5; font-size: 14px; line-height: 1.65; margin: 0 0 24px 0;">
+                We received a request to reset your Embedo.ai password. Click the button below to choose a new password. This link expires in 1 hour.
+              </p>
+              <div style="margin: 28px 0;">
+                <a href="${resetUrl}" style="display: inline-block; background-color: #20E6E0; color: #021316; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; text-decoration: none; padding: 12px 28px; border-radius: 9999px;">
+                  Reset Password →
+                </a>
+              </div>
+              <p style="color: #67B7B4; font-size: 12px; line-height: 1.6; margin: 24px 0 0 0;">
+                If you did not request a password reset, you can safely ignore this email. Your password will not change.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    await this.send({ to, subject: 'Reset your Embedo.ai password', text, html });
   }
 
   async sendStatusSubscriptionConfirmation(to: string, unsubscribeToken: string): Promise<void> {
     const unsubUrl = `https://status.embedo.ai/unsubscribe?token=${encodeURIComponent(unsubscribeToken)}`;
-    await this.send({
-      to,
-      subject: 'Subscribed to Embedo Status Updates',
-      text: `You have been subscribed to Embedo system status and incident alerts.\n\nWhenever an operational event, maintenance, or service disruption affects Embedo services, you will receive notifications here.\n\nLive dashboard: https://status.embedo.ai\n\nTo unsubscribe: ${unsubUrl}`,
-      html: `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px;">
-          <h2 style="color: #0f172a; margin-top: 0;">Embedo Status Notifications</h2>
-          <p style="color: #334155; line-height: 1.6;">You have successfully subscribed to Embedo system status and incident alerts.</p>
-          <p style="color: #334155; line-height: 1.6;">Whenever an operational event, scheduled maintenance, or service disruption affects Embedo services (Embedo App, Architect Mode, AI Generation, Authentication, Storage), you will receive notifications here.</p>
-          <div style="margin: 24px 0;">
-            <a href="https://status.embedo.ai" style="display: inline-block; background-color: #2563eb; color: #ffffff; text-decoration: none; padding: 10px 20px; border-radius: 6px; font-weight: 500;">View Embedo Status Page</a>
-          </div>
-          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-          <p style="font-size: 12px; color: #64748b; line-height: 1.5;">
-            You received this email because this address was subscribed to updates at <a href="https://status.embedo.ai" style="color: #64748b;">status.embedo.ai</a>.<br />
-            To unsubscribe at any time: <a href="${unsubUrl}" style="color: #2563eb;">click here to unsubscribe</a>.
-          </p>
-        </div>
-      `,
-    });
+    const text = `You have been subscribed to Embedo system status and incident alerts.\n\nWhenever an operational event, maintenance, or service disruption affects Embedo services (Embedo App, Architect Mode, AI Generation, Authentication, Storage), you will receive notifications here.\n\nLive dashboard: https://status.embedo.ai\n\nTo unsubscribe: ${unsubUrl}`;
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #021316; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #021316; padding: 40px 16px;">
+    <tr>
+      <td align="center">
+        <!-- Main Card Container -->
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 560px; background-color: #06262B; border: 1px solid #075F69; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+          
+          <!-- Brand Header -->
+          <tr>
+            <td style="padding: 26px 32px 20px 32px; border-bottom: 1px solid rgba(7, 95, 105, 0.4);">
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td>
+                    <span style="font-size: 15px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: #20E6E0;">
+                      EMBEDO<span style="color: #EAF6F6;">.AI</span>
+                    </span>
+                  </td>
+                  <td align="right">
+                    <span style="display: inline-block; padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; background-color: rgba(32, 230, 224, 0.12); color: #20E6E0; border: 1px solid rgba(32, 230, 224, 0.3);">
+                      ● System Status
+                    </span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Main Body -->
+          <tr>
+            <td style="padding: 32px 32px 28px 32px;">
+              <h1 style="color: #EAF6F6; font-size: 20px; font-weight: 600; margin: 0 0 14px 0; line-height: 1.35; letter-spacing: -0.01em;">
+                Status Notifications Subscribed
+              </h1>
+              <p style="color: #9CD7D5; font-size: 14px; line-height: 1.65; margin: 0 0 20px 0;">
+                You are now subscribed to real-time incident notifications and operational status updates for the Embedo platform.
+              </p>
+
+              <!-- Services Monitored Box -->
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #021316; border: 1px solid #075F69; border-radius: 10px; margin: 20px 0 26px 0;">
+                <tr>
+                  <td style="padding: 16px 20px;">
+                    <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.12em; color: #20E6E0; margin-bottom: 6px;">
+                      Monitored Platform Services
+                    </div>
+                    <div style="color: #EAF6F6; font-size: 13px; line-height: 1.6;">
+                      Embedo App • Architect Mode • AI Generation • Prototype Engine • Cloud Storage • Authentication
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Call to Action Button -->
+              <div style="margin: 28px 0 10px 0;">
+                <a href="https://status.embedo.ai" style="display: inline-block; background-color: #20E6E0; color: #021316; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; text-decoration: none; padding: 12px 28px; border-radius: 9999px; text-align: center;">
+                  Open Live Status Dashboard →
+                </a>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 20px 32px 24px 32px; background-color: rgba(2, 19, 22, 0.6); border-top: 1px solid rgba(7, 95, 105, 0.4);">
+              <p style="font-size: 12px; color: #67B7B4; line-height: 1.6; margin: 0;">
+                You received this alert because you subscribed at <a href="https://status.embedo.ai" style="color: #20E6E0; text-decoration: none;">status.embedo.ai</a>.<br />
+                To stop receiving updates: <a href="${unsubUrl}" style="color: #20E6E0; text-decoration: underline;">Unsubscribe from status alerts</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    await this.send({ to, subject: 'Subscribed to Embedo Status Updates', text, html });
   }
 
   async sendIncidentAlert(params: {
@@ -93,30 +190,89 @@ class EmailService {
     const servicesStr = (params.incident.affectedServices || []).join(', ') || 'All Services';
     const subject = `[Embedo Incident Alert] ${params.incident.title} — ${statusUpper}`;
 
-    await this.send({
-      to: params.to,
-      subject,
-      text: `Embedo Incident Alert: ${params.incident.title}\nStatus: ${statusUpper}\nSeverity: ${params.incident.severity}\nAffected Services: ${servicesStr}\n\n${params.incident.updateMessage || params.incident.description || ''}\n\nLive dashboard: https://status.embedo.ai\nUnsubscribe: ${unsubUrl}`,
-      html: `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 580px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px;">
-          <div style="display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; text-transform: uppercase; margin-bottom: 12px; background-color: #fee2e2; color: #991b1b;">
-            ${statusUpper}
-          </div>
-          <h2 style="color: #0f172a; margin-top: 0;">${params.incident.title}</h2>
-          <p style="color: #475569; font-size: 14px;"><strong>Affected:</strong> ${servicesStr}</p>
-          <div style="background-color: #f8fafc; border-left: 4px solid #2563eb; padding: 12px 16px; margin: 16px 0; color: #1e293b;">
-            ${params.incident.updateMessage || params.incident.description || 'Service update posted.'}
-          </div>
-          <div style="margin: 20px 0;">
-            <a href="https://status.embedo.ai" style="display: inline-block; background-color: #0f172a; color: #ffffff; text-decoration: none; padding: 10px 18px; border-radius: 6px; font-size: 14px;">View Live Status Dashboard</a>
-          </div>
-          <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-          <p style="font-size: 12px; color: #64748b;">
-            <a href="${unsubUrl}" style="color: #64748b;">Unsubscribe from status alerts</a>
-          </p>
-        </div>
-      `,
-    });
+    const isResolved = params.incident.status === 'resolved';
+    const isOutage = params.incident.severity === 'major_outage';
+    const pillBg = isResolved ? 'rgba(32, 230, 224, 0.15)' : isOutage ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)';
+    const pillColor = isResolved ? '#20E6E0' : isOutage ? '#f87171' : '#fbbf24';
+    const pillBorder = isResolved ? 'rgba(32, 230, 224, 0.35)' : isOutage ? 'rgba(239, 68, 68, 0.35)' : 'rgba(245, 158, 11, 0.35)';
+
+    const text = `Embedo Incident Alert: ${params.incident.title}\nStatus: ${statusUpper}\nSeverity: ${params.incident.severity}\nAffected Services: ${servicesStr}\n\n${params.incident.updateMessage || params.incident.description || ''}\n\nLive dashboard: https://status.embedo.ai\nUnsubscribe: ${unsubUrl}`;
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin: 0; padding: 0; background-color: #021316; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+  <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #021316; padding: 40px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="max-width: 560px; background-color: #06262B; border: 1px solid #075F69; border-radius: 16px; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+          
+          <!-- Header -->
+          <tr>
+            <td style="padding: 26px 32px 20px 32px; border-bottom: 1px solid rgba(7, 95, 105, 0.4);">
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0">
+                <tr>
+                  <td>
+                    <span style="font-size: 15px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: #20E6E0;">
+                      EMBEDO<span style="color: #EAF6F6;">.AI</span>
+                    </span>
+                  </td>
+                  <td align="right">
+                    <span style="display: inline-block; padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; background-color: ${pillBg}; color: ${pillColor}; border: 1px solid ${pillBorder};">
+                      ● ${statusUpper}
+                    </span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Incident Content -->
+          <tr>
+            <td style="padding: 32px 32px 28px 32px;">
+              <h1 style="color: #EAF6F6; font-size: 20px; font-weight: 600; margin: 0 0 10px 0; line-height: 1.35;">
+                ${params.incident.title}
+              </h1>
+              <p style="color: #9CD7D5; font-size: 13px; margin: 0 0 20px 0;">
+                <strong style="color: #EAF6F6;">Affected Systems:</strong> ${servicesStr}
+              </p>
+
+              <!-- Incident Update Box -->
+              <table role="presentation" width="100%" border="0" cellspacing="0" cellpadding="0" style="background-color: #021316; border-left: 4px solid ${pillColor}; border-radius: 6px; margin: 20px 0 26px 0;">
+                <tr>
+                  <td style="padding: 16px 20px; color: #EAF6F6; font-size: 13.5px; line-height: 1.6;">
+                    ${params.incident.updateMessage || params.incident.description || 'Service update posted.'}
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Button -->
+              <div style="margin: 28px 0 10px 0;">
+                <a href="https://status.embedo.ai" style="display: inline-block; background-color: #20E6E0; color: #021316; font-size: 13px; font-weight: 600; letter-spacing: 0.02em; text-decoration: none; padding: 12px 28px; border-radius: 9999px; text-align: center;">
+                  View Live Incident Dashboard →
+                </a>
+              </div>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 20px 32px 24px 32px; background-color: rgba(2, 19, 22, 0.6); border-top: 1px solid rgba(7, 95, 105, 0.4);">
+              <p style="font-size: 12px; color: #67B7B4; line-height: 1.6; margin: 0;">
+                Track real-time resolution on <a href="https://status.embedo.ai" style="color: #20E6E0; text-decoration: none;">status.embedo.ai</a>.<br />
+                <a href="${unsubUrl}" style="color: #67B7B4; text-decoration: underline;">Unsubscribe from status alerts</a>
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    await this.send({ to: params.to, subject, text, html });
   }
 }
 
