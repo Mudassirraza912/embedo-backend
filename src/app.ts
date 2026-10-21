@@ -96,7 +96,8 @@ export const createApp = (): Express => {
     const isHealthy = dbStatus === 'up' && redisStatus === 'up';
     res.status(isHealthy ? 200 : 503).json({
       status: isHealthy ? 'ok' : 'degraded',
-      services: { database: dbStatus, redis: redisStatus, email: emailService.isConfigured ? 'up' : 'not_configured' },
+      services: { database: dbStatus, redis: redisStatus },
+      emailConfigured: emailService.isConfigured,
       timestamp: new Date().toISOString(),
       env: env.NODE_ENV,
       version: buildInfo.version,
