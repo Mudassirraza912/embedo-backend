@@ -20,7 +20,7 @@ import { prisma } from './db/prisma.js';
 import { redis } from './db/redis.js';
 import { bullBoardRouter } from './jobs/bull-board.js';
 import { logger } from './config/logger.js';
-import { computeLiveServiceTelemetry, addSubscriber, removeSubscriber } from './modules/status/status.service.js';
+import { computeLiveServiceTelemetry, addSubscriber, removeSubscriber, unsubscribeByToken } from './modules/status/status.service.js';
 
 import { rateLimitGlobal } from './common/middlewares/rate-limit.middleware.js';
 
@@ -123,22 +123,35 @@ export const createApp = (): Express => {
   // Public status subscription endpoints (ESD-8)
   app.options(`${env.API_PREFIX}/status/subscribe`, subscribeCors);
   app.post(`${env.API_PREFIX}/status/subscribe`, subscribeCors, async (req: Request, res: Response) => {
-    const { email, webhookUrl } = (req.body || {}) as { email?: string; webhookUrl?: string };
+    const { email, webhookUrl, topics } = (req.body || {}) as { email?: string; webhookUrl?: string; topics?: string[] };
     if (email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      await addSubscriber('email', email);
-      res.status(200).json({ success: true, message: 'Subscribed to status updates successfully.' });
+      const result = await addSubscriber('email', email, topics);
+      res.status(200).json({
+        success: true,
+        message: 'Subscribed to status updates successfully.',
+        unsubscribeToken: result.unsubscribeToken,
+      });
       return;
     }
     if (webhookUrl && /^https?:\/\//i.test(webhookUrl)) {
-      await addSubscriber('webhook', webhookUrl);
-      res.status(200).json({ success: true, message: 'Webhook subscribed successfully.' });
+      const result = await addSubscriber('webhook', webhookUrl, topics);
+      res.status(200).json({
+        success: true,
+        message: 'Webhook subscribed successfully.',
+        unsubscribeToken: result.unsubscribeToken,
+      });
       return;
     }
     res.status(400).json({ error: 'Valid email address or webhook URL required.' });
   });
 
   app.delete(`${env.API_PREFIX}/status/subscribe`, subscribeCors, async (req: Request, res: Response) => {
-    const { email, webhookUrl } = (req.body || {}) as { email?: string; webhookUrl?: string };
+    const { email, webhookUrl, token } = (req.body || {}) as { email?: string; webhookUrl?: string; token?: string };
+    if (token) {
+      await unsubscribeByToken(token);
+      res.status(200).json({ success: true, message: 'Unsubscribed successfully.' });
+      return;
+    }
     if (email) await removeSubscriber('email', email);
     if (webhookUrl) await removeSubscriber('webhook', webhookUrl);
     res.status(200).json({ success: true, message: 'Unsubscribed successfully.' });

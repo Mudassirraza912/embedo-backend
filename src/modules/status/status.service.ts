@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { prisma } from '../../db/prisma.js';
 import { redis } from '../../db/redis.js';
 import { logger } from '../../config/logger.js';
@@ -396,20 +397,106 @@ export async function computeLiveServiceTelemetry() {
   };
 }
 
-export async function addSubscriber(type: 'email' | 'webhook', target: string) {
+export async function addSubscriber(
+  type: 'email' | 'webhook',
+  target: string,
+  topics?: string[]
+): Promise<{ id: string; unsubscribeToken: string }> {
+  const normalizedTarget = target.trim().toLowerCase();
+  const unsubscribeToken = crypto.randomBytes(24).toString('hex');
+  const verifyToken = crypto.randomBytes(24).toString('hex');
+
+  // 1. Durable PostgreSQL storage via Prisma (ESD-8)
+  let subscriberId = '';
+  let token = unsubscribeToken;
+  try {
+    const subscriber = await prisma.statusSubscriber.upsert({
+      where: {
+        channel_target: {
+          channel: type,
+          target: normalizedTarget,
+        },
+      },
+      create: {
+        channel: type,
+        target: normalizedTarget,
+        isVerified: type === 'webhook', // Webhooks are active immediately
+        active: true,
+        verifyToken,
+        unsubscribeToken,
+        topics: topics || undefined,
+      },
+      update: {
+        active: true,
+        unsubscribedAt: null,
+        topics: topics || undefined,
+      },
+    });
+    subscriberId = subscriber.id;
+    if (subscriber.unsubscribeToken) {
+      token = subscriber.unsubscribeToken;
+    }
+  } catch (err) {
+    logger.error({ err }, `Could not persist ${type} subscriber in database`);
+  }
+
+  // 2. Fast transient Redis cache/queue for live dispatch
   const key = type === 'email' ? REDIS_EMAIL_SUBS_KEY : REDIS_WEBHOOK_SUBS_KEY;
   try {
-    await redis.sadd(key, target);
+    await redis.sadd(key, normalizedTarget);
   } catch (err) {
-    logger.warn({ err }, `Could not persist ${type} subscriber in redis`);
+    logger.warn({ err }, `Could not sync ${type} subscriber to redis`);
+  }
+
+  return { id: subscriberId, unsubscribeToken: token };
+}
+
+export async function removeSubscriber(type: 'email' | 'webhook', target: string): Promise<void> {
+  const normalizedTarget = target.trim().toLowerCase();
+
+  // 1. Soft-deactivate in durable PostgreSQL table (ESD-8)
+  try {
+    await prisma.statusSubscriber.updateMany({
+      where: { channel: type, target: normalizedTarget },
+      data: {
+        active: false,
+        unsubscribedAt: new Date(),
+      },
+    });
+  } catch (err) {
+    logger.warn({ err }, `Could not deactivate ${type} subscriber in database`);
+  }
+
+  // 2. Remove from transient Redis delivery set
+  const key = type === 'email' ? REDIS_EMAIL_SUBS_KEY : REDIS_WEBHOOK_SUBS_KEY;
+  try {
+    await redis.srem(key, normalizedTarget);
+  } catch (err) {
+    logger.warn({ err }, `Could not remove ${type} subscriber from redis`);
   }
 }
 
-export async function removeSubscriber(type: 'email' | 'webhook', target: string) {
-  const key = type === 'email' ? REDIS_EMAIL_SUBS_KEY : REDIS_WEBHOOK_SUBS_KEY;
+export async function unsubscribeByToken(token: string): Promise<boolean> {
+  if (!token) return false;
   try {
-    await redis.srem(key, target);
+    const subscriber = await prisma.statusSubscriber.findFirst({
+      where: { unsubscribeToken: token },
+    });
+    if (!subscriber) return false;
+
+    await prisma.statusSubscriber.update({
+      where: { id: subscriber.id },
+      data: {
+        active: false,
+        unsubscribedAt: new Date(),
+      },
+    });
+
+    const key = subscriber.channel === 'email' ? REDIS_EMAIL_SUBS_KEY : REDIS_WEBHOOK_SUBS_KEY;
+    await redis.srem(key, subscriber.target);
+    return true;
   } catch (err) {
-    logger.warn({ err }, `Could not remove ${type} subscriber from redis`);
+    logger.warn({ err }, 'Could not unsubscribe via token');
+    return false;
   }
 }

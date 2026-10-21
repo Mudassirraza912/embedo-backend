@@ -560,3 +560,25 @@ model ListingObservation {
   @@index([listingId, observedAt], map: "listing_observations_listing_idx")
   @@map("listing_observations")
 }
+
+
+/// Subscribers to service status updates and incident alerts (ESD-8).
+/// Durable PostgreSQL store with Redis serving as transient delivery queue.
+model StatusSubscriber {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  channel          String    @default("email") @db.VarChar(20)
+  target           String    @db.VarChar(255)
+  isVerified       Boolean   @default(false) @map("is_verified")
+  verifyToken      String?   @map("verify_token") @db.VarChar(100)
+  unsubscribeToken String?   @map("unsubscribe_token") @db.VarChar(100)
+  topics           Json?
+  active           Boolean   @default(true)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt        DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+  unsubscribedAt   DateTime? @map("unsubscribed_at") @db.Timestamp(6)
+
+  @@unique([channel, target], map: "status_subscribers_channel_target_key")
+  @@index([target], map: "status_subscribers_target_idx")
+  @@index([active], map: "status_subscribers_active_idx")
+  @@map("status_subscribers")
+}
