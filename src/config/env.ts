@@ -69,6 +69,9 @@ const envSchema = z
       .transform((v) => v === 'true'),
     SMTP_USER: optionalString,
     SMTP_PASSWORD: optionalString,
+    SMTP_PASS: optionalString,
+    FROM_EMAIL: optionalString,
+    FROM_NAME: optionalString,
     MAIL_FROM: optionalString,
 
     // Datasheet ingestion hardening
@@ -163,8 +166,18 @@ const parseEnv = () => {
     process.exit(1);
   }
   const cfg = result.data;
+  const smtpPassword = cfg.SMTP_PASSWORD ?? cfg.SMTP_PASS;
+  const mailFrom =
+    cfg.MAIL_FROM ??
+    (cfg.FROM_EMAIL
+      ? cfg.FROM_NAME
+        ? `${cfg.FROM_NAME} <${cfg.FROM_EMAIL}>`
+        : cfg.FROM_EMAIL
+      : undefined);
   return {
     ...cfg,
+    SMTP_PASSWORD: smtpPassword,
+    MAIL_FROM: mailFrom,
     MODERATION_FAIL_MODE: cfg.MODERATION_FAIL_MODE ?? (cfg.NODE_ENV === 'production' ? 'closed' : 'open'),
   };
 };

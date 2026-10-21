@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { prisma } from '../../db/prisma.js';
 import { redis } from '../../db/redis.js';
 import { logger } from '../../config/logger.js';
+import { emailService } from '../../common/services/email.service.js';
 
 export interface StatusIncidentUpdate {
   status: 'investigating' | 'identified' | 'monitoring' | 'resolved';
@@ -448,6 +449,13 @@ export async function addSubscriber(
     logger.warn({ err }, `Could not sync ${type} subscriber to redis`);
   }
 
+  // 3. Dispatch confirmation email asynchronously (ESD-8)
+  if (type === 'email' && emailService.isConfigured) {
+    emailService.sendStatusSubscriptionConfirmation(normalizedTarget, token).catch((err) => {
+      logger.warn({ err, target: normalizedTarget }, 'Could not deliver status subscription confirmation email');
+    });
+  }
+
   return { id: subscriberId, unsubscribeToken: token };
 }
 
@@ -499,4 +507,50 @@ export async function unsubscribeByToken(token: string): Promise<boolean> {
     logger.warn({ err }, 'Could not unsubscribe via token');
     return false;
   }
+}
+
+
+export async function broadcastIncidentAlert(
+  incident: StatusIncident,
+  updateMessage?: string
+): Promise<{ dispatched: number; failed: number }> {
+  let dispatched = 0;
+  let failed = 0;
+
+  if (!emailService.isConfigured) {
+    logger.info('Email service not configured; skipping incident alert broadcast');
+    return { dispatched: 0, failed: 0 };
+  }
+
+  try {
+    const subscribers = await prisma.statusSubscriber.findMany({
+      where: { channel: 'email', active: true },
+      select: { target: true, unsubscribeToken: true },
+    });
+
+    for (const sub of subscribers) {
+      try {
+        await emailService.sendIncidentAlert({
+          to: sub.target,
+          incident: {
+            title: incident.title,
+            severity: incident.severity,
+            status: incident.status,
+            affectedServices: incident.affected_services,
+            description: incident.description,
+            updateMessage,
+          },
+          unsubscribeToken: sub.unsubscribeToken || undefined,
+        });
+        dispatched++;
+      } catch (err) {
+        failed++;
+        logger.warn({ err, target: sub.target }, 'Failed to deliver incident alert email');
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, 'Error querying subscribers for incident broadcast');
+  }
+
+  return { dispatched, failed };
 }
