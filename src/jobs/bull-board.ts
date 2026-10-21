@@ -5,6 +5,7 @@ import { aiPipelineQueue } from './ai-pipeline.queue.js';
 import { exportQueue } from './export.queue.js';
 import { componentRefreshQueue } from './component-refresh.queue.js';
 import { datasheetIngestQueue } from './datasheet-ingest.queue.js';
+import { ekabQueue } from './ekab.queue.js';
 
 const serverAdapter = new ExpressAdapter();
 serverAdapter.setBasePath('/admin/queues');
@@ -15,6 +16,7 @@ createBullBoard({
     new BullMQAdapter(exportQueue),
     new BullMQAdapter(componentRefreshQueue),
     new BullMQAdapter(datasheetIngestQueue),
+    new BullMQAdapter(ekabQueue),
   ],
   serverAdapter,
 });

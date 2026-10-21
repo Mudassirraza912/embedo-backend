@@ -29,6 +29,30 @@ import {
   proposalSubmitSchema,
 } from '../hardware/hardware.validation.js';
 
+import { ekabAdminController } from '../ekab/ekab-admin.controller.js';
+import {
+  approveQaSchema,
+  promoteSchema,
+  recordListQuerySchema,
+  rejectSchema,
+  releaseListQuerySchema,
+  releaseParamSchema,
+  releaseUploadSchema,
+  sourceDomainCreateSchema,
+  sourceDomainParamSchema,
+  sourceDomainUpdateSchema,
+} from '../ekab/ekab.validation.js';
+import {
+  buildReleaseSchema,
+  candidateBulkSchema,
+  candidateListQuerySchema,
+  candidateParamSchema,
+  candidateReviewSchema,
+  scrapeJobListQuerySchema,
+  scrapeJobParamSchema,
+  scrapeJobSchema,
+} from '../ekab/scrape/ekab-scrape.validation.js';
+
 const router = Router();
 
 // Every admin route requires an authenticated admin.
@@ -78,6 +102,46 @@ router.patch(
   hardwareAdminController.updateGovernance
 );
 router.post('/hardware/:id/embed', validate({ params: hardwareEntityParamSchema }), hardwareAdminController.embed);
+
+// Domain knowledge (EKAB, Track B releases): upload -> worker stages -> admin approves QA -> promote.
+router.get('/knowledge/overview', ekabAdminController.overview);
+router.get('/knowledge/domains', ekabAdminController.domains);
+router.get('/knowledge/releases', validate({ query: releaseListQuerySchema }), ekabAdminController.list);
+router.post('/knowledge/releases', validate({ body: releaseUploadSchema }), ekabAdminController.upload);
+router.post('/knowledge/releases/validate', validate({ body: releaseUploadSchema }), ekabAdminController.validate);
+router.post('/knowledge/embeddings/backfill', ekabAdminController.embedMissing);
+router.get('/knowledge/releases/:releasePk', validate({ params: releaseParamSchema }), ekabAdminController.get);
+router.get('/knowledge/releases/:releasePk/records', validate({ params: releaseParamSchema, query: recordListQuerySchema }), ekabAdminController.records);
+router.post('/knowledge/releases/:releasePk/reprocess', validate({ params: releaseParamSchema }), ekabAdminController.reprocess);
+router.post('/knowledge/releases/:releasePk/approve-qa', validate({ params: releaseParamSchema, body: approveQaSchema }), ekabAdminController.approveQa);
+router.post('/knowledge/releases/:releasePk/promote', validate({ params: releaseParamSchema, body: promoteSchema }), ekabAdminController.promote);
+router.post('/knowledge/releases/:releasePk/reject', validate({ params: releaseParamSchema, body: rejectSchema }), ekabAdminController.reject);
+// Websites the source scraper may read (RESTRICTED ones are never fetched).
+router.get('/knowledge/source-domains', ekabAdminController.listSourceDomains);
+router.post('/knowledge/source-domains', validate({ body: sourceDomainCreateSchema }), ekabAdminController.createSourceDomain);
+router.post('/knowledge/source-domains/recommended', ekabAdminController.addRecommendedSourceDomains);
+router.patch(
+  '/knowledge/source-domains/:id',
+  validate({ params: sourceDomainParamSchema, body: sourceDomainUpdateSchema }),
+  ekabAdminController.updateSourceDomain
+);
+router.delete('/knowledge/source-domains/:id', validate({ params: sourceDomainParamSchema }), ekabAdminController.removeSourceDomain);
+// Source scraper: fetch allowlisted sources (no AI) -> review candidates -> build a QA_PENDING release.
+router.get('/knowledge/scrape-jobs', validate({ query: scrapeJobListQuerySchema }), ekabAdminController.listScrapeJobs);
+router.post('/knowledge/scrape-jobs', validate({ body: scrapeJobSchema }), ekabAdminController.createScrapeJob);
+router.get('/knowledge/scrape-jobs/:jobId', validate({ params: scrapeJobParamSchema }), ekabAdminController.getScrapeJob);
+router.get(
+  '/knowledge/scrape-jobs/:jobId/candidates',
+  validate({ params: scrapeJobParamSchema, query: candidateListQuerySchema }),
+  ekabAdminController.listCandidates
+);
+router.post(
+  '/knowledge/scrape-jobs/:jobId/candidates/bulk',
+  validate({ params: scrapeJobParamSchema, body: candidateBulkSchema }),
+  ekabAdminController.reviewCandidates
+);
+router.post('/knowledge/scrape-jobs/:jobId/build', validate({ params: scrapeJobParamSchema, body: buildReleaseSchema }), ekabAdminController.buildRelease);
+router.patch('/knowledge/candidates/:candidateId', validate({ params: candidateParamSchema, body: candidateReviewSchema }), ekabAdminController.reviewCandidate);
 
 // User Governance & Moderation Suspension Management
 router.get('/users', adminController.listUsers);

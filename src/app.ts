@@ -62,6 +62,8 @@ export const createApp = (): Express => {
   app.use(cors({ origin: corsOriginValidator, credentials: true, exposedHeaders: ['X-Embedo-Version', 'X-Request-Id'] }));
   app.use(cookieParser());
   app.use(`${env.API_PREFIX}/admin/components/ingest/json`, express.json({ limit: '12mb' }));
+  // Track B release packages (canonical JSON + manifests) can be several MB.
+  app.use(`${env.API_PREFIX}/admin/knowledge/releases`, express.json({ limit: '12mb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
   app.use(requestIdMiddleware);
