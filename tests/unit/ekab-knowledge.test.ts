@@ -1,6 +1,14 @@
 import { describe, it, expect, jest, afterEach, beforeEach } from '@jest/globals';
 import { prisma } from '../../src/db/prisma.js';
-import { citationLine, ekabKnowledgeService, topicsForCheck, topicsInText } from '../../src/modules/ekab/ekab-knowledge.service.js';
+import {
+  citationLine,
+  createRecordIdFilter,
+  ekabKnowledgeService,
+  knowledgeFooter,
+  removeRecordIds,
+  topicsForCheck,
+  topicsInText,
+} from '../../src/modules/ekab/ekab-knowledge.service.js';
 
 type Row = Record<string, unknown>;
 const row = (over: Row): Row => ({
@@ -103,5 +111,38 @@ describe('EKAB knowledge for Prototype', () => {
     await ekabKnowledgeService.forText('CAN termination');
     await ekabKnowledgeService.forText('I2C pull-up');
     expect(findMany).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** Seen on dev: the model put a record id next to "120 Ω" and "0.25 W", which the records do not say. */
+describe('chat replies never attribute text to a record', () => {
+  const rec = {
+    recordId: 'B1-COMM-S07BBDE5-0004',
+    revision: 1,
+    releaseId: 'B1.COMM.v0.1.0',
+    domainId: 'B1',
+    recordType: 'DESIGN_RULE',
+    title: null,
+    statement: 'TEST: terminate both ends of the cable.',
+    trustState: 'CONDITIONAL' as const,
+    origin: 'SOURCE_BASED',
+    confidence: 'HIGH',
+    appliesTo: [],
+    conditions: ['bus longer than 1 m'],
+    excludes: [],
+    sources: [{ title: 'Fixture datasheet', publisher: null, locator: 'p. 26', url: null, revision: 'Rev. O' }],
+  };
+
+  it('removes record ids the model writes, also when split across stream deltas', () => {
+    expect(removeRecordIds('Use 120 Ω at each end [B1-COMM-S07BBDE5-0004]. Done [B2-POWER-0001 r2, VERIFIED].')).toBe('Use 120 Ω at each end. Done.');
+    const f = createRecordIdFilter();
+    const out = ['Use 120 Ω ', 'at each end [B1-CO', 'MM-S07BBDE5-0004]. See [the guide](https://x.y) ', 'and [notes'].map((d) => f.push(d)).join('') + f.flush();
+    expect(out).toBe('Use 120 Ω at each end. See [the guide](https://x.y) and [notes');
+  });
+
+  it('appends the records word for word with trust state, conditions and source', () => {
+    expect(knowledgeFooter([])).toBe('');
+    const footer = knowledgeFooter([rec]);
+    expect(footer).toContain('“TEST: terminate both ends of the cable.” — Conditional. Only when: bus longer than 1 m. Source: Fixture datasheet, Rev. O, p. 26. (B1-COMM-S07BBDE5-0004)');
   });
 });

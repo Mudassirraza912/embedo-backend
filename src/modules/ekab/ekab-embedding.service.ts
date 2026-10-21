@@ -111,7 +111,7 @@ export const ekabEmbeddingService = {
    * Nearest records to a query among those that may reach reasoning: promoted release, ACTIVE,
    * not quarantined, VERIFIED/CONDITIONAL (§18 step 8). Null when vectors are unavailable.
    */
-  async rankEligible(query: string, limit: number): Promise<string[] | null> {
+  async rankEligible(query: string, limit: number, maxDistance = 0.55): Promise<string[] | null> {
     if (!this.configured || !query.trim()) return null;
     try {
       const result = await modelProviderService.embedBatch([query.slice(0, 4000)]);
@@ -126,6 +126,8 @@ export const ekabEmbeddingService = {
           AND r."lifecycle_status" = 'ACTIVE'
           AND r."quarantined" = false
           AND r."trust_state" IN (${Prisma.join([...REASONING_TRUST_STATES])})
+          -- Nearest is not the same as relevant: past this cosine distance a record is not about the question.
+          AND (r."embedding" <=> ${toVector(vector)}::vector) < ${maxDistance}
         ORDER BY r."embedding" <=> ${toVector(vector)}::vector
         LIMIT ${limit}`);
       return rows.map((r) => r.id);

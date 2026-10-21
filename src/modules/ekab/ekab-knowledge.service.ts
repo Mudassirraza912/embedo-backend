@@ -241,6 +241,72 @@ export function citationLine(c: KnowledgeCitation): string {
   return `- [${c.recordId} r${c.revision ?? 1}, ${c.trustState}${when}] ${c.statement}${where}`;
 }
 
+/** A prompt line without the record id: the model is not asked to cite (it mis-attributed values). */
+export function promptLine(c: KnowledgeCitation): string {
+  const when = c.trustState === 'CONDITIONAL' ? ` (CONDITIONAL — only when: ${[...c.conditions, ...c.excludes.map((e) => `not ${e}`)].join('; ') || 'see source'})` : '';
+  return `- ${c.statement}${when}`;
+}
+
+/**
+ * The records appended under a chat reply, word for word with trust state, conditions and source.
+ * Deterministic, so nothing can be attributed to a record that the record does not say.
+ */
+export function knowledgeFooter(records: KnowledgeCitation[]): string {
+  if (records.length === 0) return '';
+  const lines = records.map((c) => {
+    const src = c.sources[0];
+    const where = src ? [src.title, src.revision, src.locator].filter(Boolean).join(', ') : null;
+    const when = c.trustState === 'CONDITIONAL' ? ` Only when: ${[...c.conditions, ...c.excludes.map((e) => `not ${e}`)].join('; ') || 'see the source'}.` : '';
+    return `- “${c.statement}” — ${c.trustState === 'VERIFIED' ? 'Verified' : 'Conditional'}.${when}${where ? ` Source: ${where}.` : ''} (${c.recordId})`;
+  });
+  return `\n\n---\n**Related records from Embedo's reviewed knowledge base** (quoted as recorded):\n${lines.join('\n')}`;
+}
+
+/** Record ids in brackets, as a model may still write them ("[B1-COMM-S07BBDE5-0004]", "[B2-POWER-0001 r2]"). */
+const RECORD_ID_REF = /\s?\[B\d{1,2}-[A-Z]+-[A-Za-z0-9-]+(?: r\d+)?(?:,\s*[A-Z_]+[^\]]*)?\]/g;
+export const removeRecordIds = (text: string) => text.replace(RECORD_ID_REF, '');
+
+/**
+ * Streaming version of removeRecordIds: holds back text from a "[" until it can tell whether it is
+ * a record id (dropped) or anything else, e.g. a markdown link (passed through unchanged).
+ */
+export function createRecordIdFilter() {
+  let held = '';
+  const out = (text: string) => {
+    let result = '';
+    held += text;
+    for (;;) {
+      const open = held.indexOf('[');
+      if (open < 0) {
+        // Trailing spaces wait for the next delta: a removed id takes its leading space with it.
+        const keep = held.length - held.trimEnd().length;
+        result += held.slice(0, held.length - keep);
+        held = held.slice(held.length - keep);
+        return result;
+      }
+      let start = open;
+      while (start > 0 && held[start - 1] === ' ') start -= 1;
+      result += held.slice(0, start);
+      held = held.slice(start);
+      const close = held.indexOf(']');
+      if (close < 0) {
+        if (held.length > 80) {
+          result += held;
+          held = '';
+        }
+        return result;
+      }
+      result += removeRecordIds(held.slice(0, close + 1));
+      held = held.slice(close + 1);
+    }
+  };
+  return { push: (delta: string) => out(delta), flush: () => {
+    const rest = held;
+    held = '';
+    return rest;
+  } };
+}
+
 export interface BenchKnowledge {
   asOf: string;
   records: KnowledgeCitation[];
