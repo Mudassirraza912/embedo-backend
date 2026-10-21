@@ -23,6 +23,7 @@ import { logger } from './config/logger.js';
 import { computeLiveServiceTelemetry, addSubscriber, removeSubscriber, unsubscribeByToken } from './modules/status/status.service.js';
 
 import { rateLimitGlobal } from './common/middlewares/rate-limit.middleware.js';
+import { emailService } from './common/services/email.service.js';
 
 export const createApp = (): Express => {
   const app = express();
@@ -95,7 +96,7 @@ export const createApp = (): Express => {
     const isHealthy = dbStatus === 'up' && redisStatus === 'up';
     res.status(isHealthy ? 200 : 503).json({
       status: isHealthy ? 'ok' : 'degraded',
-      services: { database: dbStatus, redis: redisStatus },
+      services: { database: dbStatus, redis: redisStatus, email: emailService.isConfigured ? 'up' : 'not_configured' },
       timestamp: new Date().toISOString(),
       env: env.NODE_ENV,
       version: buildInfo.version,
