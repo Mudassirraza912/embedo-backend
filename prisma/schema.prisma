@@ -583,6 +583,24 @@ model StatusSubscriber {
   @@map("status_subscribers")
 }
 
+/// Trusted networks that may reach the internal admin portal (admin.embedo.ai). Managed by
+/// product admins at /admin/ingest; enforced by Nginx (VPS sync job) and by the admin API, both
+/// reading this table. An empty list allows nobody.
+model AdminPortalAllowedIp {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Normalised network, e.g. "203.0.113.7/32" or "2001:db8::/48".
+  cidr      String    @unique @db.VarChar(64)
+  label     String    @db.VarChar(120)
+  enabled   Boolean   @default(true)
+  expiresAt DateTime? @map("expires_at") @db.Timestamp(6)
+  createdBy String?   @map("created_by") @db.Uuid
+  updatedBy String?   @map("updated_by") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@map("admin_portal_ip_allowlist")
+}
+
 // ---------------------------------------------------------------------------------------------
 // EKAB — Track B domain intelligence (Canonical Output & EKAB Ingestion Contract v0.1, §14.1).
 // Releases are immutable: corrections arrive as new releases whose records supersede old ones.
