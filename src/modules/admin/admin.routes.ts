@@ -53,6 +53,13 @@ import {
   scrapeJobSchema,
 } from '../ekab/scrape/ekab-scrape.validation.js';
 
+import { adminPortalAccessController } from '../admin-portal-access/admin-portal-access.controller.js';
+import {
+  portalAccessCreateSchema,
+  portalAccessIdParamSchema,
+  portalAccessUpdateSchema,
+} from '../admin-portal-access/admin-portal-access.validation.js';
+
 const router = Router();
 
 // Every admin route requires an authenticated admin.
@@ -68,6 +75,16 @@ router.get(
   adminController.listRevisions
 );
 router.get('/components', validate({ query: listComponentsQuerySchema }), adminController.listComponents);
+
+// Trusted networks for the internal admin portal (admin.embedo.ai), enforced by Nginx and the admin API.
+router.get('/portal-access', adminPortalAccessController.list);
+router.post('/portal-access', validate({ body: portalAccessCreateSchema }), adminPortalAccessController.create);
+router.patch(
+  '/portal-access/:id',
+  validate({ params: portalAccessIdParamSchema, body: portalAccessUpdateSchema }),
+  adminPortalAccessController.update
+);
+router.delete('/portal-access/:id', validate({ params: portalAccessIdParamSchema }), adminPortalAccessController.remove);
 
 // Usage limits per plan, spend overview, and per-user overrides
 router.get('/plans', adminController.listPlans);
