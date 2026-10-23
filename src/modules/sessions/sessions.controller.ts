@@ -365,7 +365,7 @@ export class SessionsController {
   downloadExport = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { id } = req.params;
-      const format = (req.query as { format: 'kicad' | 'altium' | 'svg' | 'json' }).format;
+      const format = (req.query as { format: string }).format;
       const file = await sessionsService.buildExportFile(id as string, format, req.user?.id, req.anonSessionToken);
       res.setHeader('Content-Type', file.contentType);
       res.setHeader('Content-Disposition', `attachment; filename="${file.filename}"`);

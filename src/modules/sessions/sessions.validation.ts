@@ -61,7 +61,9 @@ export const exportSchema = z.object({
 });
 
 export const exportDownloadQuerySchema = z.object({
-  format: exportFormatSchema,
+  // Keep unsupported values available to the export service so it can return the
+  // endpoint's explicit EXPORT_FORMAT_UNSUPPORTED response instead of a generic 400.
+  format: z.string().min(1).max(30),
 });
 
 export const sourcingQuerySchema = z.object({
@@ -84,4 +86,3 @@ export type DiscussInput = z.infer<typeof discussSchema>;
 export type FeedbackInput = z.infer<typeof feedbackSchema>;
 export type ExportInput = z.infer<typeof exportSchema>;
 export type OutcomeInput = z.infer<typeof outcomeSchema>;
-

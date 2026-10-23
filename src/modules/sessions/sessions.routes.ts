@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { sessionsController } from './sessions.controller.js';
 import { validate } from '../../common/middlewares/validate.middleware.js';
+import { requireAuth } from '../../common/middlewares/auth.middleware.js';
 import { moderateInput } from '../governance/moderation.middleware.js';
 import { rateLimitSessionCreation, rateLimitDiscuss } from '../../common/middlewares/rate-limit.middleware.js';
 import {
@@ -79,6 +80,7 @@ router.post(
 router.post('/:id/export', validate({ params: sessionIdParamSchema, body: exportSchema }), sessionsController.exportDesign);
 router.get(
   '/:id/export/download',
+  requireAuth,
   validate({ params: sessionIdParamSchema, query: exportDownloadQuerySchema }),
   sessionsController.downloadExport
 );

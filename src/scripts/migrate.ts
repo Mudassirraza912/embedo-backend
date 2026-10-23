@@ -10,13 +10,19 @@
  *
  * `prisma db push` must never be used against production.
  */
+import 'dotenv/config';
+import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { PrismaClient } from '@prisma/client';
 
 const BASELINE_MIGRATION = '20260911000000_init';
+const prismaCli = createRequire(import.meta.url).resolve('prisma/build/index.js');
 
 const run = (args: string[]): void => {
-  const result = spawnSync('npx', ['prisma', ...args], { stdio: 'inherit', env: process.env });
+  const result = spawnSync(process.execPath, [prismaCli, ...args], { stdio: 'inherit', env: process.env });
+  if (result.error) {
+    throw result.error;
+  }
   if (result.status !== 0) {
     throw new Error(`prisma ${args.join(' ')} failed with exit code ${result.status}`);
   }
