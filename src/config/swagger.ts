@@ -501,5 +501,31 @@ Includes endpoints for Authentication, Multi-turn Discuss-First Hardware Copilot
         },
       },
     },
+    '/sessions/{id}/export/download': {
+      get: {
+        summary: 'Download a saved design diagram',
+        description: 'Requires a signed-in user with access to the saved project. SVG is rendered server-side; other conversions remain client-side.',
+        tags: ['Design Sessions'],
+        security: [{ BearerAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+          {
+            name: 'format',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', example: 'svg' },
+            description: 'svg or json; unsupported formats return 501.',
+          },
+        ],
+        responses: {
+          200: { description: 'Saved project exported as SVG or JSON' },
+          400: { description: 'Invalid project id or missing/invalid format parameter' },
+          401: { description: 'Authentication required' },
+          403: { description: 'User does not have access to this project' },
+          404: { description: 'Saved project not found' },
+          501: { description: 'Unsupported export format' },
+        },
+      },
+    },
   },
 };
