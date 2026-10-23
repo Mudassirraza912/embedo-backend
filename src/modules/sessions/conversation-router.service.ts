@@ -4,6 +4,7 @@ import { logger } from '../../config/logger.js';
 import { stripJsonFences } from './pipeline/json-utils.js';
 import { isGibberishOrSpam } from './pipeline/sufficiency-gate.js';
 import { SessionType } from './session-type.js';
+import { isAdultWellnessHardware } from '../governance/moderation.service.js';
 
 /**
  * Decides what the user actually wants from a message, so the copilot behaves like a
@@ -66,6 +67,15 @@ export function resumePendingClarification(result: RouteMessageResult, isAwaitin
   return isAwaitingAnswer ? { ...result, mode: 'generate', isNewProject: false, reply: '' } : result;
 }
 
+export function formatWellnessTitle(message: string): string {
+  const clean = message.toLowerCase();
+  if (clean.includes('kegel')) return 'Kegel Exercise Sensor';
+  if (clean.includes('pelvic')) return 'Pelvic Floor Trainer';
+  if (clean.includes('massager') || clean.includes('massage')) return 'Intimate Haptic Massager';
+  if (clean.includes('stimulat')) return 'Clitoral Suction Stimulator';
+  return 'Adult Wellness Vibrator';
+}
+
 const FALLBACK_TITLE = 'New project';
 
 const ROUTER_SYSTEM_PROMPT = `Classify the latest message for Embedo.ai (embedded hardware architecture: block diagrams, power trees, protocol maps, BOMs). Return strict JSON, all keys always present:
@@ -73,9 +83,9 @@ const ROUTER_SYSTEM_PROMPT = `Classify the latest message for Embedo.ai (embedde
 
 - Read the recent conversation as context, then classify the LATEST user message by what it means in that context. Short phrases, follow-ups, pronouns, and suggestion-chip text may rely on earlier turns; resolve their subject from the conversation instead of judging the words in isolation.
 - Ignore casual profanity or insults aimed at the product or assistant when interpreting intent. They do not make a hardware request off-topic, gibberish, or a new project. Respond calmly and do not repeat the abusive wording in the reply or project title.
-- generate: the latest message asks to create, revise, or apply a hardware design, OR generate/draw/make a diagram or architecture (including intentional DRC test topologies). A concise name or description of an embedded product is an implicit request to start designing it, even without an explicit verb. A direct imperative such as "Implement X", "Make a diagram...", "Create a design with DRC errors", "Add 30 more modules", or "Draw architecture" is an instruction to create or change the current architecture; route it to generate, not to a how-to answer. This also applies when X is a firmware/security feature represented through hardware capabilities or architecture constraints.
+- generate: the latest message asks to create, revise, or apply a hardware design, OR generate/draw/make a diagram or architecture (including intentional DRC test topologies). A concise name or description of an embedded product is an implicit request to start designing it, even without an explicit verb. This includes personal care, intimate wellness, and adult wellness devices (e.g. vibrators, intimate massagers, pelvic floor trainers, kegel exercise sensors, smart haptic wellness toys). These are valid electromechanical embedded hardware products (featuring battery management/charging, vibration motors/haptics, BLE connectivity, microcontrollers, waterproof enclosures). Colloquial phrasing like "vibrator tool for girls" or "intimate massager" is a valid hardware generation brief (mode: "generate", e.g. projectTitle: "Adult Wellness Vibrator" or "Intimate Haptic Massager"). A direct imperative such as "Implement X", "Make a diagram...", "Create a design with DRC errors", "Add 30 more modules", or "Draw architecture" is an instruction to create or change the current architecture; route it to generate, not to a how-to answer. This also applies when X is a firmware/security feature represented through hardware capabilities or architecture constraints.
 - discuss: asks a question, seeks explanation/advice, or acknowledges something without requesting a design change. In an existing project, merely repeating its device name or expressing sentiment about it is not a new build request; choose discuss unless the user asks to create or change the design. If a short message could plausibly continue the hardware conversation but the intended action is unclear, choose discuss so the copilot can ask a contextual clarification.
-- off_topic: choose this only when the latest message is clearly unrelated to the hardware conversation, or is unreadable noise. Do not classify an underspecified or unfamiliar hardware-related follow-up as off_topic.
+- off_topic: choose this only when the latest message is clearly unrelated to the hardware conversation, or is unreadable noise. Do not classify an underspecified or unfamiliar hardware-related follow-up, or adult personal wellness hardware product, as off_topic. Non-hardware explicit pornography/erotica without hardware, or any content involving minors, is off-topic and prohibited.
 
 isAnswerToPendingQuestion: true only when the latest user message supplies information requested by a specific question in the immediately preceding assistant message. Interpret the reply against that question and the full conversation, even when the answer is brief, uses different wording, or introduces a product/detail not named in prior examples. This is independent of mode: use it to resume design intake even when the answer is too short to look like a standalone build request. It is false for a new question, an unrelated message, a generic offer to generate, or when the previous assistant message did not ask for a requirement.
 
@@ -245,6 +255,26 @@ export async function routeMessage(
       return {
         mode: 'generate',
         projectTitle: projectContext?.projectTitle ?? (parsed.data.projectTitle || 'Hardware Architecture'),
+        isGibberish: false,
+        isNewProject: false,
+        reply: '',
+        isAnswerToPendingQuestion: false,
+      };
+    }
+
+    // Guard against LLM prudishness or safety filter false-positives on adult wellness hardware:
+    // If the model classified an adult wellness hardware brief as off_topic, correct it to generate
+    // (or discuss if phrased as a question).
+    if (parsed.data.mode === 'off_topic' && isAdultWellnessHardware(message)) {
+      const isQuestion = message.trim().endsWith('?');
+      const mode = isQuestion ? 'discuss' : 'generate';
+      logger.info(
+        { sessionId, message: message.slice(0, 100), mode },
+        'Router classified adult wellness hardware as off_topic — re-routing to hardware pipeline per EAR-9'
+      );
+      return {
+        mode,
+        projectTitle: parsed.data.projectTitle || formatWellnessTitle(message),
         isGibberish: false,
         isNewProject: false,
         reply: '',

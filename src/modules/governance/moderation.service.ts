@@ -48,6 +48,7 @@ MANDATORY RULES:
 1. Conversational commands, design iterations, follow-ups, and instructions (e.g. "add all of these", "add these", "add recommended modules", "recommend some module", "add 30 more modules", "proceed", "yes", "implement this", "make changes", "update design") are standard user interactions and MUST NEVER be flagged as harmful or illegal.
 2. Standard industrial, environmental, automotive, medical, agricultural, and IoT sensors/modules (gas/air quality sensors such as MQ-2/MQ-7/MQ-135, particulate sensors, humidity/temp sensors like DHT22/BME280/SHT40, optical/magnetic rotary encoders, Hall effect limit sensors, PID controllers, motor drivers, relays, solenoids, load cells, CAN/RS-485 transceivers, battery management ICs) are normal engineering components and MUST NEVER be flagged.
 3. Legitimate engineering language is NOT harmful: "kill switch", "tamper detection", "lock controller", "RFID reader", "intrusion alarm", "motor driver", "security camera", "signal generator", "RF module", "jam detection". Only flag clear, intentional, undeniable misuse.
+4. Legitimate consumer personal care, massage, and adult wellness devices (e.g. vibrators, personal massagers, pelvic floor trainers, kegel exercise sensors, haptic wellness products) are legal electromechanical consumer electronics (involving vibration motors, haptic drivers, Li-ion charging, microcontrollers, BLE, waterproof enclosures) and MUST NEVER be flagged as harmful hardware misuse. However, any content involving minors or child sexual exploitation remains strictly prohibited.
 
 Respond ONLY with JSON: {"flagged": boolean, "category": string, "reason": string}. Keep "reason" under 25 words.`;
 
@@ -68,6 +69,32 @@ export function isBenignConversationalFollowUp(text: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Detects legitimate adult wellness, personal care, and intimate electromechanical hardware.
+ * Examples: vibrators, intimate massagers, pelvic floor trainers, kegel exercise sensors,
+ * clitoral stimulators, haptic adult wellness devices.
+ *
+ * CRITICAL SAFETY RULE: Any mention of minors, children, underage, or child exploitation
+ * MUST NEVER be considered legitimate wellness hardware and will immediately return false.
+ */
+export function isAdultWellnessHardware(text: string): boolean {
+  if (!text || text.trim().length === 0) return false;
+  const clean = text.toLowerCase();
+
+  // Non-negotiable safety guardrail: any reference to minors, children, school age, or exploitation
+  const MINOR_SAFETY_PATTERN =
+    /\b(little\s+girl|young\s+girl|school\s*girl|underage|minor|child|children|infant|baby|toddler|pedophil|paedophil|teenager|teen\b)/i;
+  if (MINOR_SAFETY_PATTERN.test(clean)) {
+    return false;
+  }
+
+  // Adult wellness / personal care / intimate electromechanical hardware keywords
+  const WELLNESS_PATTERN =
+    /\b(vibrat(or|ion|ing|ors)?|dildo|fleshlight|masturbat(or|ion|ors)?|intimate\s+(massag(er|e)|wellness|device|appliance|toy)|personal\s+massag(er|e)|kegel|pelvic\s+floor|clitoral(\s+suction|\s+stimulat(or|ion))?|prostate\s+massag(er|e)|adult\s+(wellness|toy|product)|sexual\s+wellness|sex\s+toy)\b/i;
+
+  return WELLNESS_PATTERN.test(clean);
 }
 
 /**
@@ -187,6 +214,24 @@ export class ModerationService {
     } else {
       logger.warn({ actor }, 'Tier 2 moderation unavailable — allowing (MODERATION_FAIL_MODE=open)');
     }
+    if (tier2?.flagged) {
+      const categories = (tier2.category || '').split(',').map((c) => c.trim().toLowerCase());
+      const isSolelySexual = categories.length > 0 && categories.every((c) => c === 'sexual');
+      const isMinorRelated = categories.some((c) => c.includes('minor') || c.includes('child'));
+
+      // EAR-9: Adult wellness and personal care hardware (e.g. vibrators, intimate massagers)
+      // frequently trigger third-party API 'sexual' categories. If the flagged category is solely
+      // 'sexual' (without 'sexual/minors' or violence/hate) and the query is legitimate adult wellness
+      // hardware, allow it through rather than issuing a content policy block or suspension strike.
+      if (isSolelySexual && !isMinorRelated && isAdultWellnessHardware(text)) {
+        logger.info(
+          { text: text.slice(0, 100), actor: { userId: actor.userId, anonIdentifier: actor.anonIdentifier } },
+          'Tier 2 moderation flagged sexual category for adult wellness hardware brief — unblocking per EAR-9 policy'
+        );
+        tier2 = { flagged: false, category: 'none' };
+      }
+    }
+
     if (tier2?.flagged) {
       const reason = `Content flagged for policy violations: ${tier2.category}`;
       await this.handleViolation({ ...actor, tier: 'provider_api', category: tier2.category || 'general_policy', flaggedText: text, reason });

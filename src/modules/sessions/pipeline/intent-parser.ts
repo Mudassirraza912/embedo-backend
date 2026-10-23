@@ -2,6 +2,7 @@ import { aiRouterService } from '../../ai/ai-router.service.js';
 import { StructuredIntent, structuredIntentSchema } from './types.js';
 import { logger } from '../../../config/logger.js';
 import { stripJsonFences } from './json-utils.js';
+import { isAdultWellnessHardware } from '../../governance/moderation.service.js';
 
 export interface ParseIntentResult {
   structured: StructuredIntent;
@@ -44,6 +45,12 @@ JSON Schema to return:
     // unrelated to hardware (making a YouTube channel, writing a poem), or someone just testing
     // the input box ("mic test", "hello"). Embedo.ai only handles embedded hardware architecture
     // requests; when true, every other field should be its empty/null default.
+    // NOTE: Personal care and adult wellness devices (e.g. "vibrator tool for girls", intimate
+    // massagers, pelvic floor trainers, kegel sensors, haptic wellness products) are legitimate
+    // embedded electromechanical hardware devices (involving vibration motors, haptics, Li-ion
+    // battery/USB-C charging, BLE connectivity, microcontrollers, waterproof enclosures). They are
+    // NOT off-topic (set isOffTopic: false) and must be extracted into valid hardware subsystems
+    // (e.g. actuation: ["motor", "haptic"], power: ["lipo_battery", "usb_c"]).
 }
 
 If a field is not stated by the user, use null (or an empty string for deviceType/purpose). Do not invent details.
@@ -91,6 +98,28 @@ export async function parseHardwareIntent(
       logger.error({ sessionId, issues: parsed.error.issues.slice(0, 5), rawResponse: result.content.slice(0, 300) }, 'Intent extraction failed schema validation twice');
       await aiRouterService.markSchemaResult(result.aiCallId, false, parsed.error.message);
       throw new IntentExtractionError('AI extraction returned invalid intent schema');
+    }
+  }
+
+  if (parsed.data.isOffTopic && isAdultWellnessHardware(intentText)) {
+    logger.info({ sessionId, intentText: intentText.slice(0, 100) }, 'Intent parser marked adult wellness hardware as off-topic — overriding per EAR-9');
+    parsed.data.isOffTopic = false;
+    if (!parsed.data.deviceType || parsed.data.deviceType.trim().length === 0) {
+      parsed.data.deviceType = 'Adult Wellness Vibrator';
+    }
+    if (!parsed.data.purpose || parsed.data.purpose.trim().length === 0) {
+      parsed.data.purpose = 'Rechargeable personal care intimate wellness haptic device';
+    }
+    if (!parsed.data.subsystems) parsed.data.subsystems = {};
+    if (!parsed.data.subsystems.actuation || parsed.data.subsystems.actuation.length === 0) {
+      parsed.data.subsystems.actuation = ['motor', 'haptic'];
+    }
+    if (!parsed.data.subsystems.power || parsed.data.subsystems.power.length === 0) {
+      parsed.data.subsystems.power = ['lipo_battery', 'usb_c'];
+    }
+    if (!parsed.data.constraints) parsed.data.constraints = {};
+    if (!parsed.data.constraints.formFactor) {
+      parsed.data.constraints.formFactor = 'handheld';
     }
   }
 
