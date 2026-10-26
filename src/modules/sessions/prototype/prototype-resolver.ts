@@ -343,6 +343,8 @@ export interface ResolverInput {
   allowSubstituteController?: boolean;
   /** Promoted EKAB records relevant to the brief (citationLine format), or null. */
   engineeringRules?: string | null;
+  /** The user's brief and requested change: picks the model by prompt difficulty (ai-router). */
+  difficultyText?: string;
   sessionId: string;
 }
 
@@ -396,6 +398,7 @@ export async function resolvePrototype(input: ResolverInput): Promise<ResolverRe
       messages,
       sessionId: input.sessionId,
       jsonMode: true,
+      difficultyText: input.difficultyText,
       validateResponse: (text) => {
         const parsed = resolverOutputSchema.safeParse(safeParseJson(text));
         return parsed.success && validateResolverOutput(parsed.data, byId).length === 0;

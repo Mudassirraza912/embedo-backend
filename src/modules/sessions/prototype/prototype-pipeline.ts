@@ -135,6 +135,8 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
         currentBench: current ? describeBench(current) : null,
         allowSubstituteController,
         engineeringRules,
+        // The brief stays part of the difficulty on a revision: changing a large bench is still hard.
+        difficultyText: revisionNotes ? `${session.intentText}\n${revisionNotes}` : requestText,
         sessionId,
       });
       emitSessionEvent.aiCallCompleted(sessionId, { taskCase: RESOLVER_TASK_CASE, schemaPass: true, latencyMs: resolved.latencyMs });
