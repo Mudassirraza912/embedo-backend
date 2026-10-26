@@ -134,7 +134,9 @@ export async function buildCanonicalDesignGraph(
   /** Recent assistant context/recommendations for resolving referential follow-ups (e.g. "add all of these") */
   recentAssistantContext?: string,
   /** Full raw project brief from the user (ensures zero dropped requirements or truncated context) */
-  rawBrief?: string
+  rawBrief?: string,
+  /** The user's brief and requested change: picks the model by prompt difficulty (ai-router). */
+  difficultyText?: string
 ): Promise<{ graph: CanonicalDesignGraph; rawResponse: string }> {
   const systemPrompt = `You are Sol, the lead embedded systems architect at Embedo.ai.
 Your goal is to synthesize a production-grade, electrically consistent Canonical Design Graph for an embedded hardware system based on user specifications.
@@ -419,6 +421,7 @@ Output JSON adhering strictly to:
       sessionId,
       temperature: 0.2,
       jsonMode: true,
+      difficultyText,
       validateResponse: (text) => canonicalDesignGraphSchema.safeParse(parseGraph(text)).success,
     });
 

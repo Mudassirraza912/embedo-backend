@@ -406,6 +406,8 @@ export async function runGenerationPipeline(
     const lastAssistantTurn = [...session.chatMessages].reverse().find((m) => m.role === 'assistant');
     const recentAssistantContext = lastAssistantTurn?.content ? lastAssistantTurn.content.slice(0, 3000) : undefined;
 
+    // The brief stays part of the difficulty on a revision: changing a large design is still hard.
+    const difficultyText = [intentText, revisionNotes].filter(Boolean).join('\n');
     emitSessionEvent.aiCallStarted(sessionId, 'A');
     let { graph: rawGraph } = await buildCanonicalDesignGraph(
       structuredIntent,
@@ -415,7 +417,8 @@ export async function runGenerationPipeline(
       revision,
       previousSuggestions,
       recentAssistantContext,
-      intentText
+      intentText,
+      difficultyText
     );
     // Sol sometimes returns the baseline unchanged while its engineeringDecisions claim a change
     // ("Replaced LDO with buck regulator" on a design that already had one). Retry once, telling
@@ -434,7 +437,8 @@ export async function runGenerationPipeline(
         revision,
         previousSuggestions,
         recentAssistantContext,
-        intentText
+        intentText,
+        difficultyText
       ));
     }
     emitSessionEvent.aiCallCompleted(sessionId, { taskCase: 'A', schemaPass: true });
