@@ -303,6 +303,24 @@ model ModelRoute {
   @@map("model_routes")
 }
 
+/// Every model the OpenAI / Anthropic keys can see, synced by the worker (provider-models.service.ts).
+/// `selectable` = the product can call it (chat path); the admin portal offers only those.
+model AiProviderModel {
+  provider          String    @db.VarChar(50)
+  modelId           String    @map("model_id") @db.VarChar(100)
+  displayName       String?   @map("display_name") @db.VarChar(200)
+  providerCreatedAt DateTime? @map("provider_created_at") @db.Timestamp(6)
+  selectable        Boolean   @default(false)
+  excludedReason    String?   @map("excluded_reason") @db.VarChar(200)
+  /// false once a successful listing no longer contains it (never deleted).
+  available         Boolean   @default(true)
+  firstSeenAt       DateTime  @default(now()) @map("first_seen_at") @db.Timestamp(6)
+  lastSeenAt        DateTime  @default(now()) @map("last_seen_at") @db.Timestamp(6)
+
+  @@id([provider, modelId])
+  @@map("ai_provider_models")
+}
+
 /// Model per prompt difficulty for the classified task cases (A, R, E). Edited from
 /// admin.embedo.ai (AI Operations → Routing & Fallbacks) through a writer role limited to this
 /// table. No row / inactive row = the task case's model_routes row is used.

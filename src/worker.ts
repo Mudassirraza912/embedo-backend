@@ -8,6 +8,7 @@ import { createEkabWorker } from './jobs/ekab.queue.js';
 import { prisma } from './db/prisma.js';
 import { redis } from './db/redis.js';
 import { closeRealtimeConnections } from './modules/realtime/redis-events.js';
+import { scheduleProviderModelSync } from './modules/ai/provider-models.service.js';
 
 process.on('unhandledRejection', (reason) => {
   logger.fatal({ err: reason }, 'Unhandled promise rejection in worker — shutting down');
@@ -29,6 +30,8 @@ const startWorker = async () => {
     const ekabWorker = createEkabWorker();
 
     logger.info('✓ All BullMQ workers initialized and listening for jobs.');
+    // Keeps ai_provider_models current for the admin portal's model list (new models appear on their own).
+    const stopModelSync = scheduleProviderModelSync();
 
     let shuttingDown = false;
     const shutdown = async (signal: string) => {
@@ -41,6 +44,7 @@ const startWorker = async () => {
         process.exit(1);
       }, 30000);
       forceTimer.unref();
+      stopModelSync();
 
       try {
         await Promise.all([aiWorker.close(), exportWorker.close(), componentWorker.close(), datasheetWorker.close(), ekabWorker.close()]);
