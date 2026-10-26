@@ -1,3 +1,4 @@
+import { MAX_MESSAGE_CHARS } from '../sessions.validation.js';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../../db/prisma.js';
 import { env } from '../../../config/env.js';
@@ -91,7 +92,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
 
     const turns = session.chatMessages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, 2000) }));
+      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, MAX_MESSAGE_CHARS) }));
     const lastVersionCard = session.chatMessages.reduce((last, m, i) => {
       const meta = (m.metadata ?? {}) as { versionTag?: unknown };
       return m.role === 'assistant' && typeof meta.versionTag === 'string' ? i : last;
@@ -102,7 +103,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
       .map((m) => m.content.trim());
     const revisionNotes = current && userTurnsSinceCard.length > 0 ? [...new Set(userTurnsSinceCard)].join('\n') : undefined;
     // First build: the brief plus every answer since; refinement: just the requested change.
-    const requestText = revisionNotes ?? ([...new Set([session.intentText, ...userTurnsSinceCard])].join('\n').slice(0, 4000) || session.intentText);
+    const requestText = revisionNotes ?? ([...new Set([session.intentText, ...userTurnsSinceCard])].join('\n').slice(0, MAX_MESSAGE_CHARS) || session.intentText);
     recordStep('reading_intent', 'Reading intent', 'completed');
 
     if (!env.PROTOTYPE_ENABLED) {
