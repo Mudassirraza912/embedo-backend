@@ -7,6 +7,7 @@ import { getGroundingContext } from './rag-grounder.js';
 import { buildCanonicalDesignGraph, DesignGraphSchemaError, generateFreshSuggestions, summarizeVersionChange } from './design-graph-builder.js';
 import { validateAndRepairDesignGraph } from './validator.js';
 import { projectArchitecture } from './diagram-projector.js';
+import { reconcileRequirements } from './requirements-reconciler.js';
 import { CanonicalDesignGraph, ProjectedArchitecture, StructuredIntent, structuredIntentSchema } from './types.js';
 import { ApplyMode, persistNewVersion, proposalCardText, proposeVersion, versionTagOf } from '../version.service.js';
 import { getAppliedChangeLineage, filterAppliedSuggestions, compactGraphForRevision, describeGraphChanges, isSameChange } from './refinement-history.js';
@@ -558,6 +559,17 @@ export async function runGenerationPipeline(
         };
       }),
     };
+
+    const isTruncated = (intentText || '').length >= 6000;
+    const requirementsCoverage = reconcileRequirements(
+      structuredIntent.requestedRequirements || [],
+      finalizedGraph,
+      intentText,
+      isTruncated
+    );
+    projectedArchitecture.requirementsCoverage = requirementsCoverage;
+    finalizedGraph.requirementsCoverage = requirementsCoverage;
+
     recordStep('rendering', 'Rendering', 'completed');
 
     // Step 7: Persistence (atomic, serialized per session) & real-time streaming
@@ -632,6 +644,7 @@ export async function runGenerationPipeline(
             description: b.description,
             unitCostUsd: b.unitCostUsd,
           })),
+          requirementsCoverage,
         },
       });
 
@@ -651,7 +664,17 @@ export async function runGenerationPipeline(
         proposalCard: {
           content: proposalCardText(baseVersionTag, changes, [`\n${changeSummary}`]),
           metadata: { executionSteps },
-          pendingChange: { changes, changeSummary },
+          pendingChange: {
+            changes,
+            changeSummary,
+            baseVersionTag,
+            impactSummary: {
+              nodesCount: finalizedGraph.nodes?.length || 0,
+              railsCount: finalizedGraph.powerRails?.length || 0,
+              bomCount: finalizedGraph.bom?.length || 0,
+            },
+            requirementsCoverage,
+          },
         },
       });
       log.info({ baseVersionTag }, 'Revision saved as a proposal awaiting approval');

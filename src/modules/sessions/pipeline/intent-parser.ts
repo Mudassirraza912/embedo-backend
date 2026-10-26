@@ -40,6 +40,14 @@ JSON Schema to return:
     "costTargetUsd": number | null
   },
   "mustHaveInterfaces": string[], // e.g. ["i2c", "spi", "uart", "usb_c_pd"]
+  "requestedRequirements": [
+    {
+      "id": string, // "req-1", "req-2", ...
+      "name": string, // e.g. "2x Li-SOCl2 D-Cells Battery Pack (3.6V, 38,000 mAh)", "SX1262 LoRaWAN Transceiver", "PT100 RTD via 24-bit ADC"
+      "category": string, // "power" | "control" | "sensing" | "connectivity" | "storage" | "actuation" | "ui" | "audio" | "analog" | "other"
+      "originalText": string // exact phrase from the user brief
+    }
+  ],
   "isOffTopic": boolean // true if the message is NOT a request to design or discuss an embedded
     // hardware product — e.g. general chit-chat, questions about the date/weather, requests
     // unrelated to hardware (making a YouTube channel, writing a poem), or someone just testing
@@ -52,6 +60,9 @@ JSON Schema to return:
     // NOT off-topic (set isOffTopic: false) and must be extracted into valid hardware subsystems
     // (e.g. actuation: ["motor", "haptic"], power: ["lipo_battery", "usb_c"]).
 }
+
+CRITICAL REQUIREMENTS ENUMERATION:
+Extract EVERY single explicit hardware module, IC, component, sensor, radio, power source, power converter, load switch, memory chip, MCU core requirement, and interface specified in the user brief into "requestedRequirements". Assign each a sequential stable ID ("req-1", "req-2", ...). Enumerate each distinct capability separately without combining them so they can be reconciled against the generated design.
 
 If a field is not stated by the user, use null (or an empty string for deviceType/purpose). Do not invent details.
 If primary batteries are specified (e.g. "2x AA batteries"), record powerSource as "2x_aa_battery" and power as ["aa_battery"] (never assume lipo_battery or add usb_c unless explicitly asked). Convert specified battery lifetimes into hours (e.g. "2 years" -> 17520).
@@ -121,6 +132,48 @@ export async function parseHardwareIntent(
     if (!parsed.data.constraints.formFactor) {
       parsed.data.constraints.formFactor = 'handheld';
     }
+  }
+
+
+  // Ensure requestedRequirements is never empty when subsystems exist (deterministic extraction fallback)
+  if (!parsed.data.requestedRequirements || parsed.data.requestedRequirements.length === 0) {
+    const fallbackReqs: Array<{ id: string; name: string; category: string; originalText?: string }> = [];
+    let counter = 1;
+
+    if (parsed.data.constraints?.powerSource) {
+      fallbackReqs.push({
+        id: `req-${counter++}`,
+        name: `Power Source: ${parsed.data.constraints.powerSource.replace(/_/g, ' ')}`,
+        category: 'power',
+      });
+    }
+
+    const subsystems = parsed.data.subsystems || {};
+    const catKeys: Array<keyof typeof subsystems> = ['power', 'sensing', 'connectivity', 'storage', 'actuation', 'ui', 'audio'];
+    for (const cat of catKeys) {
+      const items = subsystems[cat];
+      if (Array.isArray(items)) {
+        for (const item of items) {
+          fallbackReqs.push({
+            id: `req-${counter++}`,
+            name: item.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+            category: cat,
+          });
+        }
+      }
+    }
+
+    if (Array.isArray(parsed.data.mustHaveInterfaces)) {
+      for (const iface of parsed.data.mustHaveInterfaces) {
+        fallbackReqs.push({
+          id: `req-${counter++}`,
+          name: `Interface: ${iface.toUpperCase()}`,
+          category: 'connectivity',
+        });
+      }
+    }
+
+    parsed.data.requestedRequirements = fallbackReqs;
   }
 
   return {
