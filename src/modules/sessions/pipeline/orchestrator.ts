@@ -414,7 +414,8 @@ export async function runGenerationPipeline(
       revisionNotes,
       revision,
       previousSuggestions,
-      recentAssistantContext
+      recentAssistantContext,
+      intentText
     );
     // Sol sometimes returns the baseline unchanged while its engineeringDecisions claim a change
     // ("Replaced LDO with buck regulator" on a design that already had one). Retry once, telling
@@ -432,7 +433,8 @@ export async function runGenerationPipeline(
         `${revisionNotes}\n\nYOUR PREVIOUS ANSWER RETURNED THE BASELINE UNCHANGED — that is not acceptable. Make at least one real change to nodes, part numbers, power rails or connections that fulfils this request. If the request is to enhance or improve an existing feature (e.g. GPS, battery, regulator, interface), upgrade the component part number(s) to higher-precision / higher-performance alternatives or add supporting circuitry. Do not describe a change in engineeringDecisions that is not in the graph, and do not "add" something the baseline already has.${expansionHint}`,
         revision,
         previousSuggestions,
-        recentAssistantContext
+        recentAssistantContext,
+        intentText
       ));
     }
     emitSessionEvent.aiCallCompleted(sessionId, { taskCase: 'A', schemaPass: true });
