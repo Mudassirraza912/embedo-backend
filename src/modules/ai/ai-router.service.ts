@@ -72,6 +72,8 @@ interface CachedRoute {
 interface RoutedCall {
   route: ResolvedModelRoute;
   classification?: PromptClassification;
+  /** Set when a difficulty route replaced the task route: the model to retry on if it fails. */
+  taskRoute?: ResolvedModelRoute;
 }
 
 const SUPPORTED_PROVIDERS = new Set(['openai', 'anthropic', 'google']);
@@ -152,6 +154,7 @@ export class AiRouterService {
       return { route };
     }
     const chosen = await this.resolveDifficultyRoute(options.taskCase, classification.difficulty);
+    const taskRoute = chosen && (chosen.provider !== route.provider || chosen.model !== route.model) ? { ...route } : undefined;
     if (chosen) {
       route.provider = chosen.provider;
       route.model = chosen.model;
@@ -160,7 +163,33 @@ export class AiRouterService {
       { taskCase: options.taskCase, difficulty: classification.difficulty, score: classification.score, model: route.model, difficultyRoute: Boolean(chosen) },
       'Prompt difficulty classified',
     );
-    return { route, classification };
+    return { route, classification, taskRoute };
+  }
+
+  /**
+   * Safety net for admin-chosen models: when the difficulty route's model fails (retired, refuses a
+   * parameter, quota…), the call is retried once on the task route, so a model choice can never
+   * break a user's request. `route` is updated to the model that actually answered.
+   */
+  private async withTaskRouteFallback<T>(
+    route: ResolvedModelRoute,
+    taskRoute: ResolvedModelRoute | undefined,
+    taskCase: string,
+    run: (r: ResolvedModelRoute) => Promise<T>,
+    canRetry: () => boolean = () => true,
+  ): Promise<T> {
+    try {
+      return await run(route);
+    } catch (err: unknown) {
+      if (!taskRoute || !canRetry()) throw err;
+      logger.warn(
+        { taskCase, difficultyModel: `${route.provider}/${route.model}`, taskModel: `${taskRoute.provider}/${taskRoute.model}`, err: err instanceof Error ? err.message.slice(0, 300) : String(err) },
+        'Difficulty route model failed; retrying on the task route',
+      );
+      route.provider = taskRoute.provider;
+      route.model = taskRoute.model;
+      return run(route);
+    }
   }
 
   /**
@@ -170,7 +199,7 @@ export class AiRouterService {
    * write fails, the call fails (we never silently lose cost/training data).
    */
   async executeTask(options: ExecuteTaskOptions): Promise<ExecuteTaskResult> {
-    const { route, classification } = await this.routeCall(options);
+    const { route, classification, taskRoute } = await this.routeCall(options);
     const difficulty = difficultyColumns(classification);
 
     const messages: GenerateMessage[] = options.messages || [{ role: 'user', content: options.userPrompt }];
@@ -178,14 +207,16 @@ export class AiRouterService {
 
     let generateResult;
     try {
-      generateResult = await modelProviderService.generate(route.provider, {
-        model: route.model,
-        systemPrompt: options.systemPrompt,
-        messages,
-        temperature: options.temperature ?? route.temperature,
-        maxTokens: options.maxTokens ?? route.maxTokens,
-        jsonMode: options.jsonMode,
-      });
+      generateResult = await this.withTaskRouteFallback(route, taskRoute, options.taskCase, (r) =>
+        modelProviderService.generate(r.provider, {
+          model: r.model,
+          systemPrompt: options.systemPrompt,
+          messages,
+          temperature: options.temperature ?? r.temperature,
+          maxTokens: options.maxTokens ?? r.maxTokens,
+          jsonMode: options.jsonMode,
+        }),
+      );
     } catch (err: unknown) {
       if (route.provider === 'openai' && env.ANTHROPIC_API_KEY && this.isQuotaOrAuthError(err)) {
         logger.warn({ taskCase: options.taskCase, originalModel: route.model }, 'OpenAI quota exhausted, attempting Anthropic fallback');
@@ -300,7 +331,7 @@ export class AiRouterService {
    * failure mid-stream is still logged with whatever partial text was produced.
    */
   async executeTaskStream(options: ExecuteTaskStreamOptions): Promise<ExecuteTaskResult> {
-    const { route, classification } = await this.routeCall(options);
+    const { route, classification, taskRoute } = await this.routeCall(options);
     const difficulty = difficultyColumns(classification);
     const messages: GenerateMessage[] = options.messages || [{ role: 'user', content: options.userPrompt }];
     const promptRecord = JSON.stringify({ system: options.systemPrompt ?? null, messages });
@@ -308,18 +339,26 @@ export class AiRouterService {
     let partial = '';
     let generateResult;
     try {
-      generateResult = await modelProviderService.generateStream(route.provider, {
-        model: route.model,
-        systemPrompt: options.systemPrompt,
-        messages,
-        temperature: options.temperature ?? route.temperature,
-        maxTokens: options.maxTokens ?? route.maxTokens,
-        jsonMode: options.jsonMode,
-        onDelta: (delta, meta) => {
-          partial += delta;
-          options.onDelta(delta, meta);
-        },
-      });
+      generateResult = await this.withTaskRouteFallback(
+        route,
+        taskRoute,
+        options.taskCase,
+        (r) =>
+          modelProviderService.generateStream(r.provider, {
+            model: r.model,
+            systemPrompt: options.systemPrompt,
+            messages,
+            temperature: options.temperature ?? r.temperature,
+            maxTokens: options.maxTokens ?? r.maxTokens,
+            jsonMode: options.jsonMode,
+            onDelta: (delta, meta) => {
+              partial += delta;
+              options.onDelta(delta, meta);
+            },
+          }),
+        // Text already reached the user: retrying would repeat it.
+        () => partial === '',
+      );
     } catch (err: unknown) {
       if (route.provider === 'openai' && env.ANTHROPIC_API_KEY && this.isQuotaOrAuthError(err)) {
         logger.warn({ taskCase: options.taskCase, originalModel: route.model }, 'OpenAI quota exhausted in stream, attempting Anthropic fallback');

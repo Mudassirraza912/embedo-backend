@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { env } from '../../../config/env.js';
 import { logger } from '../../../config/logger.js';
 
-import { GenerateOptions, GenerateResult, ProviderError, StreamOptions, classifyProviderError } from './types.js';
+import { GenerateOptions, GenerateResult, ProviderError, ProviderModel, StreamOptions, classifyProviderError } from './types.js';
 export type { GenerateOptions, GenerateResult, StreamOptions } from './types.js';
 
 export class AnthropicProvider {
@@ -12,6 +12,26 @@ export class AnthropicProvider {
     if (env.ANTHROPIC_API_KEY) {
       this.client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
     }
+  }
+
+  get isConfigured(): boolean {
+    return this.client !== null;
+  }
+
+  /** Every model the key can use (all Claude models speak the Messages API). */
+  async listModels(): Promise<ProviderModel[]> {
+    if (!this.client) {
+      throw new ProviderError('anthropic', 'auth', 'ANTHROPIC_API_KEY is not configured');
+    }
+    const out: ProviderModel[] = [];
+    try {
+      for await (const m of this.client.models.list({ limit: 100 })) {
+        out.push({ id: m.id, displayName: m.display_name ?? null, createdAt: m.created_at ? new Date(m.created_at) : null });
+      }
+    } catch (err) {
+      throw classifyProviderError('anthropic', err);
+    }
+    return out;
   }
 
   async generate(options: GenerateOptions): Promise<GenerateResult> {

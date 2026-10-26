@@ -116,6 +116,36 @@ describe('aiRouterService difficulty routing', () => {
     expect(result.difficulty).toBe('hard');
   });
 
+  it('retries on the task route when the difficulty model fails, and records the model that answered', async () => {
+    jest.spyOn(prisma.difficultyModelRoute, 'findMany').mockResolvedValue([
+      { taskCase: 'A', difficulty: 'hard', modelProvider: 'openai', modelName: 'gpt-retired', isActive: true },
+    ] as never);
+    const gen = jest
+      .spyOn(modelProviderService, 'generate')
+      .mockRejectedValueOnce(new Error('404 The model gpt-retired does not exist'))
+      .mockResolvedValueOnce({ text: '{}', inputTokens: 10, outputTokens: 5, latencyMs: 3 } as never);
+    const create = jest.spyOn(prisma.aiCall, 'create').mockResolvedValue({ id: 'c2' } as never);
+    const result = await aiRouterService.executeTask({ taskCase: 'A', userPrompt: 'x', difficultyText: INDUSTRIAL_BRIEF, sessionId: 's1' });
+    expect(gen.mock.calls.map((c) => (c[1] as { model: string }).model)).toEqual(['gpt-retired', 'gpt-4o']);
+    expect(result).toMatchObject({ model: 'gpt-4o', difficulty: 'hard' });
+    expect(create.mock.calls[0]![0]).toMatchObject({ data: { modelName: 'gpt-4o', promptDifficulty: 'hard' } });
+  });
+
+  it('does not retry a stream that already sent text', async () => {
+    jest.spyOn(prisma.difficultyModelRoute, 'findMany').mockResolvedValue([
+      { taskCase: 'E', difficulty: 'hard', modelProvider: 'anthropic', modelName: 'claude-x', isActive: true },
+    ] as never);
+    const stream = jest.spyOn(modelProviderService, 'generateStream').mockImplementation(async (_p, o) => {
+      (o as { onDelta: (d: string, m: object) => void }).onDelta('Hel', {});
+      throw new Error('connection reset');
+    });
+    jest.spyOn(prisma.aiCall, 'create').mockResolvedValue({ id: 'c3' } as never);
+    await expect(
+      aiRouterService.executeTaskStream({ taskCase: 'E', userPrompt: 'x', difficultyText: INDUSTRIAL_BRIEF, sessionId: 's1', onDelta: () => undefined }),
+    ).rejects.toThrow('connection reset');
+    expect(stream).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores rows naming an unsupported provider and never mutates the cached task route', async () => {
     jest.spyOn(prisma.difficultyModelRoute, 'findMany').mockResolvedValue([
       { taskCase: 'E', difficulty: 'hard', modelProvider: 'mystery', modelName: 'm1', isActive: true },

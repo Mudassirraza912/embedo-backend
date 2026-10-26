@@ -27,6 +27,13 @@ export interface StreamOptions extends GenerateOptions {
   onDelta: StreamDeltaHandler;
 }
 
+/** One model as the provider's list-models endpoint reports it. */
+export interface ProviderModel {
+  id: string;
+  displayName: string | null;
+  createdAt: Date | null;
+}
+
 export interface EmbedBatchResult {
   embeddings: number[][];
   totalTokens: number;
