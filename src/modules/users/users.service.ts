@@ -11,34 +11,34 @@ export class UsersService {
   async getShareSettings(userId: string) {
     const user = await prisma.user.findFirst({
       where: { id: userId, deletedAt: null },
-      select: { shareVisibility: true, shareExpiration: true },
+      select: { shareExpiration: true },
     });
 
     if (!user) {
       throw new AppError(404, 'NOT_FOUND', 'User not found');
     }
 
-    const { shareVisibility, shareExpiration } = user;
-    if (shareVisibility === null || shareExpiration === null) return null;
-    if (!isShareVisibility(shareVisibility) || !isShareExpiration(shareExpiration)) {
+    const { shareExpiration } = user;
+    if (shareExpiration === null) return null;
+    if (!isShareExpiration(shareExpiration)) {
       throw new AppError(500, 'INTERNAL_SERVER_ERROR', 'Stored sharing settings are invalid');
     }
 
-    return { visibility: shareVisibility, expiration: shareExpiration };
+    return { expiration: shareExpiration };
   }
 
   async updateShareSettings(userId: string, input: ShareSettingsInput) {
     const user = await prisma.user.update({
       where: { id: userId },
-      data: { shareVisibility: input.visibility, shareExpiration: input.expiration },
-      select: { shareVisibility: true, shareExpiration: true },
+      data: { shareVisibility: null, shareExpiration: input.expiration },
+      select: { shareExpiration: true },
     });
 
-    if (user.shareVisibility !== input.visibility || user.shareExpiration !== input.expiration) {
+    if (user.shareExpiration !== input.expiration) {
       throw new AppError(500, 'INTERNAL_SERVER_ERROR', 'Sharing settings were not persisted');
     }
 
-    return { visibility: user.shareVisibility, expiration: user.shareExpiration };
+    return { expiration: user.shareExpiration };
   }
 
   async getProfile(userId: string) {
@@ -173,8 +173,5 @@ export class UsersService {
 
 const isShareExpiration = (value: string | null): value is ShareSettingsInput['expiration'] =>
   value === '24h' || value === '7d' || value === '30d' || value === 'never';
-
-const isShareVisibility = (value: string | null): value is ShareSettingsInput['visibility'] =>
-  value === 'public' || value === 'private';
 
 export const usersService = new UsersService();

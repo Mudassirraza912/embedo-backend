@@ -13,7 +13,6 @@ export const deleteAccountSchema = z.object({
 });
 
 export const shareSettingsSchema = z.object({
-  visibility: z.enum(['public', 'private']),
   expiration: z.enum(['24h', '7d', '30d', 'never']),
 }).strict();
 

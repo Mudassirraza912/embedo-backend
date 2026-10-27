@@ -41,7 +41,7 @@ export class SharesController {
 
   getViewer = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const viewer = await sharesService.getViewer(req.params.token as string, req.user?.email);
+      const viewer = await sharesService.getViewer(req.params.token as string, req.user);
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('X-Robots-Tag', 'noindex, nofollow');
       res.status(200).json({ data: viewer });

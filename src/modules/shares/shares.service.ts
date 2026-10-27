@@ -132,17 +132,7 @@ export class SharesService {
 
     const settings = await usersService.getShareSettings(userId);
     if (!settings) {
-      throw new AppError(409, 'SHARE_SETTINGS_REQUIRED', 'Save sharing settings before creating a viewer link');
-    }
-    if (settings.visibility === 'private') {
-      throw new AppError(
-        409,
-        'PRIVATE_SHARING_UNAVAILABLE',
-        'Private share links are unavailable until an approved access policy is configured'
-      );
-    }
-    if (input.visibility !== settings.visibility) {
-      throw new AppError(409, 'SHARE_VISIBILITY_REQUIRED', 'The requested visibility does not match your saved share settings');
+      throw new AppError(409, 'SHARE_SETTINGS_REQUIRED', 'Save an expiry preference before creating a viewer link');
     }
     const issuedAt = new Date();
     const expiresAt = settings.expiration === 'never'
@@ -159,8 +149,10 @@ export class SharesService {
         targetType: input.targetType,
         artifactKey,
         snapshot: snapshot as unknown as Prisma.InputJsonValue,
-        inviteeEmails: [],
-        visibility: settings.visibility,
+        inviteeEmails: input.visibility === 'private'
+          ? input.inviteeEmails!.map((email) => email.toLowerCase().trim())
+          : [],
+        visibility: input.visibility,
         expirationPolicy: settings.expiration,
         issuedAt,
         expiresAt,
@@ -190,7 +182,7 @@ export class SharesService {
     };
   }
 
-  async getViewer(token: string, viewerEmail?: string) {
+  async getViewer(token: string, viewer?: { id: string; email: string }) {
     const now = new Date();
     const link = await prisma.shareLink.findUnique({
       where: { tokenHash: digestToken(token) },
@@ -221,7 +213,10 @@ export class SharesService {
 
     if (
       link.visibility === 'private' &&
-      (!viewerEmail || !link.inviteeEmails.some((email) => email.toLowerCase() === viewerEmail.trim().toLowerCase()))
+      (!viewer || (
+        link.userId !== viewer.id &&
+        !link.inviteeEmails.some((email) => email.toLowerCase() === viewer.email.trim().toLowerCase())
+      ))
     ) {
       throw new AppError(404, 'SHARE_NOT_FOUND', 'Share link is unavailable');
     }
@@ -293,9 +288,7 @@ export class SharesService {
         title: link.session.title || 'Untitled Project',
         architecture: projectArchitecture,
         messages: projectMessages,
-        ...(viewerEmail
-          ? { sessionId: link.session.id, canEdit: true }
-          : { canEdit: false }),
+        canEdit: false,
       },
     };
   }

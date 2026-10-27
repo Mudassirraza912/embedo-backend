@@ -33,6 +33,7 @@ const authenticatedAs = (userId = ownerId, email = 'owner@example.test') => {
 
 const viewerRecord = (overrides: Record<string, unknown> = {}) => ({
   id: '33333333-3333-3333-3333-333333333333',
+  userId: ownerId,
   targetType: 'project',
   artifactKey: null,
   inviteeEmails: [],
@@ -74,7 +75,7 @@ describe('authenticated sharing settings', () => {
     }));
   });
 
-  it('returns both saved share settings', async () => {
+  it('returns the saved global expiration preference without account-wide visibility', async () => {
     const token = authenticatedAs();
     jest.spyOn(prisma.user, 'findFirst').mockResolvedValue({
       id: ownerId,
@@ -88,26 +89,25 @@ describe('authenticated sharing settings', () => {
       .set('Authorization', 'Bearer ' + token);
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ data: { settings: { visibility: 'private', expiration: '7d' } } });
+    expect(response.body).toEqual({ data: { settings: { expiration: '7d' } } });
   });
 
   it('persists the expiry for the authenticated identity and returns the persisted shape', async () => {
     const token = authenticatedAs();
     const update = jest.spyOn(prisma.user, 'update').mockResolvedValue({
-      shareVisibility: 'private',
       shareExpiration: '7d',
     } as never);
 
     const response = await request(app)
       .patch('/api/v1/users/me/share-settings')
       .set('Authorization', `Bearer ${token}`)
-      .send({ visibility: 'private', expiration: '7d' });
+      .send({ expiration: '7d' });
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ data: { settings: { visibility: 'private', expiration: '7d' } } });
+    expect(response.body).toEqual({ data: { settings: { expiration: '7d' } } });
     expect(update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: ownerId },
-      data: { shareVisibility: 'private', shareExpiration: '7d' },
+      data: { shareVisibility: null, shareExpiration: '7d' },
     }));
   });
 
@@ -121,11 +121,11 @@ describe('authenticated sharing settings', () => {
     const invalidVisibility = await request(app)
       .patch('/api/v1/users/me/share-settings')
       .set('Authorization', 'Bearer ' + token)
-      .send({ visibility: 'invalid', expiration: '7d' });
+      .send({ visibility: 'public', expiration: '7d' });
     const clientIdentity = await request(app)
       .patch('/api/v1/users/me/share-settings')
       .set('Authorization', `Bearer ${token}`)
-      .send({ visibility: 'public', expiration: 'never', userId: ownerId });
+      .send({ expiration: 'never', userId: ownerId });
 
     expect(invalidValue.status).toBe(400);
     expect(invalidVisibility.status).toBe(400);
@@ -136,7 +136,7 @@ describe('authenticated sharing settings', () => {
   it('requires authentication and cannot use a client-supplied user id', async () => {
     const anonymous = await request(app)
       .patch('/api/v1/users/me/share-settings')
-      .send({ visibility: 'public', expiration: 'never', userId: ownerId });
+      .send({ expiration: 'never', userId: ownerId });
     expect(anonymous.status).toBe(401);
   });
 });
@@ -211,7 +211,7 @@ describe('Project and Artifact share links', () => {
     })).toThrow();
   });
 
-  it('requires the authenticated owner and explicit public settings before issuing either link type', async () => {
+  it('requires the authenticated owner and an explicitly saved expiry before issuing either link type', async () => {
     const token = authenticatedAs();
     const ownerCheck = jest.spyOn(sessionsService, 'getSession').mockRejectedValue(
       new AppError(403, 'FORBIDDEN', 'You do not have permission to access this design session')
@@ -251,10 +251,7 @@ describe('Project and Artifact share links', () => {
         version: 'v2',
       },
     } as never);
-    const getSettings = jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({
-      visibility: 'public',
-      expiration: '24h',
-    });
+    const getSettings = jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({ expiration: '24h' });
 
     const create = jest.spyOn(prisma.shareLink, 'create').mockImplementation(async (args) => ({
       id: '44444444-4444-4444-4444-444444444444',
@@ -302,42 +299,61 @@ describe('Project and Artifact share links', () => {
     expect(JSON.stringify(create.mock.calls)).not.toContain(result.viewerUrl.split('/').pop());
   });
 
-  it('rejects link visibility that differs from saved account settings', async () => {
+  it('applies the selected per-link visibility independently of global expiry settings', async () => {
     jest.spyOn(sessionsService, 'getSession').mockResolvedValue({
       userId: ownerId,
       architecture: { bom: [] },
     } as never);
-    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({
-      visibility: 'public',
-      expiration: '7d',
-    });
-    const create = jest.spyOn(prisma.shareLink, 'create');
+    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({ expiration: '7d' });
+    const create = jest.spyOn(prisma.shareLink, 'create').mockImplementation(async (args) => ({
+      id: '44444444-4444-4444-4444-444444444444',
+      targetType: args.data.targetType,
+      artifactKey: args.data.artifactKey,
+      inviteeEmails: args.data.inviteeEmails,
+      visibility: args.data.visibility,
+      expirationPolicy: args.data.expirationPolicy,
+      issuedAt: args.data.issuedAt,
+      expiresAt: args.data.expiresAt,
+    } as never));
 
-    await expect(sharesService.createLink(sessionId, ownerId, {
+    await sharesService.createLink(sessionId, ownerId, {
       targetType: 'project',
-      visibility: 'private',
-      inviteeEmails: ['person@example.test'],
-    })).rejects.toMatchObject({ statusCode: 409, code: 'SHARE_VISIBILITY_REQUIRED' });
-    expect(create).not.toHaveBeenCalled();
+      visibility: 'public',
+    });
+    expect(create.mock.calls[0]![0].data).toMatchObject({
+      visibility: 'public',
+      expirationPolicy: '7d',
+    });
   });
 
-  it('fails closed when private link authorization policy has not been approved', async () => {
+  it('creates a private link with a normalized invited-email allow-list and global expiry', async () => {
     jest.spyOn(sessionsService, 'getSession').mockResolvedValue({
       userId: ownerId,
       architecture: { bom: [] },
     } as never);
-    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({
-      visibility: 'private',
-      expiration: '7d',
-    });
-    const create = jest.spyOn(prisma.shareLink, 'create');
+    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({ expiration: '7d' });
+    const create = jest.spyOn(prisma.shareLink, 'create').mockImplementation(async (args) => ({
+      id: '44444444-4444-4444-4444-444444444444',
+      targetType: args.data.targetType,
+      artifactKey: args.data.artifactKey,
+      inviteeEmails: args.data.inviteeEmails,
+      visibility: args.data.visibility,
+      expirationPolicy: args.data.expirationPolicy,
+      issuedAt: args.data.issuedAt,
+      expiresAt: args.data.expiresAt,
+    } as never));
 
-    await expect(sharesService.createLink(sessionId, ownerId, {
+    await sharesService.createLink(sessionId, ownerId, {
       targetType: 'project',
       visibility: 'private',
-      inviteeEmails: ['person@example.test'],
-    })).rejects.toMatchObject({ statusCode: 409, code: 'PRIVATE_SHARING_UNAVAILABLE' });
-    expect(create).not.toHaveBeenCalled();
+      inviteeEmails: [' Person@Example.Test ', 'SECOND@example.test'],
+    });
+
+    expect(create.mock.calls[0]![0].data).toMatchObject({
+      visibility: 'private',
+      inviteeEmails: ['person@example.test', 'second@example.test'],
+      expirationPolicy: '7d',
+    });
   });
 
   it('does not let a Project collaborator create another share link', async () => {
@@ -367,10 +383,7 @@ describe('Project and Artifact share links', () => {
         { role: 'assistant', content: 'A response' },
       ],
     } as never);
-    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({
-      visibility: 'public',
-      expiration: 'never',
-    });
+    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({ expiration: 'never' });
     const create = jest.spyOn(prisma.shareLink, 'create').mockImplementation(async (args) => ({
       id: '44444444-4444-4444-4444-444444444444',
       targetType: args.data.targetType,
@@ -421,10 +434,7 @@ describe('Project and Artifact share links', () => {
       userId: ownerId,
       architecture,
     } as never);
-    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({
-      visibility: 'public',
-      expiration: 'never',
-    });
+    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({ expiration: 'never' });
     const create = jest.spyOn(prisma.shareLink, 'create').mockImplementation(async (args) => ({
       id: '44444444-4444-4444-4444-444444444444',
       targetType: args.data.targetType,
@@ -523,14 +533,15 @@ describe('Project and Artifact share links', () => {
       const anonymous = await request(app).get(`/api/v1/share-links/${'c'.repeat(64)}`);
       expect(anonymous.status).toBe(404);
 
-      const token = authenticatedAs(ownerId, 'not-invited@example.test');
+      const notInvitedId = '55555555-5555-5555-5555-555555555555';
+      const token = authenticatedAs(notInvitedId, 'not-invited@example.test');
       const denied = await request(app)
         .get(`/api/v1/share-links/${'c'.repeat(64)}`)
         .set('Authorization', `Bearer ${token}`);
       expect(denied.status).toBe(404);
 
       jest.spyOn(prisma.user, 'findFirst').mockResolvedValue({
-        id: ownerId,
+        id: '66666666-6666-6666-6666-666666666666',
         email: 'invited@example.test',
         role: 'user',
         suspendedAt: null,
@@ -541,7 +552,66 @@ describe('Project and Artifact share links', () => {
       expect(allowed.status).toBe(200);
       expect(allowed.body.data.visibility).toBe('private');
       expect(allowed.body.data).not.toHaveProperty('inviteeEmails');
+      expect(allowed.body.data.project).toMatchObject({ canEdit: false });
+      expect(allowed.body.data.project).not.toHaveProperty('sessionId');
     });
+
+  it('requires an authenticated invited email to read a private Artifact link', async () => {
+    const privateArtifact = viewerRecord({
+      targetType: 'artifact',
+      artifactKey: 'fbd',
+      visibility: 'private',
+      inviteeEmails: ['invited@example.test'],
+      snapshot: { kind: 'architect', functionalBlock: { nodes: [], edges: [] } },
+    });
+    jest.spyOn(prisma.shareLink, 'findUnique').mockResolvedValue(privateArtifact as never);
+
+    const anonymous = await request(app).get(`/api/v1/share-links/${'d'.repeat(64)}`);
+    expect(anonymous.status).toBe(404);
+
+    const notInvitedToken = authenticatedAs(
+      '55555555-5555-5555-5555-555555555555',
+      'not-invited@example.test'
+    );
+    const denied = await request(app)
+      .get(`/api/v1/share-links/${'d'.repeat(64)}`)
+      .set('Authorization', 'Bearer ' + notInvitedToken);
+    expect(denied.status).toBe(404);
+
+    const invitedToken = authenticatedAs(
+      '66666666-6666-6666-6666-666666666666',
+      'INVITED@example.test'
+    );
+    const allowed = await request(app)
+      .get(`/api/v1/share-links/${'d'.repeat(64)}`)
+      .set('Authorization', 'Bearer ' + invitedToken);
+
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.data).toMatchObject({
+      targetType: 'artifact',
+      visibility: 'private',
+      artifact: { key: 'fbd', content: privateArtifact.snapshot },
+    });
+    expect(allowed.body.data).not.toHaveProperty('inviteeEmails');
+    expect(allowed.body.data).not.toHaveProperty('edit');
+    expect(allowed.body.data).not.toHaveProperty('share');
+  });
+
+  it('allows the link owner to view their private link without exposing invitee addresses', async () => {
+    const token = authenticatedAs(ownerId, 'owner@example.test');
+    jest.spyOn(prisma.shareLink, 'findUnique').mockResolvedValue(viewerRecord({
+      visibility: 'private',
+      inviteeEmails: ['invited@example.test'],
+    }) as never);
+
+    const response = await request(app)
+      .get(`/api/v1/share-links/${'c'.repeat(64)}`)
+      .set('Authorization', 'Bearer ' + token);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.visibility).toBe('private');
+    expect(response.body.data).not.toHaveProperty('inviteeEmails');
+  });
   it('does not make legacy /workspace project URLs public', async () => {
     const token = authenticatedAs();
     jest.spyOn(prisma.shareLink, 'findMany').mockResolvedValue([] as never);
@@ -612,12 +682,9 @@ describe('Project and Artifact share links', () => {
       expiresAt: new Date(issuedAt.getTime() + 7 * 24 * 60 * 60 * 1000),
     });
     jest.spyOn(prisma.shareLink, 'findUnique').mockResolvedValue(issuedLink as never);
-    jest.spyOn(prisma.user, 'update').mockResolvedValue({
-      shareVisibility: 'public',
-      shareExpiration: '24h',
-    } as never);
+    jest.spyOn(prisma.user, 'update').mockResolvedValue({ shareExpiration: '24h' } as never);
 
-    await usersService.updateShareSettings(ownerId, { visibility: 'public', expiration: '24h' });
+    await usersService.updateShareSettings(ownerId, { expiration: '24h' });
     const view = await sharesService.getViewer('snapshot-token');
     expect(issuedLink.expirationPolicy).toBe('7d');
     expect(issuedLink.visibility).toBe('public');

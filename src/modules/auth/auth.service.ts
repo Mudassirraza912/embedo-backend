@@ -498,7 +498,7 @@ export class AuthService {
     }
 
     const ghAccessToken = tokenData.access_token;
-    let ghUser: { id: number; login: string; email?: string | null };
+    let ghUser: { id: number; login: string };
     try {
       const userRes = await fetch('https://api.github.com/user', {
         headers: {
@@ -508,30 +508,31 @@ export class AuthService {
         },
       });
       if (!userRes.ok) throw new Error('Failed to fetch GitHub profile');
-      ghUser = (await userRes.json()) as { id: number; login: string; email?: string | null };
+      ghUser = (await userRes.json()) as { id: number; login: string };
     } catch {
       throw new AppError(401, 'UNAUTHORIZED', 'Could not retrieve GitHub user profile');
     }
 
-    let email = ghUser.email ? ghUser.email.toLowerCase().trim() : '';
-    if (!email) {
-      try {
-        const emailsRes = await fetch('https://api.github.com/user/emails', {
-          headers: {
-            Authorization: `Bearer ${ghAccessToken}`,
-            'User-Agent': 'Embedo-App',
-            Accept: 'application/vnd.github.v3+json',
-          },
-        });
-        if (emailsRes.ok) {
-          const emailsList = (await emailsRes.json()) as Array<{ email: string; primary: boolean; verified: boolean }>;
-          const primary = emailsList.find((e) => e.primary && e.verified) || emailsList.find((e) => e.verified);
-          if (primary) email = primary.email.toLowerCase().trim();
-        }
-      } catch {
-        // Fallthrough
-      }
+    let emailsRes: Response;
+    try {
+      emailsRes = await fetch('https://api.github.com/user/emails', {
+        headers: {
+          Authorization: `Bearer ${ghAccessToken}`,
+          'User-Agent': 'Embedo-App',
+          Accept: 'application/vnd.github.v3+json',
+        },
+      });
+    } catch {
+      throw new AppError(401, 'UNAUTHORIZED', 'Could not verify a GitHub email address');
     }
+    if (!emailsRes.ok) {
+      throw new AppError(403, 'FORBIDDEN', 'Could not verify a GitHub email address; grant the user:email permission and try again');
+    }
+
+    const emailsList = (await emailsRes.json()) as Array<{ email: string; primary: boolean; verified: boolean }>;
+    const verifiedEmail = emailsList.find((candidate) => candidate.primary && candidate.verified)
+      || emailsList.find((candidate) => candidate.verified);
+    const email = verifiedEmail?.email.toLowerCase().trim() || '';
 
     if (!email) {
       throw new AppError(400, 'BAD_REQUEST', 'Your GitHub account does not have a verified email address');
