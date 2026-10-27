@@ -132,17 +132,14 @@ export class SharesService {
 
     const settings = await usersService.getShareSettings(userId);
     if (!settings) {
-      throw new AppError(409, 'SHARE_SETTINGS_REQUIRED', 'Save sharing settings before creating a viewer link');
+      throw new AppError(409, 'SHARE_SETTINGS_REQUIRED', 'Save an expiry preference before creating a viewer link');
     }
-    if (settings.visibility === 'private') {
+    if (input.visibility === 'private') {
       throw new AppError(
         409,
         'PRIVATE_SHARING_UNAVAILABLE',
         'Private share links are unavailable until an approved access policy is configured'
       );
-    }
-    if (input.visibility !== settings.visibility) {
-      throw new AppError(409, 'SHARE_VISIBILITY_REQUIRED', 'The requested visibility does not match your saved share settings');
     }
     const issuedAt = new Date();
     const expiresAt = settings.expiration === 'never'
@@ -160,7 +157,7 @@ export class SharesService {
         artifactKey,
         snapshot: snapshot as unknown as Prisma.InputJsonValue,
         inviteeEmails: [],
-        visibility: settings.visibility,
+        visibility: input.visibility,
         expirationPolicy: settings.expiration,
         issuedAt,
         expiresAt,
