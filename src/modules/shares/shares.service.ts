@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
 import { AppError } from '../../common/errors/AppError.js';
 import { env } from '../../config/env.js';
@@ -13,6 +14,16 @@ const ARTIFACT_TITLES = {
   prototypeDiagram: 'Prototype Module Diagram',
 } as const;
 
+const ARCHITECT_ARTIFACT_FIELDS = [
+  'functionalBlock',
+  'powerTree',
+  'protocolMap',
+  'bom',
+  'projectMeta',
+  'summary',
+  'version',
+] as const;
+
 const EXPIRATION_MS: Record<'24h' | '7d' | '30d', number> = {
   '24h': 24 * 60 * 60 * 1000,
   '7d': 7 * 24 * 60 * 60 * 1000,
@@ -20,6 +31,32 @@ const EXPIRATION_MS: Record<'24h' | '7d' | '30d', number> = {
 };
 
 const digestToken = (token: string): string => crypto.createHash('sha256').update(token).digest('hex');
+
+function buildArtifactSnapshot(architecture: Record<string, unknown>, artifactKey: keyof typeof ARTIFACT_TITLES) {
+  if (artifactKey === 'prototypeDiagram') {
+    if (architecture.kind !== 'prototype' || !architecture.moduleDiagram) return null;
+    const snapshot: Record<string, unknown> = {};
+    for (const key of ['kind', 'moduleDiagram', 'instances', 'bom', 'summary', 'version']) {
+      const value = architecture[key];
+      if (value !== undefined && value !== null) snapshot[key] = value;
+    }
+    return snapshot;
+  }
+
+  const selectedDiagram = artifactKey === 'fbd'
+    ? architecture.functionalBlock
+    : artifactKey === 'power'
+      ? architecture.powerTree
+      : architecture.protocolMap;
+  if (!selectedDiagram || typeof selectedDiagram !== 'object' || Array.isArray(selectedDiagram)) return null;
+
+  const snapshot: Record<string, unknown> = { kind: 'architect' };
+  for (const key of ARCHITECT_ARTIFACT_FIELDS) {
+    const value = architecture[key];
+    if (value !== undefined && value !== null) snapshot[key] = value;
+  }
+  return snapshot;
+}
 
 export class SharesService {
   async getTargetPreference(sessionId: string, userId: string) {
@@ -68,18 +105,7 @@ export class SharesService {
             .filter((message) => message.role === 'user' || message.role === 'assistant')
             .map((message) => ({ role: message.role, content: message.content })),
         }
-      : input.artifactKey === 'fbd'
-        ? architectureObject.functionalBlock
-        : input.artifactKey === 'power'
-          ? architectureObject.powerTree
-          : input.artifactKey === 'protocol'
-            ? architectureObject.protocolMap
-            : architectureObject.kind === 'prototype'
-              ? {
-                  moduleDiagram: architectureObject.moduleDiagram,
-                  instances: architectureObject.instances,
-                }
-              : null;
+      : buildArtifactSnapshot(architectureObject, input.artifactKey!);
     if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
       throw new AppError(400, 'BAD_REQUEST', 'The selected diagram is not available in this design');
     }
@@ -87,6 +113,16 @@ export class SharesService {
     const settings = await usersService.getShareSettings(userId);
     if (!settings) {
       throw new AppError(409, 'SHARE_SETTINGS_REQUIRED', 'Save sharing settings before creating a viewer link');
+    }
+    if (settings.visibility === 'private') {
+      throw new AppError(
+        409,
+        'PRIVATE_SHARING_UNAVAILABLE',
+        'Private share links are unavailable until an approved access policy is configured'
+      );
+    }
+    if (input.visibility !== settings.visibility) {
+      throw new AppError(409, 'SHARE_VISIBILITY_REQUIRED', 'The requested visibility does not match your saved share settings');
     }
     const issuedAt = new Date();
     const expiresAt = settings.expiration === 'never'
@@ -102,9 +138,9 @@ export class SharesService {
         tokenHash: digestToken(token),
         targetType: input.targetType,
         artifactKey,
-        snapshot,
-        inviteeEmails: input.visibility === 'private' ? input.inviteeEmails ?? [] : [],
-        visibility: input.visibility,
+        snapshot: snapshot as unknown as Prisma.InputJsonValue,
+        inviteeEmails: [],
+        visibility: settings.visibility,
         expirationPolicy: settings.expiration,
         issuedAt,
         expiresAt,
@@ -185,6 +221,7 @@ export class SharesService {
     const linkMetadata = {
       visibility: link.visibility,
       expirationPolicy: link.expirationPolicy,
+      issuedAt: link.issuedAt,
       expiresAt: link.expiresAt,
     };
     if (link.targetType === 'artifact') {
@@ -201,6 +238,8 @@ export class SharesService {
           mode: link.artifactKey === 'prototypeDiagram' ? 'prototype' : 'architect',
           key: link.artifactKey,
           title: ARTIFACT_TITLES[link.artifactKey as keyof typeof ARTIFACT_TITLES],
+          sourceProject: link.session.title || 'Untitled Project',
+          issuedAt: link.issuedAt,
           format: 'json',
           content: link.snapshot,
         },

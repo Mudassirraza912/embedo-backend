@@ -74,7 +74,7 @@ describe('authenticated sharing settings', () => {
     }));
   });
 
-  it('returns only the saved expiry', async () => {
+  it('returns both saved share settings', async () => {
     const token = authenticatedAs();
     jest.spyOn(prisma.user, 'findFirst').mockResolvedValue({
       id: ownerId,
@@ -88,25 +88,26 @@ describe('authenticated sharing settings', () => {
       .set('Authorization', 'Bearer ' + token);
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ data: { settings: { expiration: '7d' } } });
+    expect(response.body).toEqual({ data: { settings: { visibility: 'private', expiration: '7d' } } });
   });
 
   it('persists the expiry for the authenticated identity and returns the persisted shape', async () => {
     const token = authenticatedAs();
     const update = jest.spyOn(prisma.user, 'update').mockResolvedValue({
+      shareVisibility: 'private',
       shareExpiration: '7d',
     } as never);
 
     const response = await request(app)
       .patch('/api/v1/users/me/share-settings')
       .set('Authorization', `Bearer ${token}`)
-      .send({ expiration: '7d' });
+      .send({ visibility: 'private', expiration: '7d' });
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ data: { settings: { expiration: '7d' } } });
+    expect(response.body).toEqual({ data: { settings: { visibility: 'private', expiration: '7d' } } });
     expect(update).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: ownerId },
-      data: { shareExpiration: '7d' },
+      data: { shareVisibility: 'private', shareExpiration: '7d' },
     }));
   });
 
@@ -120,11 +121,11 @@ describe('authenticated sharing settings', () => {
     const invalidVisibility = await request(app)
       .patch('/api/v1/users/me/share-settings')
       .set('Authorization', 'Bearer ' + token)
-      .send({ visibility: 'public', expiration: '7d' });
+      .send({ visibility: 'invalid', expiration: '7d' });
     const clientIdentity = await request(app)
       .patch('/api/v1/users/me/share-settings')
       .set('Authorization', `Bearer ${token}`)
-      .send({ expiration: 'never', userId: ownerId });
+      .send({ visibility: 'public', expiration: 'never', userId: ownerId });
 
     expect(invalidValue.status).toBe(400);
     expect(invalidVisibility.status).toBe(400);
@@ -135,7 +136,7 @@ describe('authenticated sharing settings', () => {
   it('requires authentication and cannot use a client-supplied user id', async () => {
     const anonymous = await request(app)
       .patch('/api/v1/users/me/share-settings')
-      .send({ expiration: 'never', userId: ownerId });
+      .send({ visibility: 'public', expiration: 'never', userId: ownerId });
     expect(anonymous.status).toBe(401);
   });
 });
@@ -240,9 +241,18 @@ describe('Project and Artifact share links', () => {
   it('issues a public link using an immutable settings snapshot and exact expiry measured from issuance', async () => {
     const getSession = jest.spyOn(sessionsService, 'getSession').mockResolvedValue({
       userId: ownerId,
-      architecture: { bom: [], functionalBlock: { nodes: [{ id: 'n1' }] } },
+      architecture: {
+        functionalBlock: { title: 'Block diagram', nodes: [{ id: 'n1' }], edges: [] },
+        powerTree: { title: 'Power tree', nodes: [{ id: 'p1' }], edges: [] },
+        protocolMap: { title: 'Interface map', nodes: [{ id: 'i1' }], edges: [] },
+        bom: [{ partNumber: 'MCU-1', qty: 1 }],
+        projectMeta: { tagline: 'Shared architecture' },
+        summary: 'Architecture summary',
+        version: 'v2',
+      },
     } as never);
     const getSettings = jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({
+      visibility: 'public',
       expiration: '24h',
     });
 
@@ -276,43 +286,58 @@ describe('Project and Artifact share links', () => {
       visibility: 'public',
       expirationPolicy: '24h',
     });
-    expect(persisted.snapshot).toEqual({ nodes: [{ id: 'n1' }] });
+    expect(persisted.snapshot).toEqual({
+      kind: 'architect',
+      functionalBlock: { title: 'Block diagram', nodes: [{ id: 'n1' }], edges: [] },
+      powerTree: { title: 'Power tree', nodes: [{ id: 'p1' }], edges: [] },
+      protocolMap: { title: 'Interface map', nodes: [{ id: 'i1' }], edges: [] },
+      bom: [{ partNumber: 'MCU-1', qty: 1 }],
+      projectMeta: { tagline: 'Shared architecture' },
+      summary: 'Architecture summary',
+      version: 'v2',
+    });
     expect(persisted.issuedAt!.getTime()).toBeGreaterThanOrEqual(before);
     expect(persisted.expiresAt!.getTime() - persisted.issuedAt!.getTime()).toBe(24 * 60 * 60 * 1000);
     expect(result.viewerUrl).toMatch(/^http:\/\/localhost:5173\/architect\/artifact-viewer\/[a-f0-9]{64}$/);
     expect(JSON.stringify(create.mock.calls)).not.toContain(result.viewerUrl.split('/').pop());
   });
 
-  it('uses the selected link visibility and saved account expiry', async () => {
+  it('rejects link visibility that differs from saved account settings', async () => {
     jest.spyOn(sessionsService, 'getSession').mockResolvedValue({
       userId: ownerId,
       architecture: { bom: [] },
     } as never);
     jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({
+      visibility: 'public',
       expiration: '7d',
     });
-    const create = jest.spyOn(prisma.shareLink, 'create').mockImplementation(async (args) => ({
-      id: '44444444-4444-4444-4444-444444444444',
-      targetType: args.data.targetType,
-      artifactKey: args.data.artifactKey,
-      inviteeEmails: args.data.inviteeEmails,
-      visibility: args.data.visibility,
-      expirationPolicy: args.data.expirationPolicy,
-      issuedAt: args.data.issuedAt,
-      expiresAt: args.data.expiresAt,
-    } as never));
+    const create = jest.spyOn(prisma.shareLink, 'create');
 
-    const result = await sharesService.createLink(sessionId, ownerId, {
+    await expect(sharesService.createLink(sessionId, ownerId, {
       targetType: 'project',
       visibility: 'private',
       inviteeEmails: ['person@example.test'],
+    })).rejects.toMatchObject({ statusCode: 409, code: 'SHARE_VISIBILITY_REQUIRED' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when private link authorization policy has not been approved', async () => {
+    jest.spyOn(sessionsService, 'getSession').mockResolvedValue({
+      userId: ownerId,
+      architecture: { bom: [] },
+    } as never);
+    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({
+      visibility: 'private',
+      expiration: '7d',
     });
-    expect(create.mock.calls[0]![0].data).toMatchObject({
+    const create = jest.spyOn(prisma.shareLink, 'create');
+
+    await expect(sharesService.createLink(sessionId, ownerId, {
+      targetType: 'project',
       visibility: 'private',
       inviteeEmails: ['person@example.test'],
-      expirationPolicy: '7d',
-    });
-    expect(result.visibility).toBe('private');
+    })).rejects.toMatchObject({ statusCode: 409, code: 'PRIVATE_SHARING_UNAVAILABLE' });
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('does not let a Project collaborator create another share link', async () => {
@@ -343,6 +368,7 @@ describe('Project and Artifact share links', () => {
       ],
     } as never);
     jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({
+      visibility: 'public',
       expiration: 'never',
     });
     const create = jest.spyOn(prisma.shareLink, 'create').mockImplementation(async (args) => ({
@@ -404,21 +430,34 @@ describe('Project and Artifact share links', () => {
   });
 
   it('supports anonymous read-only viewing for a public Artifact link', async () => {
+    const issuedAt = new Date('2026-01-01T00:00:00.000Z');
+    const artifactSnapshot = {
+      kind: 'architect',
+      functionalBlock: { nodes: [{ id: 'fbd-node' }], edges: [] },
+      powerTree: { nodes: [{ id: 'power-node' }], edges: [] },
+      protocolMap: { nodes: [{ id: 'protocol-node' }], edges: [] },
+      bom: [{ partNumber: 'MCU-1', qty: 1 }],
+      version: 'v2',
+    };
     jest.spyOn(prisma.shareLink, 'findUnique').mockResolvedValue(viewerRecord({
       targetType: 'artifact',
       artifactKey: 'fbd',
-      snapshot: { nodes: [{ id: 'fbd-node' }] },
+      issuedAt,
+      snapshot: artifactSnapshot,
     }) as never);
     const response = await request(app).get(`/api/v1/share-links/${'b'.repeat(64)}`);
 
     expect(response.status).toBe(200);
+    expect(response.body.data.issuedAt).toBe(issuedAt.toISOString());
     expect(response.body.data).toMatchObject({
       targetType: 'artifact',
       artifact: {
         key: 'fbd',
         title: 'Functional Block Diagram',
+        sourceProject: 'Read-only project',
+        issuedAt: issuedAt.toISOString(),
         format: 'json',
-        content: { nodes: [{ id: 'fbd-node' }] },
+        content: artifactSnapshot,
       },
     });
 
