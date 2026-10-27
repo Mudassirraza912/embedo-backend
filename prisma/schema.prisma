@@ -19,6 +19,8 @@ model User {
   dataConsentDate   DateTime? @map("data_consent_date") @db.Timestamp(6)
   /// Admin override of the derived plan: "free" or "paid". Null = derive from subscriptions.
   planOverride      String?   @map("plan_override") @db.VarChar(20)
+  shareVisibility   String?   @map("share_visibility") @db.VarChar(10)
+  shareExpiration   String?   @map("share_expiration") @db.VarChar(10)
   /// Per-user limit overrides, e.g. {"messagesPerSession": 50}. A missing key inherits the plan's value.
   limitOverrides    Json?     @map("limit_overrides")
   moderationStrikes Int       @default(0) @map("moderation_strikes")
@@ -31,6 +33,7 @@ model User {
   refreshTokens      RefreshToken[]
   subscriptions      Subscription[]
   designSessions     DesignSession[]
+  shareLinks         ShareLink[]
   chatMessages       ChatMessage[]
   auditLogs          AuditLog[]
   moderationEvents   ModerationEvent[]
@@ -104,12 +107,33 @@ model DesignSession {
   designOutcome    DesignOutcome?
   moderationEvents ModerationEvent[]
   privateHardware  HardwareEntity[]
+  shareLinks       ShareLink[]
 
   @@index([userId], map: "design_sessions_user_idx")
   @@index([anonSessionToken], map: "design_sessions_anon_idx")
   @@index([status], map: "design_sessions_status_idx")
   @@index([deletedAt], map: "design_sessions_deleted_idx")
   @@map("design_sessions")
+}
+
+model ShareLink {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId        String    @map("session_id") @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  tokenHash        String    @unique @map("token_hash") @db.Char(64)
+  targetType       String    @map("target_type") @db.VarChar(20)
+  visibility       String?   @db.VarChar(10)
+  expirationPolicy String?   @map("expiration_policy") @db.VarChar(10)
+  issuedAt         DateTime? @default(now()) @map("issued_at") @db.Timestamp(6)
+  expiresAt        DateTime? @map("expires_at") @db.Timestamp(6)
+  revokedAt        DateTime? @map("revoked_at") @db.Timestamp(6)
+
+  session DesignSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId], map: "share_links_session_idx")
+  @@index([userId], map: "share_links_user_idx")
+  @@map("share_links")
 }
 
 model SessionVersion {

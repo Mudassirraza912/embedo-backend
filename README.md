@@ -201,6 +201,16 @@ Open **`http://localhost:4000/docs`** in your browser. Frontend developers can d
 - `GET /api/v1/sessions/:id/architecture` — Retrieve Functional Block, Power Tree, Protocol Map & BOM
 - `POST /api/v1/sessions/:id/feedback` — Submit user telemetry
 - `POST /api/v1/sessions/:id/export` — Export to KiCad / Altium / JSON
+- `GET/PATCH /api/v1/users/me/share-settings` — Read or save authenticated account share settings
+- `POST /api/v1/sessions/:id/share-links` — Issue a Project (`targetType: "project"`) or Artifact (`targetType: "artifact"`) link using saved settings
+- `GET /api/v1/share-links/:token` — Read-only public viewer API; the share URL returned at issuance opens the frontend viewer
+- `DELETE /api/v1/share-links/:linkId` — Revoke a link owned by the authenticated user
+
+The Sharing settings page saves only a per-user link expiration; it does not create links or choose visibility.
+Expiration is unset until explicitly saved. Link issuance requires an independently configured visibility policy;
+the backend does not infer public visibility from a saved expiry. Private link issuance remains disabled until a
+backend-enforced authorization/invite policy is approved. Expiration and visibility are snapshotted at issuance
+and do not change when account settings are updated.
 
 ---
 

@@ -15,6 +15,7 @@ import { usersRoutes } from './modules/users/users.routes.js';
 import { sessionsRoutes } from './modules/sessions/sessions.routes.js';
 import { adminRoutes } from './modules/admin/admin.routes.js';
 import { hardwareRoutes } from './modules/hardware/hardware.routes.js';
+import { sharesRoutes } from './modules/shares/shares.routes.js';
 
 import { prisma } from './db/prisma.js';
 import { redis } from './db/redis.js';
@@ -183,6 +184,7 @@ export const createApp = (): Express => {
   app.use(`${env.API_PREFIX}/users`, usersRoutes);
   app.use(`${env.API_PREFIX}/sessions`, sessionsRoutes);
   app.use(`${env.API_PREFIX}/hardware`, hardwareRoutes);
+  app.use(`${env.API_PREFIX}`, sharesRoutes);
   app.use(`${env.API_PREFIX}/admin`, adminRoutes);
 
   // BullMQ dashboard — ALWAYS guarded (admin JWT or DASHBOARD_USER/PASSWORD Basic auth).

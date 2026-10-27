@@ -29,6 +29,24 @@ export class UsersController {
     }
   };
 
+  getShareSettings = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const settings = await usersService.getShareSettings(req.user!.id);
+      res.status(200).json({ data: { settings: settings ? { expiration: settings.expiration } : null } });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  updateShareSettings = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const settings = await usersService.updateShareSettings(req.user!.id, req.body);
+      res.status(200).json({ data: { settings } });
+    } catch (err) {
+      next(err);
+    }
+  };
+
   deleteAccount = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const result = await usersService.deleteAccount(req.user!.id, req.body?.password);
