@@ -1,0 +1,2 @@
+ALTER TABLE "share_links"
+  ADD COLUMN "invitee_emails" VARCHAR(320)[] NOT NULL DEFAULT ARRAY[]::VARCHAR(320)[];

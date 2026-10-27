@@ -5,6 +5,7 @@ import { sessionsService } from '../sessions/sessions.service.js';
 import { hardwareLibraryService, LibraryEntity } from './hardware-library.service.js';
 import { renderBenchArt } from './bench-art.js';
 import { isPlaceholderId, placeholderEntity } from '../sessions/prototype/prototype-placeholders.js';
+import { projectSharingAccessService } from '../shares/project-sharing-access.service.js';
 
 /**
  * Read access to library boards for the Prototype UI (module artwork + record summary).
@@ -20,11 +21,17 @@ async function loadVisible(req: Request): Promise<LibraryEntity> {
       ? await prisma.designSession.findUnique({ where: { id: entity.projectId }, select: { userId: true, anonSessionToken: true, deletedAt: true } })
       : null;
     if (!project) throw new AppError(404, 'NOT_FOUND', 'Hardware entity not found');
-    try {
-      sessionsService.verifySessionOwnership(project, req.user?.id, req.anonSessionToken);
-    } catch {
-      // Same answer as a missing id: never confirm that another project's private board exists.
-      throw new AppError(404, 'NOT_FOUND', 'Hardware entity not found');
+    if (req.user?.id && project.userId !== req.user.id) {
+      if (!(await projectSharingAccessService.canEdit(entity.projectId!, req.user.id))) {
+        throw new AppError(404, 'NOT_FOUND', 'Hardware entity not found');
+      }
+    } else {
+      try {
+        sessionsService.verifySessionOwnership(project, req.user?.id, req.anonSessionToken);
+      } catch {
+        // Same answer as a missing id: never confirm that another project's private board exists.
+        throw new AppError(404, 'NOT_FOUND', 'Hardware entity not found');
+      }
     }
   }
   return entity;

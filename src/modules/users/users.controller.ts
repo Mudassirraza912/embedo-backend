@@ -32,7 +32,7 @@ export class UsersController {
   getShareSettings = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const settings = await usersService.getShareSettings(req.user!.id);
-      res.status(200).json({ data: { settings: settings ? { expiration: settings.expiration } : null } });
+      res.status(200).json({ data: { settings } });
     } catch (err) {
       next(err);
     }

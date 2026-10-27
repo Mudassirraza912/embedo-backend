@@ -1,9 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
-import { AnyZodObject, ZodError } from 'zod';
+import { AnyZodObject, ZodError, ZodTypeAny } from 'zod';
 import { AppError } from '../errors/AppError.js';
 
 interface RequestValidationSchemas {
-  body?: AnyZodObject;
+  body?: ZodTypeAny;
   query?: AnyZodObject;
   params?: AnyZodObject;
 }
