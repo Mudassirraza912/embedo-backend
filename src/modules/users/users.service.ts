@@ -11,21 +11,20 @@ export class UsersService {
   async getShareSettings(userId: string) {
     const user = await prisma.user.findFirst({
       where: { id: userId, deletedAt: null },
-      select: { shareVisibility: true, shareExpiration: true },
+      select: { shareExpiration: true },
     });
 
     if (!user) {
       throw new AppError(404, 'NOT_FOUND', 'User not found');
     }
 
-    const visibility = user.shareVisibility;
-    const expiration = user.shareExpiration;
-    if (expiration === null) return null;
-    if (!isShareExpiration(expiration) || (visibility !== null && !isShareVisibility(visibility))) {
+    const { shareExpiration } = user;
+    if (shareExpiration === null) return null;
+    if (!isShareExpiration(shareExpiration)) {
       throw new AppError(500, 'INTERNAL_SERVER_ERROR', 'Stored sharing settings are invalid');
     }
 
-    return { visibility, expiration };
+    return { expiration: shareExpiration };
   }
 
   async updateShareSettings(userId: string, input: ShareSettingsInput) {
@@ -172,10 +171,7 @@ export class UsersService {
   }
 }
 
-const isShareVisibility = (value: string): value is 'public' | 'private' =>
-  value === 'public' || value === 'private';
-
-const isShareExpiration = (value: string): value is ShareSettingsInput['expiration'] =>
+const isShareExpiration = (value: string | null): value is ShareSettingsInput['expiration'] =>
   value === '24h' || value === '7d' || value === '30d' || value === 'never';
 
 export const usersService = new UsersService();

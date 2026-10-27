@@ -8,6 +8,7 @@ import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { redis } from '../../db/redis.js';
 import { userSuspensionKey } from '../../common/middlewares/auth.middleware.js';
+import { projectSharingAccessService } from '../shares/project-sharing-access.service.js';
 import { publishSessionEvent, initSessionEventSubscriber } from './redis-events.js';
 
 export interface StageUpdatePayload {
@@ -101,7 +102,13 @@ export const initSocketIO = (httpServer: HttpServer): Server => {
       if (!session) return next(new Error('SESSION_NOT_FOUND'));
 
       if (session.userId) {
-        if (!userId || session.userId !== userId) return next(new Error('FORBIDDEN_SESSION_ACCESS'));
+        if (!userId) return next(new Error('FORBIDDEN_SESSION_ACCESS'));
+        if (
+          session.userId !== userId &&
+          !(await projectSharingAccessService.canEdit(session.id, userId))
+        ) {
+          return next(new Error('FORBIDDEN_SESSION_ACCESS'));
+        }
       } else if (session.anonSessionToken) {
         if (!anonSessionToken || session.anonSessionToken !== anonSessionToken) {
           return next(new Error('FORBIDDEN_SESSION_ACCESS'));

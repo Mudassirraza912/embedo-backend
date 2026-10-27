@@ -5,12 +5,25 @@ import { sharesController } from './shares.controller.js';
 import { sessionIdParamSchema } from '../sessions/sessions.validation.js';
 import {
   createShareLinkSchema,
+  shareTargetPreferenceSchema,
   shareLinkIdParamSchema,
   shareTokenParamSchema,
 } from './shares.validation.js';
 
 const router = Router();
 
+router.get(
+  '/sessions/:id/share-preference',
+  requireAuth,
+  validate({ params: sessionIdParamSchema }),
+  sharesController.getTargetPreference
+);
+router.patch(
+  '/sessions/:id/share-preference',
+  requireAuth,
+  validate({ params: sessionIdParamSchema, body: shareTargetPreferenceSchema }),
+  sharesController.updateTargetPreference
+);
 router.post(
   '/sessions/:id/share-links',
   requireAuth,

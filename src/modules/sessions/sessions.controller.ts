@@ -47,7 +47,8 @@ export class SessionsController {
     try {
       const sessions = await sessionsService.listSessions(
         req.user?.id,
-        req.anonSessionToken
+        req.anonSessionToken,
+        req.user?.email
       );
 
       // Prototype payloads saved in the old diagram format are redrawn (one library read).
