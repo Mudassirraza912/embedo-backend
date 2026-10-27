@@ -36,7 +36,27 @@ function buildArtifactSnapshot(architecture: Record<string, unknown>, artifactKe
   if (artifactKey === 'prototypeDiagram') {
     if (architecture.kind !== 'prototype' || !architecture.moduleDiagram) return null;
     const snapshot: Record<string, unknown> = {};
-    for (const key of ['kind', 'moduleDiagram', 'instances', 'bom', 'summary', 'version']) {
+    for (const key of [
+      'kind',
+      'schemaVersion',
+      'versionTag',
+      'understanding',
+      'notes',
+      'stateHash',
+      'projectMeta',
+      'instances',
+      'nets',
+      'connections',
+      'gaps',
+      'compatibility',
+      'moduleDiagram',
+      'pinList',
+      'hardwareLibrary',
+      'domainKnowledge',
+      'bom',
+      'summary',
+      'version',
+    ]) {
       const value = architecture[key];
       if (value !== undefined && value !== null) snapshot[key] = value;
     }

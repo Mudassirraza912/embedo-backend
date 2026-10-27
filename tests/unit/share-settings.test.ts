@@ -396,6 +396,55 @@ describe('Project and Artifact share links', () => {
     });
   });
 
+  it('snapshots all Prototype viewer sections and version metadata at issuance', async () => {
+    const architecture = {
+      kind: 'prototype',
+      schemaVersion: '1',
+      versionTag: 'prototype-v3',
+      understanding: 'A complete prototype brief.',
+      notes: 'Captured design notes.',
+      stateHash: 'state-hash',
+      projectMeta: { name: 'Prototype project', tagline: 'A prototype' },
+      instances: [{ instanceId: 'controller', label: 'Controller' }],
+      nets: [{ netId: 'i2c', name: 'I2C' }],
+      connections: [{ id: 'wire-1', kind: 'wire' }],
+      gaps: [{ gapId: 'gap-1', need: 'Sensor' }],
+      compatibility: { results: [{ status: 'PASS' }] },
+      moduleDiagram: { width: 900, height: 600, modules: [], buses: [] },
+      pinList: { summary: { rows: 1 }, rows: [{ pin: 'SDA' }] },
+      hardwareLibrary: { entries: [{ hardwareEntityId: 'board-1' }] },
+      domainKnowledge: { records: [{ recordId: 'knowledge-1' }] },
+      summary: 'Prototype summary.',
+      version: 'v3',
+    };
+    jest.spyOn(sessionsService, 'getSession').mockResolvedValue({
+      userId: ownerId,
+      architecture,
+    } as never);
+    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({
+      visibility: 'public',
+      expiration: 'never',
+    });
+    const create = jest.spyOn(prisma.shareLink, 'create').mockImplementation(async (args) => ({
+      id: '44444444-4444-4444-4444-444444444444',
+      targetType: args.data.targetType,
+      artifactKey: args.data.artifactKey,
+      inviteeEmails: args.data.inviteeEmails,
+      visibility: args.data.visibility,
+      expirationPolicy: args.data.expirationPolicy,
+      issuedAt: args.data.issuedAt,
+      expiresAt: args.data.expiresAt,
+    } as never));
+
+    await sharesService.createLink(sessionId, ownerId, {
+      targetType: 'artifact',
+      artifactKey: 'prototypeDiagram',
+      visibility: 'public',
+    });
+
+    expect(create.mock.calls[0]![0].data.snapshot).toEqual(architecture);
+  });
+
   it('rejects client-supplied link policy and expiration values', async () => {
     const token = authenticatedAs();
     const getSession = jest.spyOn(sessionsService, 'getSession');
