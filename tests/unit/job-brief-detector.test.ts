@@ -47,3 +47,4 @@ Skills and Expertise: Embedded Systems, STM32, LoRaWAN, PCB Design.
     expect(classification.isJobDescription).toBe(false);
   });
 });
+

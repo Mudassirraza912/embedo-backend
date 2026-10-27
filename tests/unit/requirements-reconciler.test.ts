@@ -89,3 +89,4 @@ describe('KAN-42: Requirements Coverage & Reconciliation Engine', () => {
     expect(report.inputWarning).toContain('6,000 characters');
   });
 });
+
