@@ -4,6 +4,7 @@ import { env } from '../../config/env.js';
 import { modelProviderService, ProviderError } from './model-provider.service.js';
 import { estimateCostUsd } from './pricing.js';
 import { AppError } from '../../common/errors/AppError.js';
+import { classifyPrompt, isDifficultyTaskCase, type PromptClassification, type PromptDifficulty } from './prompt-classifier.js';
 
 export interface GenerateMessage {
   role: 'user' | 'assistant';
@@ -34,6 +35,12 @@ export interface ExecuteTaskOptions {
    * schema_pass reflects reality. Return true when the response matched the expected schema.
    */
   validateResponse?: (text: string) => boolean;
+  /**
+   * The user's own words for this call (brief, request, chat message), never the assembled prompt.
+   * On task cases A, R and E it is classified (prompt-classifier.ts, no AI) and the model comes from
+   * difficulty_model_routes for that difficulty when an active row exists.
+   */
+  difficultyText?: string;
 }
 
 export interface ExecuteTaskStreamOptions extends Omit<ExecuteTaskOptions, 'validateResponse'> {
@@ -52,6 +59,9 @@ export interface ExecuteTaskResult {
   aiCallId?: string;
   provider: string;
   model: string;
+  /** Set when the call was classified (difficultyText on A, R or E). */
+  difficulty?: PromptDifficulty;
+  difficultyScore?: number;
 }
 
 interface CachedRoute {
@@ -59,8 +69,18 @@ interface CachedRoute {
   expiresAt: number;
 }
 
+interface RoutedCall {
+  route: ResolvedModelRoute;
+  classification?: PromptClassification;
+  /** Set when a difficulty route replaced the task route: the model to retry on if it fails. */
+  taskRoute?: ResolvedModelRoute;
+}
+
+const SUPPORTED_PROVIDERS = new Set(['openai', 'anthropic', 'google']);
+
 export class AiRouterService {
   private cache: Map<string, CachedRoute> = new Map();
+  private difficultyCache: { routes: Map<string, { provider: string; model: string }>; expiresAt: number } | null = null;
 
   async resolveRoute(taskCase: string, domain?: string): Promise<ResolvedModelRoute> {
     const cacheKey = `${taskCase}:${domain || 'default'}`;
@@ -102,6 +122,76 @@ export class AiRouterService {
     return resolved;
   }
 
+  /** Active difficulty routes keyed `<taskCase>:<difficulty>`, cached like model_routes. */
+  async resolveDifficultyRoute(taskCase: string, difficulty: PromptDifficulty): Promise<{ provider: string; model: string } | null> {
+    if (!this.difficultyCache || this.difficultyCache.expiresAt <= Date.now()) {
+      const routes = new Map<string, { provider: string; model: string }>();
+      try {
+        const rows = await prisma.difficultyModelRoute.findMany({ where: { isActive: true } });
+        for (const row of rows) {
+          if (!SUPPORTED_PROVIDERS.has(row.modelProvider.toLowerCase())) continue;
+          routes.set(`${row.taskCase}:${row.difficulty}`, { provider: row.modelProvider.toLowerCase(), model: row.modelName });
+        }
+      } catch (err: unknown) {
+        // Never block a call on this table: without it every call keeps its model_routes model.
+        logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'difficulty_model_routes unreadable; using model_routes only');
+      }
+      this.difficultyCache = { routes, expiresAt: Date.now() + env.ROUTE_CACHE_TTL_SECONDS * 1000 };
+    }
+    return this.difficultyCache.routes.get(`${taskCase}:${difficulty}`) ?? null;
+  }
+
+  /** The task case's route, swapped for its difficulty route when the call opts in and one is set. */
+  private async routeCall(options: { taskCase: string; domain?: string; difficultyText?: string }): Promise<RoutedCall> {
+    // A copy: the fallback path below rewrites provider/model, which must not leak into the cache.
+    const route = { ...(await this.resolveRoute(options.taskCase, options.domain)) };
+    if (!options.difficultyText || !isDifficultyTaskCase(options.taskCase)) return { route };
+    let classification: PromptClassification;
+    try {
+      classification = classifyPrompt(options.difficultyText);
+    } catch (err: unknown) {
+      logger.warn({ err: err instanceof Error ? err.message : String(err), taskCase: options.taskCase }, 'Prompt classification failed; using the task route');
+      return { route };
+    }
+    const chosen = await this.resolveDifficultyRoute(options.taskCase, classification.difficulty);
+    const taskRoute = chosen && (chosen.provider !== route.provider || chosen.model !== route.model) ? { ...route } : undefined;
+    if (chosen) {
+      route.provider = chosen.provider;
+      route.model = chosen.model;
+    }
+    logger.info(
+      { taskCase: options.taskCase, difficulty: classification.difficulty, score: classification.score, model: route.model, difficultyRoute: Boolean(chosen) },
+      'Prompt difficulty classified',
+    );
+    return { route, classification, taskRoute };
+  }
+
+  /**
+   * Safety net for admin-chosen models: when the difficulty route's model fails (retired, refuses a
+   * parameter, quota…), the call is retried once on the task route, so a model choice can never
+   * break a user's request. `route` is updated to the model that actually answered.
+   */
+  private async withTaskRouteFallback<T>(
+    route: ResolvedModelRoute,
+    taskRoute: ResolvedModelRoute | undefined,
+    taskCase: string,
+    run: (r: ResolvedModelRoute) => Promise<T>,
+    canRetry: () => boolean = () => true,
+  ): Promise<T> {
+    try {
+      return await run(route);
+    } catch (err: unknown) {
+      if (!taskRoute || !canRetry()) throw err;
+      logger.warn(
+        { taskCase, difficultyModel: `${route.provider}/${route.model}`, taskModel: `${taskRoute.provider}/${taskRoute.model}`, err: err instanceof Error ? err.message.slice(0, 300) : String(err) },
+        'Difficulty route model failed; retrying on the task route',
+      );
+      route.provider = taskRoute.provider;
+      route.model = taskRoute.model;
+      return run(route);
+    }
+  }
+
   /**
    * Execute an AI task against the routed model and record it in ai_calls.
    *
@@ -109,21 +199,24 @@ export class AiRouterService {
    * write fails, the call fails (we never silently lose cost/training data).
    */
   async executeTask(options: ExecuteTaskOptions): Promise<ExecuteTaskResult> {
-    const route = await this.resolveRoute(options.taskCase, options.domain);
+    const { route, classification, taskRoute } = await this.routeCall(options);
+    const difficulty = difficultyColumns(classification);
 
     const messages: GenerateMessage[] = options.messages || [{ role: 'user', content: options.userPrompt }];
     const promptRecord = JSON.stringify({ system: options.systemPrompt ?? null, messages });
 
     let generateResult;
     try {
-      generateResult = await modelProviderService.generate(route.provider, {
-        model: route.model,
-        systemPrompt: options.systemPrompt,
-        messages,
-        temperature: options.temperature ?? route.temperature,
-        maxTokens: options.maxTokens ?? route.maxTokens,
-        jsonMode: options.jsonMode,
-      });
+      generateResult = await this.withTaskRouteFallback(route, taskRoute, options.taskCase, (r) =>
+        modelProviderService.generate(r.provider, {
+          model: r.model,
+          systemPrompt: options.systemPrompt,
+          messages,
+          temperature: options.temperature ?? r.temperature,
+          maxTokens: options.maxTokens ?? r.maxTokens,
+          jsonMode: options.jsonMode,
+        }),
+      );
     } catch (err: unknown) {
       if (route.provider === 'openai' && env.ANTHROPIC_API_KEY && this.isQuotaOrAuthError(err)) {
         logger.warn({ taskCase: options.taskCase, originalModel: route.model }, 'OpenAI quota exhausted, attempting Anthropic fallback');
@@ -158,6 +251,7 @@ export class AiRouterService {
                 taskCase: options.taskCase,
                 modelProvider: route.provider,
                 modelName: route.model,
+                ...difficulty,
                 prompt: promptRecord,
                 response: '',
                 schemaPass: false,
@@ -196,6 +290,7 @@ export class AiRouterService {
             taskCase: options.taskCase,
             modelProvider: route.provider,
             modelName: route.model,
+            ...difficulty,
             prompt: promptRecord,
             response: generateResult.text,
             inputTokens: generateResult.inputTokens,
@@ -224,6 +319,7 @@ export class AiRouterService {
       aiCallId,
       provider: route.provider,
       model: route.model,
+      ...(classification ? { difficulty: classification.difficulty, difficultyScore: classification.score } : {}),
     };
   }
 
@@ -235,25 +331,34 @@ export class AiRouterService {
    * failure mid-stream is still logged with whatever partial text was produced.
    */
   async executeTaskStream(options: ExecuteTaskStreamOptions): Promise<ExecuteTaskResult> {
-    const route = await this.resolveRoute(options.taskCase, options.domain);
+    const { route, classification, taskRoute } = await this.routeCall(options);
+    const difficulty = difficultyColumns(classification);
     const messages: GenerateMessage[] = options.messages || [{ role: 'user', content: options.userPrompt }];
     const promptRecord = JSON.stringify({ system: options.systemPrompt ?? null, messages });
 
     let partial = '';
     let generateResult;
     try {
-      generateResult = await modelProviderService.generateStream(route.provider, {
-        model: route.model,
-        systemPrompt: options.systemPrompt,
-        messages,
-        temperature: options.temperature ?? route.temperature,
-        maxTokens: options.maxTokens ?? route.maxTokens,
-        jsonMode: options.jsonMode,
-        onDelta: (delta, meta) => {
-          partial += delta;
-          options.onDelta(delta, meta);
-        },
-      });
+      generateResult = await this.withTaskRouteFallback(
+        route,
+        taskRoute,
+        options.taskCase,
+        (r) =>
+          modelProviderService.generateStream(r.provider, {
+            model: r.model,
+            systemPrompt: options.systemPrompt,
+            messages,
+            temperature: options.temperature ?? r.temperature,
+            maxTokens: options.maxTokens ?? r.maxTokens,
+            jsonMode: options.jsonMode,
+            onDelta: (delta, meta) => {
+              partial += delta;
+              options.onDelta(delta, meta);
+            },
+          }),
+        // Text already reached the user: retrying would repeat it.
+        () => partial === '',
+      );
     } catch (err: unknown) {
       if (route.provider === 'openai' && env.ANTHROPIC_API_KEY && this.isQuotaOrAuthError(err)) {
         logger.warn({ taskCase: options.taskCase, originalModel: route.model }, 'OpenAI quota exhausted in stream, attempting Anthropic fallback');
@@ -287,6 +392,7 @@ export class AiRouterService {
                 taskCase: options.taskCase,
                 modelProvider: route.provider,
                 modelName: route.model,
+                ...difficulty,
                 prompt: promptRecord,
                 response: partial,
                 schemaPass: false,
@@ -313,6 +419,7 @@ export class AiRouterService {
             taskCase: options.taskCase,
             modelProvider: route.provider,
             modelName: route.model,
+            ...difficulty,
             prompt: promptRecord,
             response: generateResult.text,
             inputTokens: generateResult.inputTokens,
@@ -341,6 +448,7 @@ export class AiRouterService {
       aiCallId,
       provider: route.provider,
       model: route.model,
+      ...(classification ? { difficulty: classification.difficulty, difficultyScore: classification.score } : {}),
     };
   }
 
@@ -393,6 +501,7 @@ export class AiRouterService {
 
   clearCache(): void {
     this.cache.clear();
+    this.difficultyCache = null;
   }
 
   private isQuotaOrAuthError(err: unknown): boolean {
@@ -408,5 +517,8 @@ export class AiRouterService {
     return err instanceof ProviderError && err.retryable;
   }
 }
+
+const difficultyColumns = (c: PromptClassification | undefined) =>
+  c ? { promptDifficulty: c.difficulty, difficultyScore: c.score } : {};
 
 export const aiRouterService = new AiRouterService();

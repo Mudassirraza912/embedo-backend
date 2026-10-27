@@ -215,6 +215,9 @@ model AiCall {
   retryCount    Int      @default(0) @map("retry_count")
   schemaPass    Boolean? @map("schema_pass")
   errorMessage  String?  @map("error_message") @db.Text
+  /// easy | medium | hard (prompt-classifier.ts); null for task cases that are not classified.
+  promptDifficulty String? @map("prompt_difficulty") @db.VarChar(10)
+  difficultyScore  Int?    @map("difficulty_score") @db.SmallInt
   createdAt     DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
   session      DesignSession  @relation(fields: [sessionId], references: [id])
@@ -322,6 +325,42 @@ model ModelRoute {
 
   @@unique([taskCase, domain])
   @@map("model_routes")
+}
+
+/// Every model the OpenAI / Anthropic keys can see, synced by the worker (provider-models.service.ts).
+/// `selectable` = the product can call it (chat path); the admin portal offers only those.
+model AiProviderModel {
+  provider          String    @db.VarChar(50)
+  modelId           String    @map("model_id") @db.VarChar(100)
+  displayName       String?   @map("display_name") @db.VarChar(200)
+  providerCreatedAt DateTime? @map("provider_created_at") @db.Timestamp(6)
+  selectable        Boolean   @default(false)
+  excludedReason    String?   @map("excluded_reason") @db.VarChar(200)
+  /// false once a successful listing no longer contains it (never deleted).
+  available         Boolean   @default(true)
+  firstSeenAt       DateTime  @default(now()) @map("first_seen_at") @db.Timestamp(6)
+  lastSeenAt        DateTime  @default(now()) @map("last_seen_at") @db.Timestamp(6)
+
+  @@id([provider, modelId])
+  @@map("ai_provider_models")
+}
+
+/// Model per prompt difficulty for the classified task cases (A, R, E). Edited from
+/// admin.embedo.ai (AI Operations → Routing & Fallbacks) through a writer role limited to this
+/// table. No row / inactive row = the task case's model_routes row is used.
+model DifficultyModelRoute {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  taskCase      String   @map("task_case") @db.Char(1)
+  difficulty    String   @db.VarChar(10)
+  modelProvider String   @map("model_provider") @db.VarChar(50)
+  modelName     String   @map("model_name") @db.VarChar(100)
+  isActive      Boolean  @default(true) @map("is_active")
+  /// Admin portal staff email (not a product user).
+  updatedBy     String?  @map("updated_by") @db.VarChar(320)
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+
+  @@unique([taskCase, difficulty])
+  @@map("difficulty_model_routes")
 }
 
 model Subscription {

@@ -1,15 +1,23 @@
 import OpenAI from 'openai';
 import { env } from '../../../config/env.js';
 import { logger } from '../../../config/logger.js';
-import { GenerateOptions, GenerateResult, EmbedBatchResult, ProviderError, classifyProviderError, StreamOptions } from './types.js';
+import { GenerateOptions, GenerateResult, EmbedBatchResult, ProviderError, ProviderModel, classifyProviderError, StreamOptions } from './types.js';
 
 export const OPENAI_EMBEDDING_MODEL = 'text-embedding-3-small';
 export const OPENAI_EMBEDDING_DIMENSIONS = 1536;
 /** OpenAI accepts up to 2048 inputs per embeddings request; keep batches modest for latency. */
 const EMBED_BATCH_SIZE = 64;
 
+/** A 400 that names `temperature`: reasoning models (o-series, GPT-5) accept only the default. */
+const rejectsTemperature = (err: unknown): boolean => {
+  const e = err as { status?: number; message?: string; param?: string };
+  return e?.status === 400 && (e.param === 'temperature' || /temperature/i.test(e?.message ?? ''));
+};
+
 export class OpenAiProvider {
   private client: OpenAI | null = null;
+  /** Models that refused a custom temperature once; later calls leave it out. */
+  private defaultTemperatureOnly = new Set<string>();
 
   constructor() {
     if (env.OPENAI_API_KEY) {
@@ -32,6 +40,48 @@ export class OpenAiProvider {
     return this.client;
   }
 
+  /**
+   * Chat Completions parameters that every chat model accepts: `max_completion_tokens` (the
+   * replacement for `max_tokens`, which reasoning models reject), and `temperature` unless the
+   * model has refused it before.
+   */
+  private chatParams(options: GenerateOptions, messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[]) {
+    const model = options.model || 'gpt-4o';
+    return {
+      model,
+      messages,
+      ...(this.defaultTemperatureOnly.has(model) ? {} : { temperature: options.temperature ?? 0.2 }),
+      max_completion_tokens: options.maxTokens ?? 4096,
+      ...(options.jsonMode ? { response_format: { type: 'json_object' as const } } : {}),
+    };
+  }
+
+  /** Runs a request; when the model rejects `temperature`, remembers that and retries once without it. */
+  private async withTemperatureFallback<T>(model: string, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (err) {
+      if (!rejectsTemperature(err) || this.defaultTemperatureOnly.has(model)) throw err;
+      this.defaultTemperatureOnly.add(model);
+      logger.info({ model }, 'OpenAI model accepts only the default temperature; retrying without it');
+      return run();
+    }
+  }
+
+  /** Every model the key can see (chat and non-chat); callers decide which are usable. */
+  async listModels(): Promise<ProviderModel[]> {
+    const client = this.requireClient();
+    const out: ProviderModel[] = [];
+    try {
+      for await (const m of client.models.list()) {
+        out.push({ id: m.id, displayName: null, createdAt: typeof m.created === 'number' ? new Date(m.created * 1000) : null });
+      }
+    } catch (err) {
+      throw classifyProviderError('openai', err);
+    }
+    return out;
+  }
+
   async generate(options: GenerateOptions): Promise<GenerateResult> {
     const client = this.requireClient();
     const start = Date.now();
@@ -45,15 +95,8 @@ export class OpenAiProvider {
     }
 
     try {
-      const response = await client.chat.completions.create(
-        {
-          model: options.model || 'gpt-4o',
-          messages,
-          temperature: options.temperature ?? 0.2,
-          max_tokens: options.maxTokens ?? 4096,
-          ...(options.jsonMode ? { response_format: { type: 'json_object' as const } } : {}),
-        },
-        options.timeoutMs ? { timeout: options.timeoutMs } : undefined
+      const response = await this.withTemperatureFallback(options.model || 'gpt-4o', () =>
+        client.chat.completions.create(this.chatParams(options, messages), options.timeoutMs ? { timeout: options.timeoutMs } : undefined)
       );
 
       const latencyMs = Date.now() - start;
@@ -89,17 +132,12 @@ export class OpenAiProvider {
     }
 
     try {
-      const stream = await client.chat.completions.create(
-        {
-          model: options.model || 'gpt-4o',
-          messages,
-          temperature: options.temperature ?? 0.2,
-          max_tokens: options.maxTokens ?? 4096,
-          ...(options.jsonMode ? { response_format: { type: 'json_object' as const } } : {}),
-          stream: true,
-          stream_options: { include_usage: true },
-        },
-        options.timeoutMs ? { timeout: options.timeoutMs } : undefined
+      // The request is refused before any text streams, so retrying without temperature is safe.
+      const stream = await this.withTemperatureFallback(options.model || 'gpt-4o', () =>
+        client.chat.completions.create(
+          { ...this.chatParams(options, messages), stream: true, stream_options: { include_usage: true } },
+          options.timeoutMs ? { timeout: options.timeoutMs } : undefined
+        )
       );
 
       let text = '';

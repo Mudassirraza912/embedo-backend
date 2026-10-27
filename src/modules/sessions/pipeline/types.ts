@@ -8,6 +8,49 @@ const nullableStringArray = z.array(z.string()).nullable().optional();
 const nullableNumber = z.number().nullable().optional();
 const nullableStr = z.string().nullable().optional();
 
+export const requestedRequirementSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  category: z.string().default('other'),
+  originalText: z.string().nullable().optional(),
+  sourceSpan: z.string().nullable().optional(),
+  priority: z.enum(['must', 'should', 'could']).nullable().optional(),
+});
+export type RequestedRequirement = z.infer<typeof requestedRequirementSchema>;
+
+export type CoverageStatus = 'included' | 'left_out' | 'needs_clarification';
+export type LeftOutReason =
+  | 'not_supported'
+  | 'tradeoff'
+  | 'needs_information'
+  | 'not_parsed'
+  | 'merged'
+  | 'generation_error'
+  | 'unexplained';
+
+export interface RequirementCoverageItem {
+  id: string;
+  name: string;
+  category: string;
+  status: CoverageStatus;
+  matchedNodeIds?: string[];
+  matchedPartNumber?: string;
+  consolidationNote?: string;
+  reason?: LeftOutReason;
+  explanation?: string;
+  clarificationQuestion?: string;
+}
+
+export interface RequirementsCoverageReport {
+  totalRequested: number;
+  includedCount: number;
+  leftOutCount: number;
+  needsClarificationCount: number;
+  coveragePercentage: number;
+  items: RequirementCoverageItem[];
+  inputWarning?: string;
+}
+
 export const structuredIntentSchema = z.object({
   deviceType: nullableString,
   purpose: nullableString,
@@ -37,6 +80,11 @@ export const structuredIntentSchema = z.object({
     .transform((v) => v ?? {}),
   mustHaveInterfaces: z
     .array(z.string())
+    .nullable()
+    .optional()
+    .transform((v) => v ?? []),
+  requestedRequirements: z
+    .array(requestedRequirementSchema)
     .nullable()
     .optional()
     .transform((v) => v ?? []),
@@ -120,6 +168,7 @@ export interface CanonicalDesignGraph {
   /** Short, chip-friendly next-refinement suggestions (e.g. "Add battery backup") grounded in
    *  what this specific design is missing — not the generic examples in CLAUDE.md's UI spec. */
   suggestedRefinements?: string[];
+  requirementsCoverage?: RequirementsCoverageReport;
 }
 
 export interface DiagramNode {
@@ -216,5 +265,6 @@ export interface ProjectedArchitecture {
   powerTree: ProjectedDiagram;
   protocolMap: ProjectedDiagram;
   bom: BomItem[];
+  requirementsCoverage?: RequirementsCoverageReport;
 }
 

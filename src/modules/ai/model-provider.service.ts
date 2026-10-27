@@ -1,7 +1,7 @@
 import { AnthropicProvider } from './providers/anthropic.provider.js';
 import { OpenAiProvider } from './providers/openai.provider.js';
 import { GoogleProvider } from './providers/google.provider.js';
-import { GenerateOptions, GenerateResult, EmbedBatchResult, ProviderError, StreamOptions } from './providers/types.js';
+import { GenerateOptions, GenerateResult, EmbedBatchResult, ProviderError, ProviderModel, StreamOptions } from './providers/types.js';
 import { AppError } from '../../common/errors/AppError.js';
 import { logger } from '../../config/logger.js';
 
@@ -74,6 +74,15 @@ export class ModelProviderService {
   /** Returns null when no moderation-capable provider is configured. */
   async moderate(text: string): Promise<{ flagged: boolean; categories: string[] } | null> {
     return this.openai.moderate(text);
+  }
+
+  /** Models the provider's key can see (provider-models.service.ts decides which are usable). */
+  async listModels(providerName: 'openai' | 'anthropic'): Promise<ProviderModel[]> {
+    return providerName === 'openai' ? this.openai.listModels() : this.anthropic.listModels();
+  }
+
+  isConfigured(providerName: 'openai' | 'anthropic'): boolean {
+    return providerName === 'openai' ? this.openai.isConfigured : this.anthropic.isConfigured;
   }
 
   get embeddingsConfigured(): boolean {

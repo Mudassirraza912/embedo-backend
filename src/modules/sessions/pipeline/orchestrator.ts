@@ -7,6 +7,7 @@ import { getGroundingContext } from './rag-grounder.js';
 import { buildCanonicalDesignGraph, DesignGraphSchemaError, generateFreshSuggestions, summarizeVersionChange } from './design-graph-builder.js';
 import { validateAndRepairDesignGraph } from './validator.js';
 import { projectArchitecture } from './diagram-projector.js';
+import { reconcileRequirements } from './requirements-reconciler.js';
 import { CanonicalDesignGraph, ProjectedArchitecture, StructuredIntent, structuredIntentSchema } from './types.js';
 import { ApplyMode, persistNewVersion, proposalCardText, proposeVersion, versionTagOf } from '../version.service.js';
 import { getAppliedChangeLineage, filterAppliedSuggestions, compactGraphForRevision, describeGraphChanges, isSameChange } from './refinement-history.js';
@@ -406,6 +407,8 @@ export async function runGenerationPipeline(
     const lastAssistantTurn = [...session.chatMessages].reverse().find((m) => m.role === 'assistant');
     const recentAssistantContext = lastAssistantTurn?.content ? lastAssistantTurn.content.slice(0, 3000) : undefined;
 
+    // The brief stays part of the difficulty on a revision: changing a large design is still hard.
+    const difficultyText = [intentText, revisionNotes].filter(Boolean).join('\n');
     emitSessionEvent.aiCallStarted(sessionId, 'A');
     let { graph: rawGraph } = await buildCanonicalDesignGraph(
       structuredIntent,
@@ -414,7 +417,9 @@ export async function runGenerationPipeline(
       revisionNotes,
       revision,
       previousSuggestions,
-      recentAssistantContext
+      recentAssistantContext,
+      intentText,
+      difficultyText
     );
     // Sol sometimes returns the baseline unchanged while its engineeringDecisions claim a change
     // ("Replaced LDO with buck regulator" on a design that already had one). Retry once, telling
@@ -432,7 +437,9 @@ export async function runGenerationPipeline(
         `${revisionNotes}\n\nYOUR PREVIOUS ANSWER RETURNED THE BASELINE UNCHANGED — that is not acceptable. Make at least one real change to nodes, part numbers, power rails or connections that fulfils this request. If the request is to enhance or improve an existing feature (e.g. GPS, battery, regulator, interface), upgrade the component part number(s) to higher-precision / higher-performance alternatives or add supporting circuitry. Do not describe a change in engineeringDecisions that is not in the graph, and do not "add" something the baseline already has.${expansionHint}`,
         revision,
         previousSuggestions,
-        recentAssistantContext
+        recentAssistantContext,
+        intentText,
+        difficultyText
       ));
     }
     emitSessionEvent.aiCallCompleted(sessionId, { taskCase: 'A', schemaPass: true });
@@ -552,6 +559,17 @@ export async function runGenerationPipeline(
         };
       }),
     };
+
+    const isTruncated = (intentText || '').length >= 6000;
+    const requirementsCoverage = reconcileRequirements(
+      structuredIntent.requestedRequirements || [],
+      finalizedGraph,
+      intentText,
+      isTruncated
+    );
+    projectedArchitecture.requirementsCoverage = requirementsCoverage;
+    finalizedGraph.requirementsCoverage = requirementsCoverage;
+
     recordStep('rendering', 'Rendering', 'completed');
 
     // Step 7: Persistence (atomic, serialized per session) & real-time streaming
@@ -626,6 +644,7 @@ export async function runGenerationPipeline(
             description: b.description,
             unitCostUsd: b.unitCostUsd,
           })),
+          requirementsCoverage,
         },
       });
 
@@ -645,7 +664,17 @@ export async function runGenerationPipeline(
         proposalCard: {
           content: proposalCardText(baseVersionTag, changes, [`\n${changeSummary}`]),
           metadata: { executionSteps },
-          pendingChange: { changes, changeSummary },
+          pendingChange: {
+            changes,
+            changeSummary,
+            baseVersionTag,
+            impactSummary: {
+              nodesCount: finalizedGraph.nodes?.length || 0,
+              railsCount: finalizedGraph.powerRails?.length || 0,
+              bomCount: finalizedGraph.bom?.length || 0,
+            },
+            requirementsCoverage,
+          },
         },
       });
       log.info({ baseVersionTag }, 'Revision saved as a proposal awaiting approval');
