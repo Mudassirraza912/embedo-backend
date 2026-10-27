@@ -1,12 +1,47 @@
 import bcrypt from 'bcryptjs';
 import { prisma } from '../../db/prisma.js';
 import { AppError } from '../../common/errors/AppError.js';
+import { ShareSettingsInput } from './users.validation.js';
 
 export interface UpdateProfileInput {
   expertiseLevel?: 'student' | 'hobbyist' | 'professional' | 'expert';
 }
 
 export class UsersService {
+  async getShareSettings(userId: string) {
+    const user = await prisma.user.findFirst({
+      where: { id: userId, deletedAt: null },
+      select: { shareVisibility: true, shareExpiration: true },
+    });
+
+    if (!user) {
+      throw new AppError(404, 'NOT_FOUND', 'User not found');
+    }
+
+    const visibility = user.shareVisibility;
+    const expiration = user.shareExpiration;
+    if (expiration === null) return null;
+    if (!isShareExpiration(expiration) || (visibility !== null && !isShareVisibility(visibility))) {
+      throw new AppError(500, 'INTERNAL_SERVER_ERROR', 'Stored sharing settings are invalid');
+    }
+
+    return { visibility, expiration };
+  }
+
+  async updateShareSettings(userId: string, input: ShareSettingsInput) {
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: { shareExpiration: input.expiration },
+      select: { shareExpiration: true },
+    });
+
+    if (user.shareExpiration !== input.expiration) {
+      throw new AppError(500, 'INTERNAL_SERVER_ERROR', 'Sharing settings were not persisted');
+    }
+
+    return { expiration: user.shareExpiration };
+  }
+
   async getProfile(userId: string) {
     const user = await prisma.user.findFirst({
       where: { id: userId, deletedAt: null },
@@ -116,6 +151,11 @@ export class UsersService {
         },
       }),
 
+      prisma.shareLink.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+
       // 2. Remove OAuth links
       prisma.authIdentity.deleteMany({
         where: { userId },
@@ -131,5 +171,11 @@ export class UsersService {
     return { success: true, message: 'Account deleted and personal identity erased' };
   }
 }
+
+const isShareVisibility = (value: string): value is 'public' | 'private' =>
+  value === 'public' || value === 'private';
+
+const isShareExpiration = (value: string): value is ShareSettingsInput['expiration'] =>
+  value === '24h' || value === '7d' || value === '30d' || value === 'never';
 
 export const usersService = new UsersService();
