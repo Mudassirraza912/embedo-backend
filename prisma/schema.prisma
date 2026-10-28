@@ -1007,3 +1007,44 @@ model EkabCandidate {
   @@index([jobId, status], map: "ekab_candidates_job_status_idx")
   @@map("ekab_candidates")
 }
+
+/// IP-derived regional usage analytics (task_two). One row per captured event: a new guest
+/// pseudonymous session, a login, or a new Architect/Prototype session ("workspace entered").
+/// Never stores a raw IP address — only the derived country/region, the lookup's status/source, and
+/// the existing identity keys (userId when signed in, the guest's anonSessionToken otherwise; never
+/// both, never IP as identity). geoStatus is 'unknown' whenever the lookup could not reliably place
+/// the request (VPN/proxy/private relay/carrier NAT/non-geolocatable/lookup failure) — never guessed.
+/// Standalone table, no FK, same shape as StatusSubscriber: self-contained, nothing else depends on it.
+model VisitorRegionEvent {
+  id   String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// 'guest_session_init' | 'login' | 'workspace_entered' (visitor_region_events_event_type_check)
+  eventType String @map("event_type") @db.VarChar(30)
+  /// Server-authoritative signed-in identity. Null for guest events.
+  userId String? @map("user_id") @db.Uuid
+  /// The same short-lived pseudonymous token already used for guest session ownership
+  /// (DesignSession.anonSessionToken). Null once an event is tied to a signed-in user.
+  anonSessionToken String? @map("anon_session_token") @db.VarChar(255)
+  /// 'architect' | 'prototype' | null (visitor_region_events_mode_check; null before a mode exists,
+  /// e.g. guest_session_init / login).
+  mode String? @db.VarChar(20)
+  /// The design session this event belongs to, if any (workspace_entered only). Not a foreign key:
+  /// this table is an independent analytics sink, never a join target for product queries.
+  sessionId String? @map("session_id") @db.Uuid
+  /// ISO 3166-1 alpha-2, or null when geoStatus = 'unknown'.
+  countryCode String? @map("country_code") @db.VarChar(2)
+  /// Set only when the geo source has reliable sub-country coverage for this lookup.
+  regionCode String? @map("region_code") @db.VarChar(10)
+  /// e.g. "none" (no production geolocation source approved yet, see geo-lookup.ts), later a real
+  /// maintained source id. Never a live per-request third-party vendor call.
+  geoSource String @map("geo_source") @db.VarChar(40)
+  geoSourceVersion String? @map("geo_source_version") @db.VarChar(40)
+  /// 'ok' | 'unknown' (visitor_region_events_geo_status_check).
+  geoStatus  String   @map("geo_status") @db.VarChar(10)
+  observedAt DateTime @default(now()) @map("observed_at") @db.Timestamp(6)
+
+  @@index([observedAt], map: "visitor_region_events_observed_at_idx")
+  @@index([userId], map: "visitor_region_events_user_idx")
+  @@index([anonSessionToken], map: "visitor_region_events_anon_idx")
+  @@index([countryCode], map: "visitor_region_events_country_idx")
+  @@map("visitor_region_events")
+}
