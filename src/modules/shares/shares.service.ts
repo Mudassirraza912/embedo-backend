@@ -32,6 +32,117 @@ const EXPIRATION_MS: Record<'24h' | '7d' | '30d', number> = {
 
 const digestToken = (token: string): string => crypto.createHash('sha256').update(token).digest('hex');
 
+const MAX_PROJECT_VERSIONS = 20;
+const MAX_PROJECT_VERSION_CHARS = 4_000_000;
+const PROJECT_VERSION_FIELDS = [...ARCHITECT_ARTIFACT_FIELDS, 'versionTag', 'validation'] as const;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isIsoDate = (value: unknown): value is string =>
+  typeof value === 'string' && !Number.isNaN(Date.parse(value));
+
+const textList = (value: unknown, maxItems: number, maxLength: number): string[] =>
+  Array.isArray(value)
+    ? value
+        .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        .slice(0, maxItems)
+        .map((item) => item.slice(0, maxLength))
+    : [];
+
+function pickFields(source: Record<string, unknown>, keys: readonly string[]) {
+  const picked: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = source[key];
+    if (value !== undefined && value !== null) picked[key] = value;
+  }
+  return picked;
+}
+
+/** The only version-card fields a Project viewer may see; the rest of the message metadata is internal. */
+function pickVersionCard(metadata: unknown) {
+  if (!isRecord(metadata) || typeof metadata.versionTag !== 'string') return null;
+  return {
+    versionTag: metadata.versionTag.slice(0, 20),
+    changeSummary: typeof metadata.changeSummary === 'string' ? metadata.changeSummary.slice(0, 2000) : undefined,
+    changesApplied: textList(metadata.changesApplied, 6, 500),
+    engineeringDecisions: textList(metadata.engineeringDecisions, 8, 500),
+  };
+}
+
+function toSnapshotMessage(message: { role: string; content: string; createdAt?: unknown; metadata?: unknown }) {
+  const card = message.role === 'assistant' ? pickVersionCard(message.metadata) : null;
+  return {
+    role: message.role,
+    content: message.content,
+    ...(message.createdAt instanceof Date ? { createdAt: message.createdAt.toISOString() } : {}),
+    ...(card ? { card } : {}),
+  };
+}
+
+/** Bounded, immutable copy of the design's revision history taken when a Project link is issued. */
+async function buildVersionHistory(sessionId: string) {
+  const rows = await prisma.sessionVersion.findMany({
+    where: { sessionId },
+    orderBy: { versionNumber: 'desc' },
+    take: MAX_PROJECT_VERSIONS,
+    select: {
+      versionNumber: true,
+      versionTag: true,
+      changeSummary: true,
+      appliedChanges: true,
+      architecture: true,
+      createdAt: true,
+    },
+  });
+
+  const versions: Array<Record<string, unknown>> = [];
+  let size = 0;
+  for (const row of rows) {
+    if (!isRecord(row.architecture) || row.architecture.kind === 'prototype') continue;
+    const entry = {
+      versionNumber: row.versionNumber,
+      versionTag: row.versionTag,
+      changeSummary: row.changeSummary.slice(0, 2000),
+      appliedChanges: textList(row.appliedChanges, 10, 500),
+      createdAt: row.createdAt.toISOString(),
+      architecture: pickFields(row.architecture, PROJECT_VERSION_FIELDS),
+    };
+    size += JSON.stringify(entry).length;
+    if (versions.length > 0 && size > MAX_PROJECT_VERSION_CHARS) break;
+    versions.push(entry);
+  }
+  return versions.reverse();
+}
+
+function readViewerMessage(message: Record<string, unknown>) {
+  const card = isRecord(message.card) ? pickVersionCard(message.card) : null;
+  return {
+    role: message.role,
+    content: message.content,
+    ...(isIsoDate(message.createdAt) ? { createdAt: message.createdAt } : {}),
+    ...(card ? { card } : {}),
+  };
+}
+
+/** Snapshots from before revision history was captured have no versions; malformed entries are skipped. */
+function readViewerVersions(raw: unknown) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .flatMap((entry) => {
+      if (!isRecord(entry) || typeof entry.versionTag !== 'string' || !isRecord(entry.architecture)) return [];
+      return [{
+        versionTag: entry.versionTag.slice(0, 20),
+        versionNumber: typeof entry.versionNumber === 'number' ? entry.versionNumber : null,
+        changeSummary: typeof entry.changeSummary === 'string' ? entry.changeSummary : '',
+        appliedChanges: textList(entry.appliedChanges, 10, 500),
+        createdAt: isIsoDate(entry.createdAt) ? entry.createdAt : null,
+        architecture: entry.architecture,
+      }];
+    })
+    .slice(-MAX_PROJECT_VERSIONS);
+}
+
 function buildArtifactSnapshot(architecture: Record<string, unknown>, artifactKey: keyof typeof ARTIFACT_TITLES) {
   if (artifactKey === 'prototypeDiagram') {
     if (architecture.kind !== 'prototype' || !architecture.moduleDiagram) return null;
@@ -118,14 +229,20 @@ export class SharesService {
       throw new AppError(400, 'BAD_REQUEST', 'The generated design snapshot is unavailable');
     }
     const architectureObject = architecture as Record<string, unknown>;
-    const snapshot = input.targetType === 'project'
-      ? {
-          architecture,
-          messages: (Array.isArray(session.chatMessages) ? session.chatMessages : [])
-            .filter((message) => message.role === 'user' || message.role === 'assistant')
-            .map((message) => ({ role: message.role, content: message.content })),
-        }
-      : buildArtifactSnapshot(architectureObject, input.artifactKey!);
+    let snapshot: Record<string, unknown> | null;
+    if (input.targetType === 'project') {
+      const versions = architectureObject.kind === 'prototype' ? [] : await buildVersionHistory(sessionId);
+      snapshot = {
+        architecture,
+        messages: (Array.isArray(session.chatMessages) ? session.chatMessages : [])
+          .filter((message) => message.role === 'user' || message.role === 'assistant')
+          .filter((message) => !(isRecord(message.metadata) && message.metadata.busy === true))
+          .map(toSnapshotMessage),
+        ...(versions.length > 0 ? { versions } : {}),
+      };
+    } else {
+      snapshot = buildArtifactSnapshot(architectureObject, input.artifactKey!);
+    }
     if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
       throw new AppError(400, 'BAD_REQUEST', 'The selected diagram is not available in this design');
     }
@@ -287,7 +404,8 @@ export class SharesService {
       project: {
         title: link.session.title || 'Untitled Project',
         architecture: projectArchitecture,
-        messages: projectMessages,
+        messages: projectMessages.map(readViewerMessage),
+        versions: readViewerVersions(projectSnapshot.versions),
         canEdit: false,
       },
     };
