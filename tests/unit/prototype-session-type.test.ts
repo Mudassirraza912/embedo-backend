@@ -45,13 +45,18 @@ describe('session type on the chat endpoints', () => {
     jest.spyOn(prisma.chatMessage, 'create').mockResolvedValue({} as never);
     const route = jest.spyOn(aiRouterService, 'executeTask').mockResolvedValue(routerReply('generate'));
     const add = jest.spyOn(aiPipelineQueue, 'add').mockResolvedValue({} as never);
+    // Credits are covered by credits-usage/KAN-43 tests; without this the lookup queries chat_messages.
+    const credits = { used: 1, limit: 6, remaining: 5, resetAt: null, unit: 'credits' as const };
+    const getCredits = jest.spyOn(sessionsService, 'getCreditsForSession').mockResolvedValue(credits);
 
     const result = await sessionsService.createSession({ intentText: 'Pico weather station with a BME280', type: 'prototype' }, undefined, undefined);
 
     expect(create.mock.calls[0]![0].data).toMatchObject({ applicationContext: 'rapid_prototyping' });
     expect(route.mock.calls[0]![0].systemPrompt).toContain('PROJECT TYPE: Prototype');
     expect(add.mock.calls[0]![1]).toMatchObject({ sessionId: 's-1', type: 'prototype' });
+    expect(getCredits).toHaveBeenCalledWith(expect.objectContaining({ id: 's-1' }), undefined);
     expect(result.session.applicationContext).toBe('rapid_prototyping');
+    expect(result.credits).toEqual(credits);
   });
 
   it('refuses to switch the type of a project that already has a design', async () => {
