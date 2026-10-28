@@ -60,6 +60,9 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
+const mockVersionHistory = (rows: unknown[] = []) =>
+  jest.spyOn(prisma.sessionVersion, 'findMany').mockResolvedValue(rows as never);
+
 describe('authenticated sharing settings', () => {
   it('returns null when the authenticated user has not explicitly saved settings', async () => {
     const token = authenticatedAs();
@@ -300,6 +303,7 @@ describe('Project and Artifact share links', () => {
   });
 
   it('applies the selected per-link visibility independently of global expiry settings', async () => {
+    mockVersionHistory();
     jest.spyOn(sessionsService, 'getSession').mockResolvedValue({
       userId: ownerId,
       architecture: { bom: [] },
@@ -327,6 +331,7 @@ describe('Project and Artifact share links', () => {
   });
 
   it('creates a private link with a normalized invited-email allow-list and global expiry', async () => {
+    mockVersionHistory();
     jest.spyOn(sessionsService, 'getSession').mockResolvedValue({
       userId: ownerId,
       architecture: { bom: [] },
@@ -374,6 +379,7 @@ describe('Project and Artifact share links', () => {
   });
 
   it('snapshots the project architecture and read-only conversation at issuance', async () => {
+    mockVersionHistory();
     jest.spyOn(sessionsService, 'getSession').mockResolvedValue({
       userId: ownerId,
       architecture: { functionalBlock: { nodes: [{ id: 'n1' }] } },
@@ -407,6 +413,142 @@ describe('Project and Artifact share links', () => {
         { role: 'assistant', content: 'A response' },
       ],
     });
+  });
+
+  it('snapshots a bounded revision history, message times, and only whitelisted version-card fields', async () => {
+    const created = new Date('2026-06-12T09:14:00.000Z');
+    jest.spyOn(sessionsService, 'getSession').mockResolvedValue({
+      userId: ownerId,
+      architecture: { functionalBlock: { nodes: [{ id: 'n1' }] } },
+      chatMessages: [
+        { role: 'user', content: 'A project brief', createdAt: created, metadata: { internal: 'hidden' } },
+        { role: 'assistant', content: 'Working on it', createdAt: created, metadata: { busy: true } },
+        {
+          role: 'assistant',
+          content: 'Synthesized',
+          createdAt: new Date('2026-06-12T09:31:00.000Z'),
+          metadata: {
+            versionTag: 'v1.0',
+            changeSummary: 'Initial architecture generated',
+            changesApplied: ['Chose a controller'],
+            engineeringDecisions: ['Use an LDO'],
+            executionSteps: [{ secret: 'internal pipeline detail' }],
+            validationIssues: [{ message: 'internal' }],
+          },
+        },
+      ],
+    } as never);
+    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({ expiration: 'never' });
+    const findVersions = mockVersionHistory([
+      {
+        versionNumber: 2,
+        versionTag: 'v1.1',
+        changeSummary: 'Added a display',
+        appliedChanges: ['Add a display'],
+        createdAt: new Date('2026-07-24T14:26:00.000Z'),
+        architecture: {
+          versionTag: 'v1.1',
+          projectMeta: { name: 'Node', tagline: 'Tagline', controller: 'MCU-1' },
+          functionalBlock: { nodes: [{ id: 'n1' }] },
+          bom: [{ partNumber: 'MCU-1', qty: 1 }],
+          internalOnly: 'must not be shared',
+        },
+      },
+      {
+        versionNumber: 1,
+        versionTag: 'v1.0',
+        changeSummary: 'Initial architecture generated',
+        appliedChanges: ['Initial architecture generated'],
+        createdAt: created,
+        architecture: { versionTag: 'v1.0', functionalBlock: { nodes: [] } },
+      },
+      {
+        versionNumber: 0,
+        versionTag: 'v0.9',
+        changeSummary: 'Prototype row',
+        appliedChanges: [],
+        createdAt: created,
+        architecture: { kind: 'prototype' },
+      },
+    ]);
+    const create = jest.spyOn(prisma.shareLink, 'create').mockImplementation(async (args) => ({
+      id: '44444444-4444-4444-4444-444444444444',
+      targetType: args.data.targetType,
+      artifactKey: args.data.artifactKey,
+      inviteeEmails: args.data.inviteeEmails,
+      visibility: args.data.visibility,
+      expirationPolicy: args.data.expirationPolicy,
+      issuedAt: args.data.issuedAt,
+      expiresAt: args.data.expiresAt,
+    } as never));
+
+    await sharesService.createLink(sessionId, ownerId, { targetType: 'project', visibility: 'public' });
+
+    expect(findVersions).toHaveBeenCalledWith(expect.objectContaining({
+      where: { sessionId },
+      orderBy: { versionNumber: 'desc' },
+      take: 20,
+    }));
+    const snapshot = create.mock.calls[0]![0].data.snapshot as {
+      messages: Array<Record<string, unknown>>;
+      versions: Array<Record<string, unknown>>;
+    };
+    expect(snapshot.versions.map((version) => version.versionTag)).toEqual(['v1.0', 'v1.1']);
+    expect(snapshot.versions[1]).toMatchObject({
+      versionNumber: 2,
+      changeSummary: 'Added a display',
+      appliedChanges: ['Add a display'],
+      createdAt: '2026-07-24T14:26:00.000Z',
+      architecture: {
+        versionTag: 'v1.1',
+        projectMeta: { controller: 'MCU-1' },
+        bom: [{ partNumber: 'MCU-1', qty: 1 }],
+      },
+    });
+    expect(snapshot.versions[1]!.architecture).not.toHaveProperty('internalOnly');
+    expect(snapshot.messages).toHaveLength(2);
+    expect(snapshot.messages[0]).toEqual({
+      role: 'user',
+      content: 'A project brief',
+      createdAt: '2026-06-12T09:14:00.000Z',
+    });
+    expect(snapshot.messages[1]).toEqual({
+      role: 'assistant',
+      content: 'Synthesized',
+      createdAt: '2026-06-12T09:31:00.000Z',
+      card: {
+        versionTag: 'v1.0',
+        changeSummary: 'Initial architecture generated',
+        changesApplied: ['Chose a controller'],
+        engineeringDecisions: ['Use an LDO'],
+      },
+    });
+    expect(JSON.stringify(snapshot)).not.toContain('internal pipeline detail');
+  });
+
+  it('does not capture revision history for Prototype designs', async () => {
+    jest.spyOn(sessionsService, 'getSession').mockResolvedValue({
+      userId: ownerId,
+      architecture: { kind: 'prototype', moduleDiagram: { modules: [] } },
+      chatMessages: [],
+    } as never);
+    jest.spyOn(usersService, 'getShareSettings').mockResolvedValue({ expiration: 'never' });
+    const findVersions = mockVersionHistory();
+    const create = jest.spyOn(prisma.shareLink, 'create').mockImplementation(async (args) => ({
+      id: '44444444-4444-4444-4444-444444444444',
+      targetType: args.data.targetType,
+      artifactKey: args.data.artifactKey,
+      inviteeEmails: args.data.inviteeEmails,
+      visibility: args.data.visibility,
+      expirationPolicy: args.data.expirationPolicy,
+      issuedAt: args.data.issuedAt,
+      expiresAt: args.data.expiresAt,
+    } as never));
+
+    await sharesService.createLink(sessionId, ownerId, { targetType: 'project', visibility: 'public' });
+
+    expect(findVersions).not.toHaveBeenCalled();
+    expect(create.mock.calls[0]![0].data.snapshot).not.toHaveProperty('versions');
   });
 
   it('snapshots all Prototype viewer sections and version metadata at issuance', async () => {
@@ -486,6 +628,72 @@ describe('Project and Artifact share links', () => {
     expect(response.body.data).not.toHaveProperty('share');
     expect(response.body.data.project).toMatchObject({ canEdit: false });
     expect(response.body.data.project).not.toHaveProperty('sessionId');
+  });
+
+  it('serves revision history and conversation metadata read-only, dropping unknown fields', async () => {
+    jest.spyOn(prisma.shareLink, 'findUnique').mockResolvedValue(viewerRecord({
+      snapshot: {
+        architecture: { projectMeta: { name: 'Viewer project' }, bom: [] },
+        messages: [
+          { role: 'user', content: 'Brief', createdAt: '2026-06-12T09:14:00.000Z', extra: 'dropped' },
+          {
+            role: 'assistant',
+            content: 'Done',
+            createdAt: 'not-a-date',
+            card: { versionTag: 'v1.0', changesApplied: ['A'], executionSteps: ['internal'] },
+          },
+        ],
+        versions: [
+          {
+            versionNumber: 1,
+            versionTag: 'v1.0',
+            changeSummary: 'Initial architecture generated',
+            appliedChanges: ['Initial architecture generated'],
+            createdAt: '2026-06-12T09:31:00.000Z',
+            architecture: { versionTag: 'v1.0', functionalBlock: { nodes: [] } },
+          },
+          { versionTag: 7, architecture: {} },
+          { versionTag: 'v1.1', architecture: 'not-an-object' },
+        ],
+      },
+    }) as never);
+
+    const response = await request(app).get(`/api/v1/share-links/${'a'.repeat(64)}`);
+
+    expect(response.status).toBe(200);
+    const project = response.body.data.project;
+    expect(project.canEdit).toBe(false);
+    expect(project).not.toHaveProperty('sessionId');
+    expect(project.messages[0]).toEqual({
+      role: 'user',
+      content: 'Brief',
+      createdAt: '2026-06-12T09:14:00.000Z',
+    });
+    expect(project.messages[1]).toEqual({
+      role: 'assistant',
+      content: 'Done',
+      card: { versionTag: 'v1.0', changesApplied: ['A'], engineeringDecisions: [] },
+    });
+    expect(project.versions).toEqual([
+      {
+        versionNumber: 1,
+        versionTag: 'v1.0',
+        changeSummary: 'Initial architecture generated',
+        appliedChanges: ['Initial architecture generated'],
+        createdAt: '2026-06-12T09:31:00.000Z',
+        architecture: { versionTag: 'v1.0', functionalBlock: { nodes: [] } },
+      },
+    ]);
+  });
+
+  it('still serves legacy Project snapshots that have no revision history', async () => {
+    jest.spyOn(prisma.shareLink, 'findUnique').mockResolvedValue(viewerRecord() as never);
+
+    const response = await request(app).get(`/api/v1/share-links/${'a'.repeat(64)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.project.versions).toEqual([]);
+    expect(response.body.data.project.messages).toEqual([{ role: 'assistant', content: 'Shared conversation' }]);
   });
 
   it('supports anonymous read-only viewing for a public Artifact link', async () => {
