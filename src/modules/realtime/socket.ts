@@ -208,4 +208,8 @@ export const emitSessionEvent = {
     activeStreams.delete(sessionId);
     dispatch(sessionId, 'chat_complete', { content });
   },
+  creditsUpdated: (
+    sessionId: string,
+    credits: { used: number; limit: number; remaining: number; resetAt: string | null; unit: 'credits' }
+  ) => dispatch(sessionId, 'credits_updated', { credits }),
 };

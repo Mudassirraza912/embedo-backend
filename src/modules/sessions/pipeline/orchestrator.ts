@@ -13,6 +13,7 @@ import { ApplyMode, persistNewVersion, proposalCardText, proposeVersion, version
 import { getAppliedChangeLineage, filterAppliedSuggestions, compactGraphForRevision, describeGraphChanges, isSameChange } from './refinement-history.js';
 import { recoverConversationContext } from './conversation-context.js';
 import { isExpansionRequest, extractExpansionCount, expandDesignGraphWithModules } from './expansion-engine.js';
+import { calculateCreditsForSession } from '../credits-calculator.js';
 
 // A reworded clarification must still be about the missing field; otherwise the gate's own
 // question is used. Fields without an entry here accept any wording.
@@ -606,6 +607,18 @@ export async function runGenerationPipeline(
     // The request (not the label) is kept as lineage: Sol is told these must stay applied.
     const appliedChanges: string[] = isRevision ? [(revisionNotes ?? '').slice(0, 500)] : ['Initial architecture generated'];
 
+    const currentCredits = await calculateCreditsForSession(session);
+    const isFree = options.forceGenerate === true && !isRevision;
+    const creditsUsage = {
+      consumed: isFree ? 0 : 1,
+      remaining: currentCredits.remaining,
+      limit: currentCredits.limit,
+      isFree,
+      freeReason: isFree ? 'Best-effort draft override' : undefined,
+      operationType: isRevision ? 'Architecture Refinement' : 'Initial Generation',
+      operationId: `gen_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    };
+
     const versionCard = (tag: string) => ({
         content: `✨ **Hardware Architecture Synthesized (${tag})**\n\n- **Controller**: ${projectedArchitecture.projectMeta.controller}\n- **Tagline**: ${projectedArchitecture.projectMeta.tagline}\n- **Total BOM Components**: ${projectedArchitecture.bom.length}\n- **Diagrams Generated**: Functional Block, Power Tree, Protocol Map${
           validation.issues.length > 0
@@ -645,6 +658,7 @@ export async function runGenerationPipeline(
             unitCostUsd: b.unitCostUsd,
           })),
           requirementsCoverage,
+          creditsUsage,
         },
       });
 
@@ -695,6 +709,7 @@ export async function runGenerationPipeline(
 
     projectedArchitecture.versionTag = versionTag;
     emitSessionEvent.done(sessionId, projectedArchitecture as unknown as Record<string, unknown>);
+    emitSessionEvent.creditsUpdated(sessionId, currentCredits);
     log.info({ versionTag }, 'AI generation pipeline & version snapshot successfully saved');
 
     return { status: 'completed', architecture: projectedArchitecture };
