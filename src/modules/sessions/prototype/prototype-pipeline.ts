@@ -16,6 +16,7 @@ import { filterAppliedSuggestions, getAppliedChangeLineage } from '../pipeline/r
 import { isPrototypeArchitecture, isPrototypeComposition, PrototypeArchitecture, PrototypeComposition } from './prototype.types.js';
 import { benchDiffView, describeBench, diffBenches } from './prototype-diff.js';
 import { isOutsideKind, PlaceholderKind } from './prototype-placeholders.js';
+import { calculateCreditsForSession } from '../credits-calculator.js';
 
 /**
  * Prototype pipeline (plan D5), run by the ai-pipeline worker for sessions of type "prototype".
@@ -318,6 +319,16 @@ ${requestText}`,
     const quickRefinements = filterAppliedSuggestions(output.suggestedRefinements, [...appliedLineage, ...(revisionNotes ? [revisionNotes] : [])]).slice(0, 5);
     // The request is kept first so quick-refinement filtering still sees what was asked for.
     const appliedChanges = revisionNotes ? [revisionNotes.slice(0, 500), ...changesApplied] : ['Initial prototype assembled'];
+    const currentCredits = await calculateCreditsForSession({ id: sessionId, userId: session.userId, chatMessages: session.chatMessages });
+    const creditsUsage = {
+      consumed: 1,
+      remaining: currentCredits.remaining,
+      limit: currentCredits.limit,
+      isFree: false,
+      operationType: revisionNotes ? 'Prototype Refinement' : 'Initial Prototype',
+      operationId: `proto_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+    };
+
     const versionCard = (tag: string) => ({
         content: summaryMessage(payload, tag, sourcing, changesApplied),
         metadata: {
@@ -341,6 +352,7 @@ ${requestText}`,
           },
           validationPass: counts.BLOCKER === 0,
           executionSteps,
+          creditsUsage,
         },
       });
 
@@ -388,6 +400,7 @@ ${requestText}`,
 
     payload.versionTag = versionTag;
     emitSessionEvent.done(sessionId, payload as unknown as Record<string, unknown>);
+    emitSessionEvent.creditsUpdated(sessionId, currentCredits);
     log.info({ versionTag, modules: payload.instances.length, gaps: payload.gaps.length, counts }, 'Prototype version saved');
     return { status: 'completed', architecture: payload as unknown as PipelineExecutionResult['architecture'] };
   } catch (err: unknown) {

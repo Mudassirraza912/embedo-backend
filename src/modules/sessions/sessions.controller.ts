@@ -80,7 +80,8 @@ export class SessionsController {
 
   getCredits = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const credits = await sessionsService.getCredits(req.user?.id, req.ip);
+      const sessionId = (req.query.sessionId as string) || undefined;
+      const credits = await sessionsService.getCredits(req.user?.id, req.ip, sessionId);
       res.status(200).json({
         success: true,
         data: credits,

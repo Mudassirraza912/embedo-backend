@@ -8,6 +8,7 @@ import { RetryablePipelineError } from '../modules/sessions/pipeline/orchestrato
 import { runSessionPipeline } from '../modules/sessions/pipeline/dispatch.js';
 import { SessionType, sessionTypeOf } from '../modules/sessions/session-type.js';
 import { guestQuotaService } from '../modules/limits/guest-quota.service.js';
+import { calculateCreditsForSession } from '../modules/sessions/credits-calculator.js';
 
 import type { ApplyMode } from '../modules/sessions/version.service.js';
 
@@ -108,6 +109,12 @@ const markSessionFailed = async (
     logger.error({ err, sessionId }, 'Failed to mark session as FAILED');
   }
   emitSessionEvent.error(sessionId, retryable ? 'Temporary AI provider issue — please retry.' : 'Generation failed for this request.', retryable);
+    try {
+      const updatedCredits = await calculateCreditsForSession({ id: sessionId, userId: _userId }, ipAddress);
+      emitSessionEvent.creditsUpdated(sessionId, updatedCredits);
+    } catch (creditsErr) {
+      logger.warn({ err: creditsErr, sessionId }, 'Failed to emit creditsUpdated after failure');
+    }
 };
 
 export const createAiPipelineWorker = () => {
