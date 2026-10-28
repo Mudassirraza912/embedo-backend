@@ -36,6 +36,28 @@ const MAX_PROJECT_VERSIONS = 20;
 const MAX_PROJECT_VERSION_CHARS = 4_000_000;
 const PROJECT_VERSION_FIELDS = [...ARCHITECT_ARTIFACT_FIELDS, 'versionTag', 'validation'] as const;
 
+const PROTOTYPE_ARTIFACT_FIELDS = [
+  'kind',
+  'schemaVersion',
+  'versionTag',
+  'understanding',
+  'notes',
+  'stateHash',
+  'projectMeta',
+  'instances',
+  'nets',
+  'connections',
+  'gaps',
+  'compatibility',
+  'moduleDiagram',
+  'pinList',
+  'hardwareLibrary',
+  'domainKnowledge',
+  'bom',
+  'summary',
+  'version',
+] as const;
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -146,32 +168,7 @@ function readViewerVersions(raw: unknown) {
 function buildArtifactSnapshot(architecture: Record<string, unknown>, artifactKey: keyof typeof ARTIFACT_TITLES) {
   if (artifactKey === 'prototypeDiagram') {
     if (architecture.kind !== 'prototype' || !architecture.moduleDiagram) return null;
-    const snapshot: Record<string, unknown> = {};
-    for (const key of [
-      'kind',
-      'schemaVersion',
-      'versionTag',
-      'understanding',
-      'notes',
-      'stateHash',
-      'projectMeta',
-      'instances',
-      'nets',
-      'connections',
-      'gaps',
-      'compatibility',
-      'moduleDiagram',
-      'pinList',
-      'hardwareLibrary',
-      'domainKnowledge',
-      'bom',
-      'summary',
-      'version',
-    ]) {
-      const value = architecture[key];
-      if (value !== undefined && value !== null) snapshot[key] = value;
-    }
-    return snapshot;
+    return pickFields(architecture, PROTOTYPE_ARTIFACT_FIELDS);
   }
 
   const selectedDiagram = artifactKey === 'fbd'
