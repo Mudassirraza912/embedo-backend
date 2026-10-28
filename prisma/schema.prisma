@@ -97,6 +97,7 @@ model DesignSession {
   parentSession    DesignSession?    @relation("SessionIterations", fields: [parentSessionId], references: [id])
   childSessions    DesignSession[]   @relation("SessionIterations")
   versions         SessionVersion[]
+  generationAttempts GenerationAttempt[]
   proposals        DesignProposal[]
   chatMessages     ChatMessage[]
   aiCalls          AiCall[]
@@ -128,6 +129,32 @@ model SessionVersion {
   @@unique([sessionId, versionNumber], map: "session_versions_session_version_unique")
   @@index([sessionId], map: "session_versions_session_idx")
   @@map("session_versions")
+}
+
+/// One row per exhausted pipeline attempt that ended in failure (first build or revision), written
+/// by the ai-pipeline worker's failure handler. Deliberately holds no free text (no error message,
+/// no chat content): just enough to count and classify failures for admin analytics without
+/// exposing restricted columns. A successful attempt is already recorded as a SessionVersion; this
+/// table exists because a failed *revision* on a session that already had a working version leaves
+/// `design_sessions.status` at DONE (the last good version stays active), so it would otherwise be
+/// invisible to any query grouped by the session's current status.
+model GenerationAttempt {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId     String   @map("session_id") @db.Uuid
+  /// "first_build" | "revision"
+  kind          String   @db.VarChar(20)
+  /// "provider_or_timeout" | "pipeline_error" — the same retryable/non-retryable split the worker
+  /// already makes to decide whether to retry; no raw error message is stored.
+  failureReason String   @map("failure_reason") @db.VarChar(30)
+  /// Whether the session kept an earlier working version after this attempt failed.
+  keptVersion   Boolean  @map("kept_version")
+  occurredAt    DateTime @default(now()) @map("occurred_at") @db.Timestamp(6)
+
+  session DesignSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId], map: "generation_attempts_session_idx")
+  @@index([occurredAt], map: "generation_attempts_occurred_at_idx")
+  @@map("generation_attempts")
 }
 
 /// A revision built while the user's apply mode was "manual": the full design is kept here and the

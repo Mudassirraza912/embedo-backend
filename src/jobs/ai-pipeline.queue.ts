@@ -84,6 +84,22 @@ const markSessionFailed = async (
       arch && typeof arch === 'object' && !Array.isArray(arch) && typeof arch['versionTag'] === 'string' ? arch['versionTag'] : null;
     await prisma.designSession.update({ where: { id: sessionId }, data: { status: hasArchitecture ? 'DONE' : 'FAILED' } });
 
+    // Durable, admin-readable failure record (no free text): a failed revision leaves the session's
+    // own `status` at DONE (above), so without this row the attempt would be invisible to any query
+    // grouped by the session's current status. See prisma/schema.prisma GenerationAttempt.
+    try {
+      await prisma.generationAttempt.create({
+        data: {
+          sessionId,
+          kind: hasArchitecture ? 'revision' : 'first_build',
+          failureReason: retryable ? 'provider_or_timeout' : 'pipeline_error',
+          keptVersion: hasArchitecture,
+        },
+      });
+    } catch (attemptErr) {
+      logger.warn({ err: attemptErr, sessionId }, 'Failed to record generation attempt failure');
+    }
+
     const content = hasArchitecture
       ? `I couldn't apply that change this time — your current design${
           versionTag ? ` (${versionTag})` : ''
