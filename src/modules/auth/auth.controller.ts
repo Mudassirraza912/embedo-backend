@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import { authService } from './auth.service.js';
 import { env } from '../../config/env.js';
+import { regionalUsageService } from '../analytics/regional-usage.service.js';
+import { resolveTrustedClientIp } from '../analytics/client-ip.js';
 
 export class AuthController {
   private setRefreshCookie(res: Response, token: string) {
@@ -22,6 +24,7 @@ export class AuthController {
       }
 
       this.setRefreshCookie(res, result.refreshToken);
+      void regionalUsageService.recordEvent({ eventType: 'login', userId: result.user.id, ip: resolveTrustedClientIp(req) });
       res.status(201).json({
         user: result.user,
         accessToken: result.accessToken,
@@ -58,6 +61,7 @@ export class AuthController {
     try {
       const result = await authService.login(req.body);
       this.setRefreshCookie(res, result.refreshToken);
+      void regionalUsageService.recordEvent({ eventType: 'login', userId: result.user.id, ip: resolveTrustedClientIp(req) });
 
       res.status(200).json({
         user: result.user,
@@ -72,6 +76,7 @@ export class AuthController {
     try {
       const result = await authService.loginWithGoogle(req.body);
       this.setRefreshCookie(res, result.refreshToken);
+      void regionalUsageService.recordEvent({ eventType: 'login', userId: result.user.id, ip: resolveTrustedClientIp(req) });
 
       res.status(200).json({
         user: result.user,
@@ -86,6 +91,7 @@ export class AuthController {
     try {
       const result = await authService.loginWithGithub(req.body);
       this.setRefreshCookie(res, result.refreshToken);
+      void regionalUsageService.recordEvent({ eventType: 'login', userId: result.user.id, ip: resolveTrustedClientIp(req) });
 
       res.status(200).json({
         user: result.user,

@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { upgradePrototypeDiagram, upgradePrototypeDiagrams } from './prototype/diagram-upgrade.js';
 import { sessionsService } from './sessions.service.js';
 import { sessionTypeOf } from './session-type.js';
+import { regionalUsageService } from '../analytics/regional-usage.service.js';
+import { resolveTrustedClientIp } from '../analytics/client-ip.js';
 import {
   CreateSessionInput,
   DiscussInput,
@@ -20,6 +22,22 @@ export class SessionsController {
         req.anonSessionToken,
         req.ip
       );
+
+      // Regional usage analytics (task_two): bounded to session creation only (never the
+      // workspace poll/GET path) so event volume stays proportional to real new projects, not
+      // repeated polling. See regional-usage.service.ts for what is and isn't stored.
+      const ip = resolveTrustedClientIp(req);
+      if (result.issuedAnonToken) {
+        void regionalUsageService.recordEvent({ eventType: 'guest_session_init', anonSessionToken: result.issuedAnonToken, ip });
+      }
+      void regionalUsageService.recordEvent({
+        eventType: 'workspace_entered',
+        userId: req.user?.id ?? null,
+        anonSessionToken: req.user?.id ? null : req.anonSessionToken ?? result.issuedAnonToken ?? null,
+        mode: sessionTypeOf(result.session.applicationContext),
+        sessionId: result.session.id,
+        ip,
+      });
 
       res.status(201).json({
         success: true,
