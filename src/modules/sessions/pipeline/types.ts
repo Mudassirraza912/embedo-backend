@@ -139,6 +139,35 @@ export interface PowerRail {
   consumers: string[];
 }
 
+export interface SourcingOffer {
+  seller: string;
+  sku: string | null;
+  stock: number;
+  moq: number | null;
+  packaging: string | null;
+  url: string | null;
+  updated: string | null;
+  prices: Array<{ qty: number; price: number; currency: string }>;
+}
+
+/** Real distributor data for one BOM line. Only ever filled from a verified exact-MPN match. */
+export interface PartSourcingInfo {
+  status: 'verified' | 'not_found' | 'not_checked' | 'unavailable';
+  source: 'nexar';
+  reason?: string;
+  mpn?: string;
+  manufacturer?: string;
+  description?: string;
+  lifecycle?: string;
+  package?: string;
+  octopartUrl?: string;
+  datasheetUrl?: string;
+  totalAvail?: number;
+  medianPrice1000?: { price: number; currency: string };
+  offers: SourcingOffer[];
+  fetchedAt: string;
+}
+
 export interface BomItem {
   partNumber: string;
   manufacturer: string;
@@ -146,7 +175,10 @@ export interface BomItem {
   description: string;
   qty: number;
   unitCostUsd?: number;
+  /** 'nexar' = a real distributor price; 'estimate' = the model's guess (never presented as real). */
+  priceSource?: 'nexar' | 'estimate';
   datasheetUrl?: string;
+  sourcing?: PartSourcingInfo;
 }
 
 export interface CanonicalDesignGraph {

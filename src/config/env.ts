@@ -100,6 +100,20 @@ const envSchema = z
       .default('true')
       .transform((v) => v === 'true'),
 
+    // Nexar (Octopart) part sourcing for BOM / components. Off unless explicitly enabled, and a
+    // no-op without credentials. The evaluation plan has a small lifetime lookup quota, so every
+    // real lookup is counted in the database and capped by NEXAR_LOOKUP_BUDGET.
+    NEXAR_ENABLED: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((v) => v === 'true'),
+    NEXAR_CLIENT_ID: optionalString,
+    NEXAR_CLIENT_SECRET: optionalString,
+    NEXAR_LOOKUP_BUDGET: z.coerce.number().int().nonnegative().default(8),
+    NEXAR_MAX_LOOKUPS_PER_VERSION: z.coerce.number().int().nonnegative().default(3),
+    NEXAR_CACHE_TTL_HOURS: z.coerce.number().int().positive().default(168),
+    NEXAR_CURRENCY: z.string().trim().length(3).default('USD'),
+
     // Prototype mode (type=prototype on the chat endpoints). When false, prototype requests are
     // refused with a clear 403 and existing prototype sessions are not re-run.
     PROTOTYPE_ENABLED: z

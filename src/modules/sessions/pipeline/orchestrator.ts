@@ -14,6 +14,7 @@ import { getAppliedChangeLineage, filterAppliedSuggestions, compactGraphForRevis
 import { recoverConversationContext } from './conversation-context.js';
 import { isExpansionRequest, extractExpansionCount, expandDesignGraphWithModules } from './expansion-engine.js';
 import { calculateCreditsForSession } from '../credits-calculator.js';
+import { enrichBomWithSourcing } from '../../sourcing/part-sourcing.service.js';
 
 // A reworded clarification must still be about the missing field; otherwise the gate's own
 // question is used. Fields without an entry here accept any wording.
@@ -533,6 +534,7 @@ export async function runGenerationPipeline(
       }
     };
 
+    finalizedGraph.bom = await enrichBomWithSourcing(finalizedGraph.bom ?? [], finalizedGraph.controller?.partNumber);
     const projectedArchitecture = projectArchitecture(finalizedGraph);
     projectedArchitecture.validation = {
       isValid: validation.isValid,
