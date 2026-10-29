@@ -141,6 +141,20 @@ model ShareLink {
   @@map("share_links")
 }
 
+// One row per looked-up MPN. lookupCount is the number of real Nexar calls spent on it, so the
+// sum across the table is the lifetime quota used by this app.
+model PartSourcing {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mpnKey      String   @unique @map("mpn_key") @db.VarChar(128)
+  status      String   @db.VarChar(20)
+  payload     Json
+  lookupCount Int      @default(1) @map("lookup_count")
+  fetchedAt   DateTime @default(now()) @map("fetched_at") @db.Timestamp(6)
+  expiresAt   DateTime @map("expires_at") @db.Timestamp(6)
+
+  @@map("part_sourcing")
+}
+
 model SessionVersion {
   id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   sessionId      String   @map("session_id") @db.Uuid
