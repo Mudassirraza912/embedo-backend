@@ -1,0 +1,177 @@
+{
+  "data": {
+    "supMultiMatch": [
+      {
+        "reference": "STM32F405RGT6",
+        "hits": 4,
+        "error": null,
+        "parts": [
+          {
+            "mpn": "STM32F405RGT6",
+            "manufacturer": {
+              "name": "STMicroelectronics",
+              "homepageUrl": "http://www.st.com"
+            },
+            "shortDescription": "MCU 32-bit STM32F ARM Cortex M4F RISC 1024KB Flash 2.5V/3.3V 64-Pin LQFP Tray",
+            "octopartUrl": "https://octopart.com/part/stmicroelectronics/STM32F405RGT6",
+            "totalAvail": 406932,
+            "medianPrice1000": {
+              "price": 8.33654,
+              "currency": "USD"
+            },
+            "bestDatasheet": {
+              "url": "http://datasheet.octopart.com/STM32F405RGT6-STMicroelectronics-datasheet-181247466.pdf"
+            },
+            "category": {
+              "name": "Microcontrollers"
+            },
+            "specs": [
+              {
+                "attribute": {
+                  "shortname": "case_package",
+                  "name": "Case/Package"
+                },
+                "displayValue": "LFQFP"
+              },
+              {
+                "attribute": {
+                  "shortname": "corearchitecture",
+                  "name": "Core Architecture"
+                },
+                "displayValue": "ARM Cortex-M4"
+              },
+              {
+                "attribute": {
+                  "shortname": "flashmemorysize",
+                  "name": "Flash Memory Size"
+                },
+                "displayValue": "1 MB"
+              },
+              {
+                "attribute": {
+                  "shortname": "frequency",
+                  "name": "Frequency"
+                },
+                "displayValue": "168 MHz"
+              },
+              {
+                "attribute": {
+                  "shortname": "lifecyclestatus",
+                  "name": "Lifecycle Status"
+                },
+                "displayValue": "Production (Last Updated: 1 month ago)"
+              }
+            ],
+            "sellers": [
+              {
+                "company": {
+                  "name": "Newark",
+                  "homepageUrl": "http://www.newark.com"
+                },
+                "isAuthorized": true,
+                "offers": [
+                  {
+                    "sku": "STM32F405RGT6",
+                    "inventoryLevel": 0,
+                    "moq": 1,
+                    "packaging": null,
+                    "clickUrl": "https://octopart.com/opatz8j6/a1?t=REDACTED",
+                    "updated": "2026-10-29T06:51:21.000Z",
+                    "prices": [
+                      {
+                        "quantity": 1,
+                        "price": 14.75,
+                        "currency": "USD"
+                      },
+                      {
+                        "quantity": 10,
+                        "price": 11.54,
+                        "currency": "USD"
+                      },
+                      {
+                        "quantity": 25,
+                        "price": 10.9,
+                        "currency": "USD"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "company": {
+                  "name": "Mouser",
+                  "homepageUrl": "http://www.mouser.com"
+                },
+                "isAuthorized": true,
+                "offers": [
+                  {
+                    "sku": "511-STM32F405RGT6",
+                    "inventoryLevel": 1521,
+                    "moq": 1,
+                    "packaging": "Tray",
+                    "clickUrl": "https://octopart.com/opatz8j6/a1?t=REDACTED",
+                    "updated": "2026-10-29T06:51:21.000Z",
+                    "prices": [
+                      {
+                        "quantity": 1,
+                        "price": 13.64,
+                        "currency": "USD"
+                      },
+                      {
+                        "quantity": 10,
+                        "price": 10.68,
+                        "currency": "USD"
+                      },
+                      {
+                        "quantity": 25,
+                        "price": 9.49,
+                        "currency": "USD"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "company": {
+                  "name": "DigiKey",
+                  "homepageUrl": "http://www.digikey.com"
+                },
+                "isAuthorized": true,
+                "offers": [
+                  {
+                    "sku": "497-11767-ND",
+                    "inventoryLevel": 0,
+                    "moq": 1,
+                    "packaging": "Tray",
+                    "clickUrl": "https://octopart.com/opatz8j6/a1?t=REDACTED",
+                    "updated": "2026-10-29T06:51:21.000Z",
+                    "prices": [
+                      {
+                        "quantity": 1,
+                        "price": 13.37,
+                        "currency": "USD"
+                      },
+                      {
+                        "quantity": 10,
+                        "price": 10.462,
+                        "currency": "USD"
+                      },
+                      {
+                        "quantity": 50,
+                        "price": 9.2966,
+                        "currency": "USD"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "extensions": {
+    "requestId": "ab2522f5-6d0b-41fc-9fae-16253f32f9ba"
+  }
+}
