@@ -1,3 +1,6 @@
 # False positives only. Each line is a gitleaks fingerprint (commit:file:rule:line).
 # The dummy JWT secret the unit tests use, quoted in a usage comment (removed in the next commit).
 7e0ceb0b54a770c54c61da8c6679856dd0eab930:scripts/prototype-replay.ts:generic-api-key:8
+# Nexar part-sourcing test fixture (MPN used as a cache key), flagged as generic-api-key.
+c744af7858e8cfdb3ff333f7aa58565bd23ffa1c:tests/unit/part-sourcing.test.ts:generic-api-key:196
+640689a09c86519bdb62b4d4144b3ceefa48411b:tests/unit/part-sourcing.test.ts:generic-api-key:168
