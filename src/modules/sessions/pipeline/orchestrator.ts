@@ -140,12 +140,6 @@ export async function runGenerationPipeline(
   };
 
   try {
-    // Step 1: Reading Intent (Luna Tier)
-    recordStep('reading_intent', 'Reading intent', 'running');
-    emitSessionEvent.stageUpdate(sessionId, { step: 1, label: 'Parsing hardware specifications & constraints', progress: 15 });
-
-    await prisma.designSession.update({ where: { id: sessionId }, data: { status: 'PROCESSING' } });
-
     let conversationHistory = session.chatMessages.map((m) => ({
       role: m.role as 'user' | 'assistant' | 'system',
       content: m.content,
@@ -155,10 +149,6 @@ export async function runGenerationPipeline(
       const metadata = (message.metadata ?? {}) as { versionTag?: unknown };
       return message.role === 'assistant' && typeof metadata.versionTag === 'string' ? index : lastIndex;
     }, -1);
-    // Requests since the last version that are still waiting to be applied. A message the copilot
-    // already answered as conversation, off-topic or gibberish was not a design request — passing
-    // it on made Sol "apply" chit-chat and surfaced it as the version label ("what the hell sing me
-    // a song…"). A message followed by a clarification question (or by nothing yet) is kept.
     const sinceLastVersion = lastVersionCardIndex >= 0 ? session.chatMessages.slice(lastVersionCardIndex + 1) : [];
     const answeredConversationally = (index: number): boolean => {
       const reply = sinceLastVersion.slice(index + 1).find((m) => m.role === 'user' || m.role === 'assistant');
@@ -176,6 +166,30 @@ export async function runGenerationPipeline(
     const revisionNotes = pendingRevisionMessages.length > 0
       ? [...new Set(pendingRevisionMessages)].join('\n')
       : latestIterationNotes;
+
+    const refiningExistingArchitecture = Boolean(session.architecture && revisionNotes);
+    const operationType: 'design_revision' | 'initial_generation' = refiningExistingArchitecture ? 'design_revision' : 'initial_generation';
+
+    // Step 1: Context-aware progress classification
+    if (refiningExistingArchitecture) {
+      recordStep('evaluating_change', 'Evaluating requested change', 'running', revisionNotes ? revisionNotes.slice(0, 100) : undefined);
+      emitSessionEvent.stageUpdate(sessionId, {
+        step: 1,
+        label: 'Evaluating requested architectural modification',
+        progress: 15,
+        operationType: 'design_revision',
+      });
+    } else {
+      recordStep('reading_intent', 'Reading intent', 'running');
+      emitSessionEvent.stageUpdate(sessionId, {
+        step: 1,
+        label: 'Parsing hardware specifications & constraints',
+        progress: 15,
+        operationType: 'initial_generation',
+      });
+    }
+
+    await prisma.designSession.update({ where: { id: sessionId }, data: { status: 'PROCESSING' } });
 
     // An opening gibberish/off-topic turn must not replace the valid project context on every
     // clarification retry. Remove rejected exchanges, then recover the first usable user brief
@@ -206,7 +220,6 @@ export async function runGenerationPipeline(
 
     let structuredIntent: StructuredIntent;
     const cachedIntent = structuredIntentSchema.safeParse(session.intentStructured);
-    const refiningExistingArchitecture = Boolean(session.architecture && revisionNotes);
     const latestAssistantMessage = [...session.chatMessages].reverse().find((message) => message.role === 'assistant');
     const latestAssistantMetadata = (latestAssistantMessage?.metadata ?? {}) as {
       clarificationQuestions?: unknown;
@@ -245,7 +258,11 @@ export async function runGenerationPipeline(
         data: { intentStructured: structuredIntent as unknown as Prisma.InputJsonValue },
       });
     }
-    recordStep('reading_intent', 'Reading intent', 'completed');
+    if (refiningExistingArchitecture) {
+      recordStep('evaluating_change', 'Evaluating requested change', 'completed');
+    } else {
+      recordStep('reading_intent', 'Reading intent', 'completed');
+    }
 
     // Step 2: Sufficiency Gate
     const sufficiency = checkSufficiency(structuredIntent, intentText);
@@ -367,8 +384,13 @@ export async function runGenerationPipeline(
     }
 
     // Step 3: Resolving Modules (RAG + pgvector)
-    recordStep('resolving_modules', 'Resolving modules', 'running');
-    emitSessionEvent.stageUpdate(sessionId, { step: 3, label: 'Resolving hardware modules & microcontrollers', progress: 35 });
+    recordStep('resolving_modules', refiningExistingArchitecture ? 'Analyzing component impact' : 'Resolving modules', 'running');
+    emitSessionEvent.stageUpdate(sessionId, {
+      step: 3,
+      label: refiningExistingArchitecture ? 'Analyzing component & schematic impact' : 'Resolving hardware modules & microcontrollers',
+      progress: 35,
+      operationType,
+    });
 
     const keywords = [
       structuredIntent.deviceType,
@@ -379,11 +401,16 @@ export async function runGenerationPipeline(
     ].filter((k): k is string => typeof k === 'string' && k.length > 0);
 
     const grounding = await getGroundingContext(keywords, intentText, sessionId);
-    recordStep('resolving_modules', 'Resolving modules', 'completed', `${grounding.datasheetSnippets.length} reference snippets matched`);
+    recordStep('resolving_modules', refiningExistingArchitecture ? 'Analyzing component impact' : 'Resolving modules', 'completed', `${grounding.datasheetSnippets.length} reference snippets matched`);
 
     // Step 4: Checking Library Coverage — Sol-tier synthesis
-    recordStep('checking_library', 'Checking library coverage', 'running');
-    emitSessionEvent.stageUpdate(sessionId, { step: 4, label: 'Checking footprint library & pinout compatibility', progress: 55 });
+    recordStep('checking_library', refiningExistingArchitecture ? 'Verifying interface compatibility' : 'Checking library coverage', 'running');
+    emitSessionEvent.stageUpdate(sessionId, {
+      step: 4,
+      label: refiningExistingArchitecture ? 'Verifying interface & footprint compatibility' : 'Checking footprint library & pinout compatibility',
+      progress: 55,
+      operationType,
+    });
 
     // A refinement revises the ACTIVE design. It used to regenerate from the original intent plus only
     // the latest request, so earlier refinements silently vanished (seen live: "Add battery backup"
@@ -445,11 +472,16 @@ export async function runGenerationPipeline(
       ));
     }
     emitSessionEvent.aiCallCompleted(sessionId, { taskCase: 'A', schemaPass: true });
-    recordStep('checking_library', 'Checking library coverage', 'completed', `Controller: ${rawGraph.controller.partNumber}`);
+    recordStep('checking_library', refiningExistingArchitecture ? 'Verifying interface compatibility' : 'Checking library coverage', 'completed', `Controller: ${rawGraph.controller.partNumber}`);
 
     // Step 5: Assigning Pins & Electrical Validation (Case C)
-    recordStep('assigning_pins', 'Assigning pins', 'running');
-    emitSessionEvent.stageUpdate(sessionId, { step: 5, label: 'Assigning bus interfaces & validating electrical rails', progress: 75 });
+    recordStep('assigning_pins', refiningExistingArchitecture ? 'Updating pin routing' : 'Assigning pins', 'running');
+    emitSessionEvent.stageUpdate(sessionId, {
+      step: 5,
+      label: refiningExistingArchitecture ? 'Updating bus routing & power rail assignments' : 'Assigning bus interfaces & validating electrical rails',
+      progress: 75,
+      operationType,
+    });
 
     const validation = validateAndRepairDesignGraph(rawGraph);
     if (!validation.isValid) {
@@ -497,7 +529,7 @@ export async function runGenerationPipeline(
     const warningCount = validation.issues.length;
     recordStep(
       'assigning_pins',
-      'Assigning pins',
+      refiningExistingArchitecture ? 'Updating pin routing' : 'Assigning pins',
       warningCount > 0 ? 'warning' : 'completed',
       warningCount > 0
         ? `${finalizedGraph.edges.length} connections routed, ${warningCount} auto-repair(s) applied`
@@ -505,8 +537,13 @@ export async function runGenerationPipeline(
     );
 
     // Step 6: Rendering Diagrams
-    recordStep('rendering', 'Rendering', 'running');
-    emitSessionEvent.stageUpdate(sessionId, { step: 6, label: 'Projecting functional, power & protocol diagrams', progress: 90 });
+    recordStep('rendering', refiningExistingArchitecture ? 'Regenerating block diagram' : 'Rendering', 'running');
+    emitSessionEvent.stageUpdate(sessionId, {
+      step: 6,
+      label: refiningExistingArchitecture ? 'Regenerating system diagrams & Bill of Materials' : 'Projecting functional, power & protocol diagrams',
+      progress: 90,
+      operationType,
+    });
 
     const deriveDomain = (code: string, message: string) => {
       const c = (code || '').toUpperCase();
@@ -573,10 +610,15 @@ export async function runGenerationPipeline(
     projectedArchitecture.requirementsCoverage = requirementsCoverage;
     finalizedGraph.requirementsCoverage = requirementsCoverage;
 
-    recordStep('rendering', 'Rendering', 'completed');
+    recordStep('rendering', refiningExistingArchitecture ? 'Regenerating block diagram' : 'Rendering', 'completed');
 
     // Step 7: Persistence (atomic, serialized per session) & real-time streaming
-    emitSessionEvent.stageUpdate(sessionId, { step: 7, label: 'Finalizing system architecture & Bill of Materials', progress: 100 });
+    emitSessionEvent.stageUpdate(sessionId, {
+      step: 7,
+      label: refiningExistingArchitecture ? 'Finalizing revised architecture version' : 'Finalizing system architecture & Bill of Materials',
+      progress: 100,
+      operationType,
+    });
 
     // What this revision actually changed. A revision that changes nothing is not saved as a new
     // version (seen live: "change the power section for better output" produced a v1.1 identical

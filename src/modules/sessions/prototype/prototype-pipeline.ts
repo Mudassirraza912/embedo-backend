@@ -86,11 +86,6 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
   };
 
   try {
-    // Step 1: what is being asked for.
-    recordStep('reading_intent', 'Reading intent', 'running');
-    emitSessionEvent.stageUpdate(sessionId, { step: 1, label: 'Reading what you want to build', progress: 15 });
-    await prisma.designSession.update({ where: { id: sessionId }, data: { status: 'PROCESSING' } });
-
     const turns = session.chatMessages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, MAX_MESSAGE_CHARS) }));
@@ -105,7 +100,32 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     const revisionNotes = current && userTurnsSinceCard.length > 0 ? [...new Set(userTurnsSinceCard)].join('\n') : undefined;
     // First build: the brief plus every answer since; refinement: just the requested change.
     const requestText = revisionNotes ?? ([...new Set([session.intentText, ...userTurnsSinceCard])].join('\n').slice(0, MAX_MESSAGE_CHARS) || session.intentText);
-    recordStep('reading_intent', 'Reading intent', 'completed');
+
+    // Step 1: context-aware prototype activity
+    if (revisionNotes) {
+      recordStep('evaluating_change', 'Reviewing bench modifications', 'running', revisionNotes.slice(0, 100));
+      emitSessionEvent.stageUpdate(sessionId, {
+        step: 1,
+        label: 'Reviewing prototype bench changes',
+        progress: 15,
+        operationType: 'prototype_build',
+      });
+    } else {
+      recordStep('reading_intent', 'Reading intent', 'running');
+      emitSessionEvent.stageUpdate(sessionId, {
+        step: 1,
+        label: 'Reading what you want to build',
+        progress: 15,
+        operationType: 'prototype_build',
+      });
+    }
+    await prisma.designSession.update({ where: { id: sessionId }, data: { status: 'PROCESSING' } });
+
+    if (revisionNotes) {
+      recordStep('evaluating_change', 'Reviewing bench modifications', 'completed');
+    } else {
+      recordStep('reading_intent', 'Reading intent', 'completed');
+    }
 
     if (!env.PROTOTYPE_ENABLED) {
       recordStep('resolving_modules', 'Resolving modules', 'warning', 'Prototype mode is turned off');
@@ -118,7 +138,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
 
     // Step 2: choose modules from the library.
     recordStep('resolving_modules', 'Resolving modules', 'running');
-    emitSessionEvent.stageUpdate(sessionId, { step: 2, label: 'Choosing modules from the hardware library', progress: 35 });
+    emitSessionEvent.stageUpdate(sessionId, { step: 2, label: 'Choosing modules from the hardware library', progress: 35, operationType: 'prototype_build' });
     let library = await hardwareLibraryService.listEligible(sessionId);
     const keepIds = currentComposition
       ? [currentComposition.controller?.hardwareEntityId, ...currentComposition.modules.map((m) => m.hardwareEntityId)].filter((id): id is string => Boolean(id))
@@ -237,7 +257,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
     recordStep('resolving_modules', 'Resolving modules', 'completed', `${composition.modules.length + 1} module(s) selected`);
 
     // Step 3: library coverage.
-    emitSessionEvent.stageUpdate(sessionId, { step: 3, label: 'Checking library coverage', progress: 55 });
+    emitSessionEvent.stageUpdate(sessionId, { step: 3, label: 'Checking library coverage', progress: 55, operationType: 'prototype_build' });
     const sourcedCount = sourcing?.sourced.length ?? 0;
     recordStep(
       'checking_library',
@@ -253,7 +273,7 @@ export async function runPrototypePipeline(sessionId: string, options: PipelineE
 
     // Steps 4 + 5: pins, rules, geometry, pin list, library entries (one deterministic pass).
     recordStep('assigning_pins', 'Assigning pins', 'running');
-    emitSessionEvent.stageUpdate(sessionId, { step: 4, label: 'Assigning pins and checking compatibility', progress: 70 });
+    emitSessionEvent.stageUpdate(sessionId, { step: 4, label: 'Assigning pins and checking compatibility', progress: 70, operationType: 'prototype_build' });
     const entities = new Map(library.map((e) => [e.hardwareEntityId, e]));
     const payload = assemblePrototype(composition, entities, {
       svgBasePath: `${env.API_PREFIX}/hardware/entities`,
@@ -280,7 +300,7 @@ ${requestText}`,
     );
 
     recordStep('rendering', 'Rendering', 'running');
-    emitSessionEvent.stageUpdate(sessionId, { step: 5, label: 'Drawing the module diagram and pin list', progress: 90 });
+    emitSessionEvent.stageUpdate(sessionId, { step: 5, label: 'Drawing the module diagram and pin list', progress: 90, operationType: 'prototype_build' });
     recordStep('rendering', 'Rendering', 'completed', `${payload.pinList.summary.rows} pin rows`);
 
     // A revision is described by what actually changed in the graph, never by the request text.
@@ -312,7 +332,7 @@ ${requestText}`,
     const changesApplied = diff?.lines.slice(0, 12) ?? [];
 
     // Persist (atomic, serialized per session) and announce.
-    emitSessionEvent.stageUpdate(sessionId, { step: 6, label: 'Saving the prototype version', progress: 100 });
+    emitSessionEvent.stageUpdate(sessionId, { step: 6, label: 'Saving the prototype version', progress: 100, operationType: 'prototype_build' });
     const changeSummary = changesApplied.length > 0 ? changesApplied.join('; ').slice(0, 200) : 'Initial prototype assembled';
     // Quick-refinement chips, minus anything this bench already received (same rule as Architect).
     const appliedLineage = await getAppliedChangeLineage(sessionId);

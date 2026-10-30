@@ -15,6 +15,8 @@ export interface StageUpdatePayload {
   step: number;
   label: string;
   progress: number;
+  operationType?: 'qa' | 'initial_generation' | 'design_revision' | 'prototype_build' | 'prototype_qa' | 'off_topic';
+  stageCode?: string;
 }
 
 export interface PipelineStepPayload {
