@@ -67,6 +67,8 @@ export const createApp = (): Express => {
   app.use(`${env.API_PREFIX}/admin/components/ingest/json`, express.json({ limit: '12mb' }));
   // Track B release packages (canonical JSON + manifests) can be several MB.
   app.use(`${env.API_PREFIX}/admin/knowledge/releases`, express.json({ limit: '12mb' }));
+  // Support attachments are base64 JSON (task_seven remainder): a 3MB file is ~4MB encoded.
+  app.use(`${env.API_PREFIX}/support/cases`, express.json({ limit: '6mb' }));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: true, limit: '1mb' }));
   app.use(requestIdMiddleware);

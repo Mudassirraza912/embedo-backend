@@ -130,7 +130,10 @@ describe('Support & Feedback — Support Requests (task_seven, first slice)', ()
   it('a case detail only ever includes customer-visible timeline entries', async () => {
     jest.spyOn(prisma.supportCase, 'findFirst').mockResolvedValue({ id: CASE_ID, anonSessionToken: 'anon-token-4' } as never);
     const findEvents = jest.spyOn(prisma.supportCaseEvent, 'findMany').mockResolvedValue([]);
-    await request(app).get(`/api/v1/support/cases/${CASE_ID}`).set('x-anon-session-token', 'anon-token-4');
+    jest.spyOn(prisma.supportCaseAttachment, 'findMany').mockResolvedValue([]);
+    const res = await request(app).get(`/api/v1/support/cases/${CASE_ID}`).set('x-anon-session-token', 'anon-token-4');
+    expect(res.status).toBe(200);
+    expect(res.body.data.attachments).toEqual([]);
     expect(findEvents).toHaveBeenCalledWith(expect.objectContaining({ where: { caseId: CASE_ID, visibleToCustomer: true } }));
   });
 
@@ -138,5 +141,83 @@ describe('Support & Feedback — Support Requests (task_seven, first slice)', ()
     jest.spyOn(prisma.supportCase, 'findFirst').mockResolvedValue(null);
     const res = await request(app).get(`/api/v1/support/cases/${OTHER_CASE_ID}`).set('x-anon-session-token', 'someone-elses-token');
     expect(res.status).toBe(404);
+  });
+
+  describe('evidence attachments (task_seven remainder)', () => {
+    const TINY_PNG_BASE64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    it('rejects an attachment on a case the caller does not own', async () => {
+      jest.spyOn(prisma.supportCase, 'findFirst').mockResolvedValue(null);
+      const res = await request(app)
+        .post(`/api/v1/support/cases/${CASE_ID}/attachments`)
+        .set('x-anon-session-token', 'someone-elses-token')
+        .send({ filename: 'screenshot.png', contentType: 'image/png', dataBase64: TINY_PNG_BASE64 });
+      expect(res.status).toBe(404);
+    });
+
+    it('rejects a disallowed content type before touching the database', async () => {
+      const create = jest.spyOn(prisma.supportCaseAttachment, 'create');
+      const res = await request(app)
+        .post(`/api/v1/support/cases/${CASE_ID}/attachments`)
+        .set('x-anon-session-token', 'anon-token-5')
+        .send({ filename: 'script.js', contentType: 'application/javascript', dataBase64: TINY_PNG_BASE64 });
+      expect(res.status).toBe(400);
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('stores an attachment for a case the caller owns, up to the per-case cap', async () => {
+      jest.spyOn(prisma.supportCase, 'findFirst').mockResolvedValue({ id: CASE_ID } as never);
+      jest.spyOn(prisma.supportCaseAttachment, 'count').mockResolvedValue(0);
+      const create = jest.spyOn(prisma.supportCaseAttachment, 'create').mockResolvedValue({
+        id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        filename: 'screenshot.png',
+        contentType: 'image/png',
+        sizeBytes: 67,
+        createdAt: new Date('2026-10-31T00:00:00Z'),
+      } as never);
+      const res = await request(app)
+        .post(`/api/v1/support/cases/${CASE_ID}/attachments`)
+        .set('x-anon-session-token', 'anon-token-5')
+        .send({ filename: 'screenshot.png', contentType: 'image/png', dataBase64: TINY_PNG_BASE64 });
+      expect(res.status).toBe(201);
+      expect(res.body.data).toMatchObject({ filename: 'screenshot.png', contentType: 'image/png' });
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ caseId: CASE_ID, contentType: 'image/png' }) }),
+      );
+    });
+
+    it('409s once a case already has the maximum number of attachments', async () => {
+      jest.spyOn(prisma.supportCase, 'findFirst').mockResolvedValue({ id: CASE_ID } as never);
+      jest.spyOn(prisma.supportCaseAttachment, 'count').mockResolvedValue(3);
+      const create = jest.spyOn(prisma.supportCaseAttachment, 'create');
+      const res = await request(app)
+        .post(`/api/v1/support/cases/${CASE_ID}/attachments`)
+        .set('x-anon-session-token', 'anon-token-5')
+        .send({ filename: 'screenshot2.png', contentType: 'image/png', dataBase64: TINY_PNG_BASE64 });
+      expect(res.status).toBe(409);
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('downloads an attachment only for the owning identity, never another caller', async () => {
+      jest.spyOn(prisma.supportCase, 'findFirst').mockResolvedValueOnce({ id: CASE_ID } as never).mockResolvedValueOnce(null);
+      jest.spyOn(prisma.supportCaseAttachment, 'findFirst').mockResolvedValue({
+        id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        filename: 'screenshot.png',
+        contentType: 'image/png',
+        data: Buffer.from('fake'),
+      } as never);
+
+      const ok = await request(app)
+        .get(`/api/v1/support/cases/${CASE_ID}/attachments/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`)
+        .set('x-anon-session-token', 'anon-token-5');
+      expect(ok.status).toBe(200);
+      expect(ok.headers['content-type']).toContain('image/png');
+
+      const denied = await request(app)
+        .get(`/api/v1/support/cases/${CASE_ID}/attachments/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`)
+        .set('x-anon-session-token', 'someone-elses-token');
+      expect(denied.status).toBe(404);
+    });
   });
 });

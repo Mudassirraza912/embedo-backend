@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { SUPPORT_SUBCATEGORIES } from './support.constants.js';
+import { MAX_SUPPORT_ATTACHMENT_BYTES, SUPPORT_ATTACHMENT_CONTENT_TYPES, SUPPORT_SUBCATEGORIES } from './support.constants.js';
 import { SESSION_TYPES } from '../sessions/session-type.js';
 
 export const MAX_SUPPORT_SUBJECT_CHARS = 200;
@@ -27,3 +27,27 @@ export type CreateSupportCaseInput = z.infer<typeof createSupportCaseSchema>;
 export const supportCaseIdParamSchema = z.object({
   id: z.string().uuid('Invalid case UUID format'),
 });
+
+export const supportAttachmentParamSchema = z.object({
+  id: z.string().uuid('Invalid case UUID format'),
+  attachmentId: z.string().uuid('Invalid attachment UUID format'),
+});
+
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/** Decoded size is checked here (not just the string length) so the real stored size matches the DB CHECK. */
+export const addSupportAttachmentSchema = z
+  .object({
+    filename: z.string().trim().min(1).max(255),
+    contentType: z.enum(SUPPORT_ATTACHMENT_CONTENT_TYPES),
+    dataBase64: z
+      .string()
+      .min(1)
+      .max(Math.ceil((MAX_SUPPORT_ATTACHMENT_BYTES * 4) / 3) + 1024, 'File is too large.')
+      .refine((v) => BASE64_RE.test(v), 'Not valid base64 data.')
+      .refine((v) => Buffer.from(v, 'base64').length <= MAX_SUPPORT_ATTACHMENT_BYTES, `File exceeds ${Math.floor(MAX_SUPPORT_ATTACHMENT_BYTES / 1024 / 1024)}MB.`)
+      .refine((v) => Buffer.from(v, 'base64').length > 0, 'File is empty.'),
+  })
+  .strict();
+
+export type AddSupportAttachmentInput = z.infer<typeof addSupportAttachmentSchema>;

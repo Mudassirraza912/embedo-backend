@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { supportService } from './support.service.js';
-import { CreateSupportCaseInput } from './support.validation.js';
+import { AddSupportAttachmentInput, CreateSupportCaseInput } from './support.validation.js';
 
 export class SupportController {
   createCase = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -35,6 +35,33 @@ export class SupportController {
     try {
       const result = await supportService.getMine(req.params['id'] as string, req.user?.id, req.anonSessionToken);
       res.status(200).json({ success: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  addAttachment = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const input = req.body as AddSupportAttachmentInput;
+      const attachment = await supportService.addAttachment(req.params['id'] as string, input, req.user?.id, req.anonSessionToken);
+      res.status(201).json({ success: true, data: attachment });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  downloadAttachment = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const attachment = await supportService.getAttachmentForDownload(
+        req.params['id'] as string,
+        req.params['attachmentId'] as string,
+        req.user?.id,
+        req.anonSessionToken
+      );
+      res.setHeader('Content-Type', attachment.contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${attachment.filename.replace(/["\\]/g, '_')}"`);
+      res.setHeader('Cache-Control', 'private, max-age=0, no-store');
+      res.status(200).send(attachment.data);
     } catch (err) {
       next(err);
     }
