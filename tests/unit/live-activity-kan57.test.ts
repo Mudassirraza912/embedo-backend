@@ -1,5 +1,4 @@
 import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
-import { prisma } from '../../src/db/prisma.js';
 import { redis } from '../../src/db/redis.js';
 import { emitSessionEvent } from '../../src/modules/realtime/socket.js';
 
@@ -148,3 +147,4 @@ describe('KAN-57: Truthful, Context-Aware Live Activity for Architect and Chat',
     });
   });
 });
+
