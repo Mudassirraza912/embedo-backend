@@ -38,6 +38,7 @@ model User {
   auditLogs          AuditLog[]
   moderationEvents   ModerationEvent[]
   modelRoutesUpdated ModelRoute[]
+  supportCases       SupportCase[]
 
   @@map("users")
 }
@@ -110,6 +111,7 @@ model DesignSession {
   moderationEvents ModerationEvent[]
   privateHardware  HardwareEntity[]
   shareLinks       ShareLink[]
+  supportCases     SupportCase[]
 
   @@index([userId], map: "design_sessions_user_idx")
   @@index([anonSessionToken], map: "design_sessions_anon_idx")
@@ -1075,4 +1077,86 @@ model VisitorRegionEvent {
   @@index([anonSessionToken], map: "visitor_region_events_anon_idx")
   @@index([countryCode], map: "visitor_region_events_country_idx")
   @@map("visitor_region_events")
+}
+
+/// Durable Support & Feedback case storage (task_seven, first slice: Support Requests only).
+/// Product Feedback and Reported Engineering Outputs are intentionally NOT duplicated here -- they
+/// already have a home in UserFeedback / DesignOutcome and the admin API reads those directly
+/// (see embedo-Dashboard-Backend docs/API.md, 2026-10-23 module read models); forking a second
+/// ledger for them would violate the same "don't fork a ledger" principle task_six applies to
+/// governance data. This table exists because nothing durable backs "Support Request" (account,
+/// credit, access, bug, other) today -- the product's only persisted record of these was an ad hoc
+/// AI chat message, never structured, never queryable, never assignable.
+model SupportCase {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Caller-supplied idempotency key (e.g. a client-generated UUID kept across a retry). Unique so a
+  /// submit retried after a dropped response can never create a duplicate case.
+  clientRequestId String? @unique @map("client_request_id") @db.VarChar(100)
+  /// 'account' | 'credit' | 'access' | 'bug' | 'other' (support_cases_subcategory_check).
+  subcategory String @db.VarChar(20)
+  subject     String @db.VarChar(200)
+  description String @db.Text
+  /// new | open | assigned | in_progress | waiting_customer | resolved | closed | reopened
+  /// (support_cases_status_check).
+  status String @default("new") @db.VarChar(20)
+  /// low | normal | high | urgent -- admin-assigned, never the customer's own severity claim
+  /// (support_cases_priority_check). Defaults to 'normal'; an admin reclassifies it, the customer
+  /// never sets it directly.
+  priority String @default("normal") @db.VarChar(10)
+
+  userId String? @map("user_id") @db.Uuid
+  /// Set only for a guest submission; never implies the address is verified (no verification flow
+  /// exists yet -- see §12 in CLAUDE.md / the ticket's own open item on guest contact channels).
+  guestContactEmail String? @map("guest_contact_email") @db.VarChar(255)
+  /// The short-lived pseudonymous guest token (DesignSession.anonSessionToken), kept only so a guest
+  /// can look up "my support requests" by the same token their workspace already uses. Never treated
+  /// as a verified identity.
+  anonSessionToken String? @map("anon_session_token") @db.VarChar(255)
+
+  /// 'architect' | 'prototype' | null (support_cases_mode_check) -- the mode the reporter was in,
+  /// not a classification of the case itself.
+  mode      String? @db.VarChar(20)
+  sessionId String? @map("session_id") @db.Uuid
+
+  /// Free-text staff identifier (an email), not a foreign key: staff accounts live in the Admin
+  /// API's own separate database, not this one, so there is nothing in this schema to reference.
+  assignedAgentEmail String? @map("assigned_agent_email") @db.VarChar(255)
+
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamp(6)
+  firstResponseAt DateTime? @map("first_response_at") @db.Timestamp(6)
+  resolvedAt     DateTime? @map("resolved_at") @db.Timestamp(6)
+
+  user    User?           @relation(fields: [userId], references: [id])
+  session DesignSession?  @relation(fields: [sessionId], references: [id])
+  events  SupportCaseEvent[]
+
+  @@index([userId], map: "support_cases_user_idx")
+  @@index([anonSessionToken], map: "support_cases_anon_idx")
+  @@index([status], map: "support_cases_status_idx")
+  @@index([createdAt], map: "support_cases_created_at_idx")
+  @@map("support_cases")
+}
+
+/// One row per case timeline entry: the original report, every admin response, every internal
+/// note, and every status/assignment change (the ticket's own "customer replies versus internal
+/// notes distinct" requirement -- enforced here by `visibleToCustomer`, read by a customer-facing
+/// view only when true).
+model SupportCaseEvent {
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  caseId String @map("case_id") @db.Uuid
+  /// 'customer_message' | 'admin_response' | 'internal_note' | 'status_change' | 'assignment'
+  /// (support_case_events_kind_check).
+  kind              String  @db.VarChar(20)
+  visibleToCustomer Boolean @default(true) @map("visible_to_customer")
+  /// e.g. a staff email for an admin event, or null for the customer's own (the case already
+  /// carries the customer's identity; repeating it per event would be redundant, not safer).
+  authorLabel String? @map("author_label") @db.VarChar(255)
+  body        String  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  case SupportCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId], map: "support_case_events_case_idx")
+  @@map("support_case_events")
 }
