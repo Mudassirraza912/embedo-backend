@@ -1141,9 +1141,10 @@ model SupportCase {
   firstResponseAt DateTime? @map("first_response_at") @db.Timestamp(6)
   resolvedAt     DateTime? @map("resolved_at") @db.Timestamp(6)
 
-  user    User?           @relation(fields: [userId], references: [id])
-  session DesignSession?  @relation(fields: [sessionId], references: [id])
-  events  SupportCaseEvent[]
+  user        User?           @relation(fields: [userId], references: [id])
+  session     DesignSession?  @relation(fields: [sessionId], references: [id])
+  events      SupportCaseEvent[]
+  attachments SupportCaseAttachment[]
 
   @@index([userId], map: "support_cases_user_idx")
   @@index([anonSessionToken], map: "support_cases_anon_idx")
@@ -1173,4 +1174,31 @@ model SupportCaseEvent {
 
   @@index([caseId], map: "support_case_events_case_idx")
   @@map("support_case_events")
+}
+
+/// Optional evidence attached to a Support Request (task_seven remainder, 2026-10-31): a single
+/// small image or PDF per row, stored inline as bytea -- no object storage (R2/S3) is wired for
+/// this product yet (see CLAUDE.md §4.12), so this is a deliberately thin slice, bounded tight
+/// enough (3 MB raw, `MAX_SUPPORT_ATTACHMENT_BYTES`) that storing it in Postgres is reasonable.
+/// Uploaded and downloaded as base64 JSON (no multipart/`multer` dependency added for this one
+/// endpoint) through the existing `POST/GET /support/cases/:id/attachments` routes, owner-checked
+/// the same way as `getMine`. The admin read-only role can read it too (see the migration's grant)
+/// since reviewing evidence is the entire point of this table, same reasoning as the case text
+/// itself in `SupportCase`'s module doc.
+model SupportCaseAttachment {
+  id     String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  caseId String @map("case_id") @db.Uuid
+
+  filename String @db.VarChar(255)
+  /// 'image/png' | 'image/jpeg' | 'image/webp' | 'application/pdf' (support_case_attachments_content_type_check).
+  contentType String @map("content_type") @db.VarChar(100)
+  sizeBytes   Int    @map("size_bytes")
+  data        Bytes
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamp(6)
+
+  case SupportCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([caseId], map: "support_case_attachments_case_idx")
+  @@map("support_case_attachments")
 }

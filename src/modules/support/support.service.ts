@@ -1,6 +1,7 @@
 import { prisma } from '../../db/prisma.js';
 import { AppError } from '../../common/errors/AppError.js';
-import { CreateSupportCaseInput } from './support.validation.js';
+import { AddSupportAttachmentInput, CreateSupportCaseInput } from './support.validation.js';
+import { MAX_SUPPORT_ATTACHMENTS_PER_CASE } from './support.constants.js';
 
 /**
  * Support & Feedback case storage (task_seven, first slice: Support Requests only -- see the
@@ -84,11 +85,55 @@ export const supportService = {
       where: { id, ...(userId ? { userId } : { anonSessionToken }) },
     });
     if (!supportCase) throw new AppError(404, 'NOT_FOUND', 'Support request not found.');
-    const events = await prisma.supportCaseEvent.findMany({
-      where: { caseId: id, visibleToCustomer: true },
-      orderBy: { createdAt: 'asc' },
-      select: { id: true, kind: true, body: true, createdAt: true },
+    const [events, attachments] = await Promise.all([
+      prisma.supportCaseEvent.findMany({
+        where: { caseId: id, visibleToCustomer: true },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, kind: true, body: true, createdAt: true },
+      }),
+      prisma.supportCaseAttachment.findMany({
+        where: { caseId: id },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, filename: true, contentType: true, sizeBytes: true, createdAt: true },
+      }),
+    ]);
+    return { case: supportCase, events, attachments };
+  },
+
+  /**
+   * Attaches one small image or PDF to a case the caller actually owns (same ownership check as
+   * `getMine`). Capped at `MAX_SUPPORT_ATTACHMENTS_PER_CASE` per case -- an abuse guard, not a DB
+   * constraint, since nothing in the product needs more than a couple of screenshots per report.
+   */
+  async addAttachment(caseId: string, input: AddSupportAttachmentInput, userId: string | undefined, anonSessionToken: string | undefined) {
+    const supportCase = await prisma.supportCase.findFirst({
+      where: { id: caseId, ...(userId ? { userId } : { anonSessionToken }) },
+      select: { id: true },
     });
-    return { case: supportCase, events };
+    if (!supportCase) throw new AppError(404, 'NOT_FOUND', 'Support request not found.');
+
+    const existing = await prisma.supportCaseAttachment.count({ where: { caseId } });
+    if (existing >= MAX_SUPPORT_ATTACHMENTS_PER_CASE) {
+      throw new AppError(409, 'CONFLICT', `This request already has the maximum of ${MAX_SUPPORT_ATTACHMENTS_PER_CASE} attachments.`);
+    }
+
+    const data = Buffer.from(input.dataBase64, 'base64');
+    const attachment = await prisma.supportCaseAttachment.create({
+      data: { caseId, filename: input.filename, contentType: input.contentType, sizeBytes: data.length, data },
+      select: { id: true, filename: true, contentType: true, sizeBytes: true, createdAt: true },
+    });
+    return attachment;
+  },
+
+  /** Raw bytes for download -- same ownership check, never exposed to a different caller. */
+  async getAttachmentForDownload(caseId: string, attachmentId: string, userId: string | undefined, anonSessionToken: string | undefined) {
+    const supportCase = await prisma.supportCase.findFirst({
+      where: { id: caseId, ...(userId ? { userId } : { anonSessionToken }) },
+      select: { id: true },
+    });
+    if (!supportCase) throw new AppError(404, 'NOT_FOUND', 'Support request not found.');
+    const attachment = await prisma.supportCaseAttachment.findFirst({ where: { id: attachmentId, caseId } });
+    if (!attachment) throw new AppError(404, 'NOT_FOUND', 'Attachment not found.');
+    return attachment;
   },
 };
