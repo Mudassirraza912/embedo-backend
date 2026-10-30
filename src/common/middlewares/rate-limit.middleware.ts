@@ -50,6 +50,7 @@ let limiters: {
   sessionDailyIp: RateLimiterAbstract;
   discuss: RateLimiterAbstract;
   passwordReset: RateLimiterAbstract;
+  supportCreate: RateLimiterAbstract;
 } | null = null;
 
 const getLimiters = () => {
@@ -70,6 +71,10 @@ const getLimiters = () => {
       discuss: buildLimiter({ keyPrefix: 'rl:discuss', points: 30, duration: 3600 }),
       // Password reset requests: 3 / hour / IP
       passwordReset: buildLimiter({ keyPrefix: 'rl:pwreset', points: 3, duration: 3600 }),
+      // Support case submissions: 10 / hour / IP. Spam/abuse control for the public intake
+      // endpoint (task_seven); separate from the global limiter since a single abusive IP should
+      // not need the full global budget to be throttled here specifically.
+      supportCreate: buildLimiter({ keyPrefix: 'rl:support', points: 10, duration: 3600 }),
     };
   }
   return limiters;
@@ -152,6 +157,12 @@ export const rateLimitPasswordReset = async (req: Request, res: Response, next: 
     next,
     res
   );
+  if (ok) next();
+};
+
+export const rateLimitSupportCreate = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  if (isBypassed()) return next();
+  const ok = await consumeOr429(getLimiters().supportCreate, clientIp(req), 'Too many support requests. Please try again later.', next, res);
   if (ok) next();
 };
 
